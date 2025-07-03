@@ -6,6 +6,8 @@ import sys
 from .database import EventDatabase, SessionManager
 from .git_tracker import GitTracker
 from .models import (
+    ComplexityDelta,
+    ComplexityMetrics,
     HookEvent,
     HookEventType,
     HookInputUnion,
@@ -149,6 +151,10 @@ def handle_hook():
     db = EventDatabase()
     db.save_event(event)
 
+    # Handle Stop/SubagentStop events with complexity delta feedback
+    if event_type in (HookEventType.STOP, HookEventType.SUBAGENT_STOP):
+        return handle_stop_event(session_id, parsed_input)
+
     if settings.debug_mode:
         debug_info = {
             "slopometry_event": {
@@ -164,6 +170,111 @@ def handle_hook():
         print(f"Slopometry captured: {json.dumps(debug_info, indent=2)}")
 
     return 0
+
+
+def handle_stop_event(session_id: str, parsed_input: "StopInput | SubagentStopInput") -> int:
+    """Handle Stop events with complexity delta feedback to Claude.
+    
+    Args:
+        session_id: The session ID
+        parsed_input: The stop event input
+        
+    Returns:
+        Exit code (0 for success, 2 for blocking with feedback)
+    """
+    # Check if stop hook is already active to prevent infinite loops
+    if parsed_input.stop_hook_active:
+        return 0
+    
+    try:
+        # Calculate session statistics with complexity delta
+        db = EventDatabase()
+        stats = db.get_session_statistics(session_id)
+        
+        if not stats or not stats.complexity_delta:
+            # No complexity data available, let Claude stop normally
+            return 0
+        
+        delta = stats.complexity_delta
+        
+        # Check if there are significant complexity changes worth reporting
+        if abs(delta.total_complexity_change) < 5 and not delta.files_added and not delta.files_removed:
+            # Minor or no changes, let Claude stop normally
+            return 0
+        
+        # Format complexity feedback for Claude
+        feedback = format_complexity_feedback(stats.complexity_metrics, delta)
+        
+        # Output JSON feedback to stdout for Claude to read
+        hook_output = {
+            "decision": "block",
+            "reason": feedback
+        }
+        
+        print(json.dumps(hook_output))
+        return 2  # Block Claude from stopping and show feedback
+        
+    except Exception:
+        # If anything fails, don't block Claude from stopping
+        return 0
+
+
+def format_complexity_feedback(current_metrics: "ComplexityMetrics", delta: "ComplexityDelta") -> str:
+    """Format complexity delta information for Claude consumption.
+    
+    Args:
+        current_metrics: Current complexity metrics
+        delta: Complexity changes from previous commit
+        
+    Returns:
+        Formatted feedback string for Claude
+    """
+    lines = []
+    
+    # Session impact summary
+    lines.append("📊 **Complexity Analysis Summary**")
+    lines.append("")
+    
+    # Total complexity change
+    if delta.total_complexity_change > 0:
+        lines.append(f"⚠️  **Complexity increased by +{delta.total_complexity_change}** (now {current_metrics.total_complexity} total)")
+    elif delta.total_complexity_change < 0:
+        lines.append(f"✅ **Complexity decreased by {delta.total_complexity_change}** (now {current_metrics.total_complexity} total)")
+    else:
+        lines.append(f"📊 **No net complexity change** ({current_metrics.total_complexity} total)")
+    
+    # File changes
+    if delta.files_added:
+        lines.append(f"📁 **Added {len(delta.files_added)} files**: {', '.join(delta.files_added[:3])}")
+        if len(delta.files_added) > 3:
+            lines.append(f"   ... and {len(delta.files_added) - 3} more")
+    
+    if delta.files_removed:
+        lines.append(f"🗑️  **Removed {len(delta.files_removed)} files**: {', '.join(delta.files_removed[:3])}")
+        if len(delta.files_removed) > 3:
+            lines.append(f"   ... and {len(delta.files_removed) - 3} more")
+    
+    # Biggest complexity changes
+    if delta.files_changed:
+        lines.append("")
+        lines.append("🔄 **Biggest complexity changes**:")
+        sorted_changes = sorted(delta.files_changed.items(), key=lambda x: abs(x[1]), reverse=True)[:3]
+        for file_path, change in sorted_changes:
+            if change > 0:
+                lines.append(f"   • {file_path}: +{change}")
+            else:
+                lines.append(f"   • {file_path}: {change}")
+    
+    # Complexity guidance
+    lines.append("")
+    if delta.total_complexity_change > 20:
+        lines.append("💡 **Consider**: Breaking down complex functions or refactoring to reduce cognitive load.")
+    elif delta.total_complexity_change > 0:
+        lines.append("💡 **Note**: Slight complexity increase. Monitor for future refactoring opportunities.")
+    elif delta.total_complexity_change < -10:
+        lines.append("🎉 **Great work**: Complexity reduction makes the code more maintainable!")
+    
+    return "\n".join(lines)
 
 
 def _detect_event_type_from_parsed(parsed_input: HookInputUnion) -> HookEventType:

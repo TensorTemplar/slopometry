@@ -1,5 +1,7 @@
 # Slopometry
 
+![assets/slopometry-logo.jpg](slopometry)  
+
 A Python CLI tool that automatically tracks and analyzes Claude Code sessions by monitoring hook invocations. Works seamlessly with uvx for easy installation and usage.
 
 ## Installation
