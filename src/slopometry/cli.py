@@ -429,6 +429,90 @@ def status():
                     console.print(f"  • {session_id} ({stats.total_events} events)")
 
 
+@cli.command()
+@click.option("--enable/--disable", default=None, help="Enable or disable stop event feedback")
+def feedback(enable):
+    """Configure complexity feedback on stop events."""
+    if enable is None:
+        # Show current setting
+        current_status = "enabled" if settings.enable_stop_feedback else "disabled"
+        console.print(f"[bold]Complexity feedback is currently {current_status}[/bold]")
+        console.print("")
+        console.print("To change this setting:")
+        console.print("  slopometry feedback --enable    # Enable feedback")
+        console.print("  slopometry feedback --disable   # Disable feedback")
+        console.print("")
+        if not settings.enable_stop_feedback:
+            console.print("[yellow]Note: Feedback is disabled by default. Enable it to receive[/yellow]")
+            console.print("[yellow]complexity analysis when Claude Code sessions end.[/yellow]")
+        return
+
+    # Update setting via environment variable suggestion
+    env_file = Path(".env")
+    env_var = "SLOPOMETRY_ENABLE_STOP_FEEDBACK"
+    
+    if enable:
+        console.print("[green]Enabling[/green] complexity feedback on stop events")
+        console.print("")
+        console.print("To persist this setting, add to your .env file:")
+        console.print(f"  {env_var}=true")
+        
+        # Update .env file if it exists or create it
+        if env_file.exists():
+            content = env_file.read_text()
+            if env_var in content:
+                # Replace existing line
+                lines = content.split('\n')
+                new_lines = []
+                for line in lines:
+                    if line.startswith(f"{env_var}="):
+                        new_lines.append(f"{env_var}=true")
+                    else:
+                        new_lines.append(line)
+                env_file.write_text('\n'.join(new_lines))
+            else:
+                # Append new line
+                with env_file.open('a') as f:
+                    f.write(f"\n{env_var}=true\n")
+        else:
+            # Create new .env file
+            env_file.write_text(f"{env_var}=true\n")
+            
+        console.print(f"[green]Added {env_var}=true to .env file[/green]")
+        
+    else:
+        console.print("[yellow]Disabling[/yellow] complexity feedback on stop events")
+        console.print("")
+        console.print("To persist this setting, add to your .env file:")
+        console.print(f"  {env_var}=false")
+        
+        # Update .env file
+        if env_file.exists():
+            content = env_file.read_text()
+            if env_var in content:
+                # Replace existing line
+                lines = content.split('\n')
+                new_lines = []
+                for line in lines:
+                    if line.startswith(f"{env_var}="):
+                        new_lines.append(f"{env_var}=false")
+                    else:
+                        new_lines.append(line)
+                env_file.write_text('\n'.join(new_lines))
+            else:
+                # Append new line
+                with env_file.open('a') as f:
+                    f.write(f"\n{env_var}=false\n")
+        else:
+            # Create new .env file
+            env_file.write_text(f"{env_var}=false\n")
+            
+        console.print(f"[green]Added {env_var}=false to .env file[/green]")
+
+    console.print("")
+    console.print("[bold]Note:[/bold] You may need to restart Claude Code for changes to take effect.")
+
+
 def _check_hooks_installed(settings_file: Path) -> bool:
     """Check if slopometry hooks are installed in a settings file."""
     if not settings_file.exists():

@@ -110,7 +110,7 @@ class ComplexityDelta(BaseModel):
     net_files_change: int = 0  # files_added - files_removed
     avg_complexity_change: float = 0.0
     
-    # Simple change to test delta tracking - minimal edit
+    # Simple change to test delta tracking - very minimal edit
     
     
 class SessionStatistics(BaseModel):

@@ -1,51 +1,55 @@
 # Slopometry
 
-![assets/slopometry-logo.jpg](slopometry)  
+A tool that lurks in the shadows, tracks and analyzes Claude Code sessions providing metrics that neither of you knew you needed.
 
-A Python CLI tool that automatically tracks and analyzes Claude Code sessions by monitoring hook invocations. Works seamlessly with uvx for easy installation and usage.
+![slopometry-logo](assets/slopometry-logo.jpg)  
 
-## Installation
 
-### Via uvx (Recommended)
+## Customer testimonials
+
+### Claude Sonnet 4
+![claude sonnet feedback](assets/sonnet.png)  
+*"Amazing tool for tracking my own cognitive complexity!"*  
+— C. Sonnet, main-author
+
+### Claude Opus  
+![opus feedback](assets/opus.png)  
+*"Finally, I can see when I'm overcomplicating things."*  
+— C. Opus, overpaid, infrequent contributor
+
+### TensorTemplar
+*"Previously i had to READ CODE and DECIDE WHEN TO RUN SLASH COMMANDS MYSELF, but now i just periodically prompt 'Cmon, claude, you know you did...'"*  
+— TensorTemplar, insignificant idea person for this tool
+
+## What now?
+
+### 1.1 Install via uvx (Recommended)
 ```bash
 # Install and use directly with uvx
-uvx slopometry install     # One-time setup
+uvx slopometry install     # One-time setup, this will bloat your home .claude directory
 claude                     # Normal usage - automatically tracked!
 uvx slopometry list        # View tracked sessions
 ```
 
-### Via uv/pip
+### 1.2 Via uv
 ```bash
 # Install globally
 uv tool install slopometry
-# Or with pip
-pip install slopometry
 ```
 
-## Quick Start
+### 1.3 Use claude normally
+check whats up with `slopometry list` and `slopometry show <session_id>`
 
-1. **Install hooks** (one-time setup):
-   ```bash
-   slopometry install          # Install globally (~/.claude/settings.json)
-   # or
-   slopometry install --local  # Install for current project only
-   ```
+## Features
 
-2. **Use Claude normally** - all sessions are automatically tracked:
-   ```bash
-   claude
-   claude /path/to/project
-   claude --help
-   ```
+![session statistics](assets/session-stat.png)  
 
-3. **View your metrics**:
-   ```bash
-   slopometry list             # List recent sessions
-   slopometry show <session-id> # Detailed session view
-   slopometry status           # Check installation status
-   ```
+![complexity metrics (CC)](assets/cc.png)  
 
-## Commands
+![a detailed event log, totally not for any RL later](assets/log.png)  
+
+
+## Here be powerusers
 
 ### Installation Management
 - `slopometry install [--global|--local]` - Install tracking hooks
@@ -56,32 +60,18 @@ pip install slopometry
 - `slopometry list [--limit N]` - List recent sessions
 - `slopometry show <session-id>` - Show detailed session statistics
 
-## How it works
+### Feedback Configuration
+- `slopometry feedback` - Show current feedback settings
+- `slopometry feedback --enable` - Enable complexity feedback on stop events
+- `slopometry feedback --disable` - Disable complexity feedback (default)
 
-1. **One-time setup**: `slopometry install` adds hooks to Claude Code settings
-2. **Automatic tracking**: Every Claude session is tracked without user intervention
-3. **Smart sessions**: Sessions are auto-detected based on process activity and timing
-4. **Rich analytics**: View tool usage, timing, and error statistics
-
-Session IDs use format: `YYYYMMDD_HHMMSS_PID` for easy identification.
-
-## Features
-
-- **Zero-friction tracking**: Install once, track automatically
-- **Smart session detection**: Based on process activity and timing gaps
-- **Rich terminal output**: Beautiful tables and trees via Rich
-- **Tool usage analytics**: See which tools you use most
-- **Performance metrics**: Average duration per tool type
-- **Error tracking**: Monitor hook failures and issues
-- **uvx compatible**: Perfect for standalone tool usage
-
-## Configuration
 
 Customize via `.env` file or environment variables:
 
 - `SLOPOMETRY_DATABASE_PATH`: Database location (default: `.claude/slopometry.db`)
 - `SLOPOMETRY_PYTHON_EXECUTABLE`: Python command for hooks (default: `uv run python`)
 - `SLOPOMETRY_SESSION_ID_PREFIX`: Custom session ID prefix
+- `SLOPOMETRY_ENABLE_STOP_FEEDBACK`: Enable complexity feedback on stop events (default: `false`)
 
 ## Architecture
 

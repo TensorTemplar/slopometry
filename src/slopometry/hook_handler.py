@@ -151,8 +151,8 @@ def handle_hook():
     db = EventDatabase()
     db.save_event(event)
 
-    # Handle Stop/SubagentStop events with complexity delta feedback
-    if event_type in (HookEventType.STOP, HookEventType.SUBAGENT_STOP):
+    # Handle Stop/SubagentStop events with complexity delta feedback (if enabled)
+    if event_type in (HookEventType.STOP, HookEventType.SUBAGENT_STOP) and settings.enable_stop_feedback:
         return handle_stop_event(session_id, parsed_input)
 
     if settings.debug_mode:
@@ -232,32 +232,32 @@ def format_complexity_feedback(current_metrics: "ComplexityMetrics", delta: "Com
     lines = []
     
     # Session impact summary
-    lines.append("📊 **Complexity Analysis Summary**")
+    lines.append("**Complexity Analysis Summary**")
     lines.append("")
     
     # Total complexity change
     if delta.total_complexity_change > 0:
-        lines.append(f"⚠️  **Complexity increased by +{delta.total_complexity_change}** (now {current_metrics.total_complexity} total)")
+        lines.append(f"**Complexity increased by +{delta.total_complexity_change}** (now {current_metrics.total_complexity} total)")
     elif delta.total_complexity_change < 0:
-        lines.append(f"✅ **Complexity decreased by {delta.total_complexity_change}** (now {current_metrics.total_complexity} total)")
+        lines.append(f"**Complexity decreased by {delta.total_complexity_change}** (now {current_metrics.total_complexity} total)")
     else:
-        lines.append(f"📊 **No net complexity change** ({current_metrics.total_complexity} total)")
+        lines.append(f"**No net complexity change** ({current_metrics.total_complexity} total)")
     
     # File changes
     if delta.files_added:
-        lines.append(f"📁 **Added {len(delta.files_added)} files**: {', '.join(delta.files_added[:3])}")
+        lines.append(f"**Added {len(delta.files_added)} files**: {', '.join(delta.files_added[:3])}")
         if len(delta.files_added) > 3:
             lines.append(f"   ... and {len(delta.files_added) - 3} more")
     
     if delta.files_removed:
-        lines.append(f"🗑️  **Removed {len(delta.files_removed)} files**: {', '.join(delta.files_removed[:3])}")
+        lines.append(f"**Removed {len(delta.files_removed)} files**: {', '.join(delta.files_removed[:3])}")
         if len(delta.files_removed) > 3:
             lines.append(f"   ... and {len(delta.files_removed) - 3} more")
     
     # Biggest complexity changes
     if delta.files_changed:
         lines.append("")
-        lines.append("🔄 **Biggest complexity changes**:")
+        lines.append("**Biggest complexity changes**:")
         sorted_changes = sorted(delta.files_changed.items(), key=lambda x: abs(x[1]), reverse=True)[:3]
         for file_path, change in sorted_changes:
             if change > 0:
@@ -268,11 +268,11 @@ def format_complexity_feedback(current_metrics: "ComplexityMetrics", delta: "Com
     # Complexity guidance
     lines.append("")
     if delta.total_complexity_change > 20:
-        lines.append("💡 **Consider**: Breaking down complex functions or refactoring to reduce cognitive load.")
+        lines.append("**Consider**: Breaking down complex functions or refactoring to reduce cognitive load.")
     elif delta.total_complexity_change > 0:
-        lines.append("💡 **Note**: Slight complexity increase. Monitor for future refactoring opportunities.")
+        lines.append("**Note**: Slight complexity increase. Monitor for future refactoring opportunities.")
     elif delta.total_complexity_change < -10:
-        lines.append("🎉 **Great work**: Complexity reduction makes the code more maintainable!")
+        lines.append("**Great work**: Complexity reduction makes the code more maintainable!")
     
     return "\n".join(lines)
 

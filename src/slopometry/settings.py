@@ -33,6 +33,9 @@ class Settings(BaseSettings):
 
     # Debug settings
     debug_mode: bool = False
+    
+    # Complexity feedback settings
+    enable_stop_feedback: bool = False
 
     @property
     def hook_command(self) -> str:
