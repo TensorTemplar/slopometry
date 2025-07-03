@@ -319,11 +319,15 @@ def show_session_summary(session_id: str, detailed: bool = False):
         console.print(f"Todos completed: {evolution.total_todos_completed}")
         console.print(f"Planning efficiency: {evolution.planning_efficiency:.1%}")
         console.print(f"Average events per step: {evolution.average_events_per_step:.1f}")
+        console.print(f"Search events: {evolution.total_search_events}")
+        console.print(f"Implementation events: {evolution.total_implementation_events}")
+        console.print(f"Search/Implementation ratio: {evolution.overall_search_to_implementation_ratio:.2f}")
         
         if evolution.plan_steps:
             table = Table(title="Planning Steps")
             table.add_column("Step", style="cyan", width=4)
             table.add_column("Events", justify="right", width=6)
+            table.add_column("S/I Ratio", justify="right", width=8)
             table.add_column("Changes", style="yellow")
             
             for step in evolution.plan_steps[:5]:  # Show first 5 steps
@@ -338,10 +342,11 @@ def show_session_summary(session_id: str, detailed: bool = False):
                     changes.append(f"{len(step.todos_content_changed)} content changed")
                 
                 change_summary = ", ".join(changes) if changes else "Initial plan"
-                table.add_row(str(step.step_number), str(step.events_in_step), change_summary)
+                ratio_display = f"{step.search_to_implementation_ratio:.2f}" if step.implementation_events > 0 else "N/A"
+                table.add_row(str(step.step_number), str(step.events_in_step), ratio_display, change_summary)
             
             if len(evolution.plan_steps) > 5:
-                table.add_row("...", "...", f"... and {len(evolution.plan_steps) - 5} more steps")
+                table.add_row("...", "...", "...", f"... and {len(evolution.plan_steps) - 5} more steps")
             
             console.print(table)
 

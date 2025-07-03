@@ -132,6 +132,9 @@ class PlanStep(BaseModel):
     todos_status_changed: dict[str, tuple[str, str]] = Field(default_factory=dict)  # content -> (old_status, new_status)
     todos_content_changed: dict[str, tuple[str, str]] = Field(default_factory=dict)  # old_content -> new_content
     timestamp: datetime = Field(default_factory=datetime.now)
+    search_events: int = 0  # Number of search-type tool events
+    implementation_events: int = 0  # Number of implementation-type tool events
+    search_to_implementation_ratio: float = 0.0  # search_events / implementation_events (0 if no impl events)
 
 
 class PlanEvolution(BaseModel):
@@ -144,6 +147,9 @@ class PlanEvolution(BaseModel):
     plan_steps: list[PlanStep] = Field(default_factory=list)
     final_todo_count: int = 0
     planning_efficiency: float = 0.0  # completed_todos / total_todos_created
+    total_search_events: int = 0
+    total_implementation_events: int = 0
+    overall_search_to_implementation_ratio: float = 0.0
 
 
 class SessionStatistics(BaseModel):

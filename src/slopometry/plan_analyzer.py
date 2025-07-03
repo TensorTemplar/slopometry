@@ -4,11 +4,33 @@ import json
 from datetime import datetime
 from typing import Any
 
-from .models import PlanEvolution, PlanStep, TodoItem
+from .models import PlanEvolution, PlanStep, TodoItem, ToolType
 
 
 class PlanAnalyzer:
     """Analyzes TodoWrite events to track plan evolution."""
+    
+    # Define search vs implementation tool categorization
+    SEARCH_TOOLS = {
+        ToolType.GREP, ToolType.GLOB, ToolType.WEB_SEARCH, ToolType.WEB_FETCH,
+        ToolType.READ, ToolType.LS, ToolType.TASK, ToolType.TODO_READ,
+        ToolType.NOTEBOOK_READ, ToolType.MCP_IDE_GET_DIAGNOSTICS,
+        ToolType.MCP_IDE_GET_WORKSPACE_INFO, ToolType.MCP_IDE_GET_FILE_CONTENTS,
+        ToolType.MCP_IDE_SEARCH_FILES, ToolType.MCP_FILESYSTEM_READ,
+        ToolType.MCP_FILESYSTEM_LIST, ToolType.MCP_DATABASE_QUERY,
+        ToolType.MCP_DATABASE_SCHEMA, ToolType.MCP_WEB_SCRAPE,
+        ToolType.MCP_WEB_SEARCH, ToolType.MCP_GITHUB_GET_REPO,
+        ToolType.MCP_GITHUB_LIST_ISSUES, ToolType.MCP_SLACK_LIST_CHANNELS
+    }
+    
+    IMPLEMENTATION_TOOLS = {
+        ToolType.WRITE, ToolType.EDIT, ToolType.MULTI_EDIT, ToolType.BASH,
+        ToolType.TODO_WRITE, ToolType.NOTEBOOK_EDIT, ToolType.EXIT_PLAN_MODE,
+        ToolType.MCP_IDE_EXECUTE_CODE, ToolType.MCP_IDE_CREATE_FILE,
+        ToolType.MCP_IDE_DELETE_FILE, ToolType.MCP_IDE_RENAME_FILE,
+        ToolType.MCP_FILESYSTEM_WRITE, ToolType.MCP_GITHUB_CREATE_ISSUE,
+        ToolType.MCP_SLACK_SEND_MESSAGE
+    }
     
     def __init__(self):
         """Initialize the plan analyzer."""
@@ -16,6 +38,8 @@ class PlanAnalyzer:
         self.plan_steps: list[PlanStep] = []
         self.step_number = 0
         self.events_since_last_todo = 0
+        self.search_events_since_last_todo = 0
+        self.implementation_events_since_last_todo = 0
     
     def analyze_todo_write_event(self, tool_input: dict[str, Any], timestamp: datetime) -> None:
         """Analyze a TodoWrite event and track plan evolution.
@@ -47,10 +71,18 @@ class PlanAnalyzer:
         # Update state
         self.previous_todos = current_todos
         self.events_since_last_todo = 0
+        self.search_events_since_last_todo = 0
+        self.implementation_events_since_last_todo = 0
     
-    def increment_event_count(self) -> None:
+    def increment_event_count(self, tool_type: ToolType | None = None) -> None:
         """Increment the count of events since last TodoWrite."""
         self.events_since_last_todo += 1
+        
+        if tool_type:
+            if tool_type in self.SEARCH_TOOLS:
+                self.search_events_since_last_todo += 1
+            elif tool_type in self.IMPLEMENTATION_TOOLS:
+                self.implementation_events_since_last_todo += 1
     
     def get_plan_evolution(self) -> PlanEvolution:
         """Generate final plan evolution summary.
@@ -93,6 +125,14 @@ class PlanAnalyzer:
         
         final_todo_count = len(self.previous_todos)
         
+        # Calculate total search vs implementation events
+        total_search_events = sum(step.search_events for step in self.plan_steps)
+        total_implementation_events = sum(step.implementation_events for step in self.plan_steps)
+        overall_search_to_implementation_ratio = (
+            total_search_events / total_implementation_events 
+            if total_implementation_events > 0 else 0.0
+        )
+        
         return PlanEvolution(
             total_plan_steps=len(self.plan_steps),
             total_todos_created=total_todos_created,
@@ -100,7 +140,10 @@ class PlanAnalyzer:
             average_events_per_step=average_events_per_step,
             plan_steps=self.plan_steps,
             final_todo_count=final_todo_count,
-            planning_efficiency=planning_efficiency
+            planning_efficiency=planning_efficiency,
+            total_search_events=total_search_events,
+            total_implementation_events=total_implementation_events,
+            overall_search_to_implementation_ratio=overall_search_to_implementation_ratio
         )
     
     def _calculate_plan_step(self, current_todos: dict[str, TodoItem], timestamp: datetime) -> PlanStep | None:
@@ -115,13 +158,22 @@ class PlanAnalyzer:
         """
         self.step_number += 1
         
+        # Calculate search to implementation ratio
+        search_to_implementation_ratio = (
+            self.search_events_since_last_todo / self.implementation_events_since_last_todo
+            if self.implementation_events_since_last_todo > 0 else 0.0
+        )
+        
         # For the first TodoWrite, just record it without diff
         if not self.previous_todos:
             return PlanStep(
                 step_number=self.step_number,
                 events_in_step=self.events_since_last_todo,
                 todos_added=[todo.content for todo in current_todos.values()],
-                timestamp=timestamp
+                timestamp=timestamp,
+                search_events=self.search_events_since_last_todo,
+                implementation_events=self.implementation_events_since_last_todo,
+                search_to_implementation_ratio=search_to_implementation_ratio
             )
         
         # Calculate differences
@@ -160,5 +212,8 @@ class PlanAnalyzer:
             todos_removed=todos_removed,
             todos_status_changed=todos_status_changed,
             todos_content_changed=todos_content_changed,
-            timestamp=timestamp
+            timestamp=timestamp,
+            search_events=self.search_events_since_last_todo,
+            implementation_events=self.implementation_events_since_last_todo,
+            search_to_implementation_ratio=search_to_implementation_ratio
         )

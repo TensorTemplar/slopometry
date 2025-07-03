@@ -111,7 +111,7 @@ class EventDatabase:
                 analyzer.analyze_todo_write_event(tool_input, event.timestamp)
         elif event.event_type == HookEventType.POST_TOOL_USE:
             # Only count PostToolUse events to avoid double-counting
-            analyzer.increment_event_count()
+            analyzer.increment_event_count(event.tool_type)
 
     def get_session_events(self, session_id: str) -> list[HookEvent]:
         """Get all events for a session."""
@@ -269,7 +269,7 @@ class EventDatabase:
                     analyzer.analyze_todo_write_event(tool_input, event.timestamp)
             elif event.event_type == HookEventType.POST_TOOL_USE:
                 # Only count PostToolUse events to avoid double-counting
-                analyzer.increment_event_count()
+                analyzer.increment_event_count(event.tool_type)
         
         return analyzer.get_plan_evolution()
 
