@@ -135,9 +135,16 @@ def handle_hook():
 
         # For PostToolUse, extract timing from tool_response
         if isinstance(parsed_input, PostToolUseInput):
-            event.duration_ms = parsed_input.tool_response.get("duration_ms")
-            event.exit_code = parsed_input.tool_response.get("exit_code")
-            event.error_message = parsed_input.tool_response.get("error")
+            # Handle both string and dictionary responses
+            if isinstance(parsed_input.tool_response, dict):
+                event.duration_ms = parsed_input.tool_response.get("duration_ms")
+                event.exit_code = parsed_input.tool_response.get("exit_code")
+                event.error_message = parsed_input.tool_response.get("error")
+            else:
+                # For string responses, we can't extract timing info
+                event.duration_ms = None
+                event.exit_code = None
+                event.error_message = None
 
     db = EventDatabase()
     db.save_event(event)

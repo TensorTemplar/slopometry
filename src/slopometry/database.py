@@ -5,7 +5,7 @@ import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from .models import GitState, HookEvent, HookEventType, SessionStatistics, ToolType
+from .models import GitState, HookEvent, HookEventType, SessionStatistics, ToolType, ComplexityMetrics, ComplexityDelta
 from .settings import settings
 
 
@@ -53,6 +53,9 @@ class EventDatabase:
 
             if "git_state" not in columns:
                 conn.execute("ALTER TABLE hook_events ADD COLUMN git_state TEXT")
+            
+            if "complexity_metrics" not in columns:
+                conn.execute("ALTER TABLE hook_events ADD COLUMN complexity_metrics TEXT")
 
     def save_event(self, event: HookEvent) -> int:
         """Save a hook event to the database."""
@@ -167,6 +170,48 @@ class EventDatabase:
 
                 git_tracker = GitTracker()
                 stats.commits_made = git_tracker.calculate_commits_made(stats.initial_git_state, stats.final_git_state)
+
+        # Calculate complexity metrics - analyze current working directory at end of session
+        try:
+            from .complexity_analyzer import ComplexityAnalyzer
+            from .git_tracker import GitTracker
+            
+            analyzer = ComplexityAnalyzer()
+            git_tracker = GitTracker()
+            
+            # Check if we can do baseline comparison
+            if git_tracker.has_previous_commit():
+                # Extract baseline files from previous commit
+                baseline_dir = git_tracker.extract_files_from_commit()
+                
+                if baseline_dir:
+                    try:
+                        # Analyze with baseline comparison
+                        current_metrics, complexity_delta = analyzer.analyze_complexity_with_baseline(baseline_dir)
+                        stats.complexity_metrics = current_metrics
+                        stats.complexity_delta = complexity_delta
+                        
+                        # Clean up temporary directory
+                        import shutil
+                        shutil.rmtree(baseline_dir, ignore_errors=True)
+                        
+                    except Exception:
+                        # Fall back to current analysis only
+                        stats.complexity_metrics = analyzer.analyze_complexity()
+                        stats.complexity_delta = None
+                else:
+                    # No baseline available, analyze current only
+                    stats.complexity_metrics = analyzer.analyze_complexity()
+                    stats.complexity_delta = None
+            else:
+                # No previous commit, analyze current only
+                stats.complexity_metrics = analyzer.analyze_complexity()
+                stats.complexity_delta = None
+                
+        except Exception:
+            # If complexity analysis fails, continue without it
+            stats.complexity_metrics = None
+            stats.complexity_delta = None
 
         return stats
 

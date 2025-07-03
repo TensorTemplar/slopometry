@@ -89,6 +89,28 @@ class HookEvent(BaseModel):
     git_state: GitState | None = None
 
 
+class ComplexityMetrics(BaseModel):
+    """Cognitive complexity metrics for Python files."""
+    
+    total_files_analyzed: int = 0
+    total_complexity: int = 0
+    average_complexity: float = 0.0
+    max_complexity: int = 0
+    min_complexity: int = 0
+    files_by_complexity: dict[str, int] = Field(default_factory=dict)  # filename -> complexity
+
+
+class ComplexityDelta(BaseModel):
+    """Complexity change comparison between two versions."""
+    
+    total_complexity_change: int = 0
+    files_added: list[str] = Field(default_factory=list)
+    files_removed: list[str] = Field(default_factory=list)
+    files_changed: dict[str, int] = Field(default_factory=dict)  # filename -> complexity_delta
+    net_files_change: int = 0  # files_added - files_removed
+    avg_complexity_change: float = 0.0
+    
+    
 class SessionStatistics(BaseModel):
     """Aggregated statistics for a Claude Code session."""
 
@@ -104,6 +126,8 @@ class SessionStatistics(BaseModel):
     initial_git_state: GitState | None = None
     final_git_state: GitState | None = None
     commits_made: int = 0
+    complexity_metrics: ComplexityMetrics | None = None
+    complexity_delta: ComplexityDelta | None = None
 
 
 class PreToolUseInput(BaseModel):
@@ -124,7 +148,7 @@ class PostToolUseInput(BaseModel):
     transcript_path: str
     tool_name: str
     tool_input: dict[str, Any] = Field(default_factory=dict)
-    tool_response: dict[str, Any] = Field(default_factory=dict)
+    tool_response: dict[str, Any] | str = Field(default_factory=dict)
 
     model_config = {"extra": "allow"}
 

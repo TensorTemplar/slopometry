@@ -237,6 +237,79 @@ def show_session_summary(session_id: str, detailed: bool = False):
         if stats.final_git_state and stats.final_git_state.has_uncommitted_changes:
             console.print("[yellow]Has uncommitted changes at end[/yellow]")
 
+    # Display complexity metrics if available
+    if stats.complexity_metrics and stats.complexity_metrics.total_files_analyzed > 0:
+        console.print("\n[bold]Complexity Metrics[/bold]")
+        console.print(f"Files analyzed: {stats.complexity_metrics.total_files_analyzed}")
+        console.print(f"Total complexity: {stats.complexity_metrics.total_complexity}")
+        console.print(f"Average complexity: {stats.complexity_metrics.average_complexity:.1f}")
+        console.print(f"Max complexity: {stats.complexity_metrics.max_complexity}")
+        console.print(f"Min complexity: {stats.complexity_metrics.min_complexity}")
+        
+        # Show top complex files in a table
+        if stats.complexity_metrics.files_by_complexity:
+            table = Table(title="Files by Complexity")
+            table.add_column("File", style="cyan")
+            table.add_column("Complexity", justify="right")
+            
+            # Sort by complexity (descending) and show top 10
+            sorted_files = sorted(
+                stats.complexity_metrics.files_by_complexity.items(), 
+                key=lambda x: x[1], 
+                reverse=True
+            )[:10]
+            
+            for file_path, complexity in sorted_files:
+                table.add_row(file_path, str(complexity))
+            
+            console.print(table)
+
+    # Display complexity delta if available
+    if stats.complexity_delta:
+        delta = stats.complexity_delta
+        console.print("\n[bold]Complexity Delta (vs Previous Commit)[/bold]")
+        
+        # Overall change summary
+        if delta.total_complexity_change != 0:
+            change_color = "green" if delta.total_complexity_change < 0 else "red"
+            console.print(f"Total complexity change: [{change_color}]{delta.total_complexity_change:+d}[/{change_color}]")
+        else:
+            console.print("Total complexity change: [yellow]0[/yellow]")
+        
+        if delta.avg_complexity_change != 0:
+            change_color = "green" if delta.avg_complexity_change < 0 else "red"
+            console.print(f"Average complexity change: [{change_color}]{delta.avg_complexity_change:+.1f}[/{change_color}]")
+        
+        # File changes summary
+        if delta.net_files_change != 0:
+            console.print(f"Net files change: {delta.net_files_change:+d}")
+        
+        # Show detailed file changes
+        if delta.files_added:
+            console.print(f"[green]Files added ({len(delta.files_added)})[/green]: {', '.join(delta.files_added[:3])}")
+            if len(delta.files_added) > 3:
+                console.print(f"  ... and {len(delta.files_added) - 3} more")
+        
+        if delta.files_removed:
+            console.print(f"[red]Files removed ({len(delta.files_removed)})[/red]: {', '.join(delta.files_removed[:3])}")
+            if len(delta.files_removed) > 3:
+                console.print(f"  ... and {len(delta.files_removed) - 3} more")
+        
+        if delta.files_changed:
+            # Show files with biggest complexity changes
+            sorted_changes = sorted(delta.files_changed.items(), key=lambda x: abs(x[1]), reverse=True)[:5]
+            
+            if sorted_changes:
+                table = Table(title="Biggest Complexity Changes")
+                table.add_column("File", style="cyan")
+                table.add_column("Change", justify="right")
+                
+                for file_path, change in sorted_changes:
+                    change_color = "green" if change < 0 else "red"
+                    table.add_row(file_path, f"[{change_color}]{change:+d}[/{change_color}]")
+                
+                console.print(table)
+
     if detailed:
         events = db.get_session_events(session_id)
         tree = Tree("[bold]Event Sequence[/bold]")
