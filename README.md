@@ -81,14 +81,11 @@ Customize via `.env` file or environment variables:
 - `cli.py`: Click-based CLI interface with install/uninstall commands
 - `settings.py`: Configuration management with uv compatibility
 
-## Development
+## Roadmap
 
-```bash
-git clone <repo>
-cd slopometry
-uv sync --all-extras
-
-# Test the CLI
-uv run slopometry install
-uv run slopometry status
-```
+[ ] - Actually make a package so people can install this  
+[ ] - Add hindsight-justified requirements from implemented commits of the future  
+[ ] - Add plan evolution log based on claude's todo shenenigans  
+[ ] - Use PR-CLI (TM) training objective on plans as process reward while doing huge subtree rollouts  
+[ ] - Add LLM-as-judge feedback over style guide as policy
+[ ] - Not go bankrupt from having to maintain open source in my free time, no wait...
