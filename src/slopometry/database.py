@@ -5,7 +5,8 @@ import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from .models import GitState, HookEvent, HookEventType, SessionStatistics, ToolType, ComplexityMetrics, ComplexityDelta
+from .models import GitState, HookEvent, HookEventType, SessionStatistics, ToolType, ComplexityMetrics, ComplexityDelta, PlanEvolution
+from .plan_analyzer import PlanAnalyzer
 from .settings import settings
 
 
@@ -18,6 +19,7 @@ class EventDatabase:
         db_path = Path(db_path).resolve()
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self.db_path = db_path
+        self._plan_analyzers: dict[str, PlanAnalyzer] = {}  # session_id -> PlanAnalyzer
         self._init_db()
 
     def _init_db(self):
@@ -59,6 +61,9 @@ class EventDatabase:
 
     def save_event(self, event: HookEvent) -> int:
         """Save a hook event to the database."""
+        # Track plan evolution for this session
+        self._update_plan_evolution(event)
+        
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.execute(
                 """
@@ -83,6 +88,30 @@ class EventDatabase:
                 ),
             )
             return cursor.lastrowid or 0
+
+    def _update_plan_evolution(self, event: HookEvent) -> None:
+        """Update plan evolution tracking for a session.
+        
+        Args:
+            event: The hook event to process
+        """
+        session_id = event.session_id
+        
+        # Get or create plan analyzer for this session
+        if session_id not in self._plan_analyzers:
+            self._plan_analyzers[session_id] = PlanAnalyzer()
+        
+        analyzer = self._plan_analyzers[session_id]
+        
+        # Handle TodoWrite events
+        if event.tool_name == "TodoWrite" and event.event_type == HookEventType.POST_TOOL_USE:
+            # Extract tool input from metadata
+            tool_input = event.metadata.get("tool_input", {})
+            if tool_input:
+                analyzer.analyze_todo_write_event(tool_input, event.timestamp)
+        elif event.event_type == HookEventType.POST_TOOL_USE:
+            # Only count PostToolUse events to avoid double-counting
+            analyzer.increment_event_count()
 
     def get_session_events(self, session_id: str) -> list[HookEvent]:
         """Get all events for a session."""
@@ -213,7 +242,36 @@ class EventDatabase:
             stats.complexity_metrics = None
             stats.complexity_delta = None
 
+        # Calculate plan evolution from session events
+        try:
+            stats.plan_evolution = self._calculate_plan_evolution(events)
+        except Exception:
+            stats.plan_evolution = None
+
         return stats
+
+    def _calculate_plan_evolution(self, events: list[HookEvent]) -> PlanEvolution:
+        """Calculate plan evolution from session events.
+        
+        Args:
+            events: All events in the session
+            
+        Returns:
+            PlanEvolution analysis
+        """
+        analyzer = PlanAnalyzer()
+        
+        for event in events:
+            if event.tool_name == "TodoWrite" and event.event_type == HookEventType.POST_TOOL_USE:
+                # Extract tool input from metadata
+                tool_input = event.metadata.get("tool_input", {})
+                if tool_input:
+                    analyzer.analyze_todo_write_event(tool_input, event.timestamp)
+            elif event.event_type == HookEventType.POST_TOOL_USE:
+                # Only count PostToolUse events to avoid double-counting
+                analyzer.increment_event_count()
+        
+        return analyzer.get_plan_evolution()
 
     def list_sessions(self) -> list[str]:
         """List all unique session IDs."""

@@ -113,6 +113,39 @@ class ComplexityDelta(BaseModel):
     # Simple change to test delta tracking - very minimal edit
     
     
+class TodoItem(BaseModel):
+    """Represents a single todo item."""
+    
+    id: str
+    content: str
+    status: str  # pending, in_progress, completed
+    priority: str  # high, medium, low
+
+
+class PlanStep(BaseModel):
+    """Represents a planning step between TodoWrite events."""
+    
+    step_number: int
+    events_in_step: int  # Number of events between this and previous TodoWrite
+    todos_added: list[str] = Field(default_factory=list)  # Content of new todos
+    todos_removed: list[str] = Field(default_factory=list)  # Content of removed todos
+    todos_status_changed: dict[str, tuple[str, str]] = Field(default_factory=dict)  # content -> (old_status, new_status)
+    todos_content_changed: dict[str, tuple[str, str]] = Field(default_factory=dict)  # old_content -> new_content
+    timestamp: datetime = Field(default_factory=datetime.now)
+
+
+class PlanEvolution(BaseModel):
+    """Tracks how the plan evolves through TodoWrite events."""
+    
+    total_plan_steps: int = 0
+    total_todos_created: int = 0
+    total_todos_completed: int = 0
+    average_events_per_step: float = 0.0
+    plan_steps: list[PlanStep] = Field(default_factory=list)
+    final_todo_count: int = 0
+    planning_efficiency: float = 0.0  # completed_todos / total_todos_created
+
+
 class SessionStatistics(BaseModel):
     """Aggregated statistics for a Claude Code session."""
 
@@ -130,6 +163,7 @@ class SessionStatistics(BaseModel):
     commits_made: int = 0
     complexity_metrics: ComplexityMetrics | None = None
     complexity_delta: ComplexityDelta | None = None
+    plan_evolution: PlanEvolution | None = None
 
 
 class PreToolUseInput(BaseModel):

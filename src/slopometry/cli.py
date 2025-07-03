@@ -310,6 +310,41 @@ def show_session_summary(session_id: str, detailed: bool = False):
                 
                 console.print(table)
 
+    # Display plan evolution if available
+    if stats.plan_evolution and stats.plan_evolution.total_plan_steps > 0:
+        evolution = stats.plan_evolution
+        console.print("\n[bold]Plan Evolution[/bold]")
+        console.print(f"Total planning steps: {evolution.total_plan_steps}")
+        console.print(f"Todos created: {evolution.total_todos_created}")
+        console.print(f"Todos completed: {evolution.total_todos_completed}")
+        console.print(f"Planning efficiency: {evolution.planning_efficiency:.1%}")
+        console.print(f"Average events per step: {evolution.average_events_per_step:.1f}")
+        
+        if evolution.plan_steps:
+            table = Table(title="Planning Steps")
+            table.add_column("Step", style="cyan", width=4)
+            table.add_column("Events", justify="right", width=6)
+            table.add_column("Changes", style="yellow")
+            
+            for step in evolution.plan_steps[:5]:  # Show first 5 steps
+                changes = []
+                if step.todos_added:
+                    changes.append(f"+{len(step.todos_added)} added")
+                if step.todos_removed:
+                    changes.append(f"-{len(step.todos_removed)} removed")
+                if step.todos_status_changed:
+                    changes.append(f"{len(step.todos_status_changed)} status changed")
+                if step.todos_content_changed:
+                    changes.append(f"{len(step.todos_content_changed)} content changed")
+                
+                change_summary = ", ".join(changes) if changes else "Initial plan"
+                table.add_row(str(step.step_number), str(step.events_in_step), change_summary)
+            
+            if len(evolution.plan_steps) > 5:
+                table.add_row("...", "...", f"... and {len(evolution.plan_steps) - 5} more steps")
+            
+            console.print(table)
+
     if detailed:
         events = db.get_session_events(session_id)
         tree = Tree("[bold]Event Sequence[/bold]")

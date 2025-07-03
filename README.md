@@ -46,8 +46,9 @@ check whats up with `slopometry list` and `slopometry show <session_id>`
 
 ![complexity metrics (CC)](assets/cc.png)  
 
-![a detailed event log, totally not for any RL later](assets/log.png)  
+![plan evolution](assets/plan-evolution.png)  
 
+![a detailed event log, totally not for any RL later](assets/log.png)  
 
 ## Here be powerusers
 
@@ -85,7 +86,7 @@ Customize via `.env` file or environment variables:
 
 [ ] - Actually make a package so people can install this  
 [ ] - Add hindsight-justified requirements from implemented commits of the future  
-[ ] - Add plan evolution log based on claude's todo shenenigans  
+[x] - Add plan evolution log based on claude's todo shenenigans  
 [ ] - Use [PR-CLI](https://tensortemplar.substack.com/p/humans-are-no-longer-embodied-amortization) (TM) training objective on plans as process reward while doing huge subtree rollouts just to win an argument on the internet  
 [ ] - Add LLM-as-judge feedback over style guide as policy  
 [ ] - Not go bankrupt from having to maintain open source in my free time, no wait...
