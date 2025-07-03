@@ -1,0 +1,381 @@
+"""CLI for the slopometry Claude Code tracker."""
+
+import json
+from datetime import datetime
+from pathlib import Path
+
+import click
+from rich.console import Console
+from rich.table import Table
+from rich.tree import Tree
+
+from .database import EventDatabase
+from .settings import settings
+
+console = Console()
+
+# Save builtin list before Click commands override it
+builtin_list = list
+
+
+def create_slopometry_hooks() -> dict:
+    """Create slopometry hook configuration for Claude Code."""
+    hook_command = settings.hook_command
+
+    return {
+        "PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": hook_command}]}],
+        "PostToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": hook_command}]}],
+        "Notification": [{"hooks": [{"type": "command", "command": hook_command}]}],
+        "Stop": [{"hooks": [{"type": "command", "command": hook_command}]}],
+        "SubagentStop": [{"hooks": [{"type": "command", "command": hook_command}]}],
+    }
+
+
+@click.group()
+def cli():
+    """Slopometry - Claude Code session tracker."""
+    pass
+
+
+@cli.command()
+@click.option(
+    "--global/--local",
+    "global_",
+    default=False,
+    help="Install hooks globally (~/.claude) or locally (./.claude)",
+)
+def install(global_):
+    """Install slopometry hooks for automatic Claude Code tracking."""
+    settings_dir = Path.home() / ".claude" if global_ else Path.cwd() / ".claude"
+    settings_file = settings_dir / "settings.json"
+
+    settings_dir.mkdir(exist_ok=True)
+
+    existing_settings = {}
+    if settings_file.exists():
+        with open(settings_file) as f:
+            existing_settings = json.load(f)
+
+    if "hooks" in existing_settings and settings.backup_existing_settings:
+        backup_file = settings_dir / f"settings.backup.{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        with open(backup_file, "w") as f:
+            json.dump(existing_settings, f, indent=2)
+        console.print(f"[yellow]Backed up existing settings to {backup_file}[/yellow]")
+
+    slopometry_hooks = create_slopometry_hooks()
+
+    if "hooks" not in existing_settings:
+        existing_settings["hooks"] = {}
+
+    for hook_type, hook_configs in slopometry_hooks.items():
+        if hook_type not in existing_settings["hooks"]:
+            existing_settings["hooks"][hook_type] = []
+
+        existing_settings["hooks"][hook_type] = [
+            h
+            for h in existing_settings["hooks"][hook_type]
+            if not (
+                isinstance(h.get("hooks"), builtin_list)
+                and any("slopometry.hook_handler" in hook.get("command", "") for hook in h.get("hooks", []))
+            )
+        ]
+
+        existing_settings["hooks"][hook_type].extend(hook_configs)
+
+    with open(settings_file, "w") as f:
+        json.dump(existing_settings, f, indent=2)
+
+    scope = "globally" if global_ else "locally"
+    console.print(f"[green]Slopometry hooks installed {scope} in {settings_file}[/green]")
+    console.print("[cyan]All Claude Code sessions will now be automatically tracked[/cyan]")
+
+
+@cli.command()
+@click.option(
+    "--global/--local",
+    "global_",
+    default=False,
+    help="Remove hooks globally (~/.claude) or locally (./.claude)",
+)
+def uninstall(global_):
+    """Remove slopometry hooks to stop automatic tracking."""
+    settings_dir = Path.home() / ".claude" if global_ else Path.cwd() / ".claude"
+    settings_file = settings_dir / "settings.json"
+
+    if not settings_file.exists():
+        console.print(f"[yellow]No settings file found at {settings_file}[/yellow]")
+        return
+
+    with open(settings_file) as f:
+        settings_data = json.load(f)
+
+    if "hooks" not in settings_data:
+        console.print("[yellow]No hooks configuration found[/yellow]")
+        return
+
+    removed_any = False
+    for hook_type in settings_data["hooks"]:
+        original_length = len(settings_data["hooks"][hook_type])
+        settings_data["hooks"][hook_type] = [
+            h
+            for h in settings_data["hooks"][hook_type]
+            if not (
+                isinstance(h.get("hooks"), builtin_list)
+                and any("slopometry.hook_handler" in hook.get("command", "") for hook in h.get("hooks", []))
+            )
+        ]
+        if len(settings_data["hooks"][hook_type]) < original_length:
+            removed_any = True
+
+    settings_data["hooks"] = {k: v for k, v in settings_data["hooks"].items() if v}
+
+    if not settings_data["hooks"]:
+        del settings_data["hooks"]
+
+    with open(settings_file, "w") as f:
+        json.dump(settings_data, f, indent=2)
+
+    scope = "globally" if global_ else "locally"
+    if removed_any:
+        console.print(f"[green]Slopometry hooks removed {scope} from {settings_file}[/green]")
+    else:
+        console.print(f"[yellow]No slopometry hooks found to remove {scope}[/yellow]")
+
+
+@cli.command()
+@click.option("--limit", default=None, help="Number of recent sessions to show")
+def list(limit):
+    """List recent Claude Code sessions."""
+    db = EventDatabase()
+    limit = int(limit) if limit else settings.recent_sessions_limit
+    sessions = db.list_sessions()[:limit]
+
+    if not sessions:
+        console.print("[yellow]No sessions found[/yellow]")
+        console.print("[dim]Run 'slopometry install' to start tracking Claude Code sessions[/dim]")
+        return
+
+    table = Table(title="Recent Sessions")
+    table.add_column("Session ID", style="cyan")
+    table.add_column("Start Time", style="green")
+    table.add_column("Events", justify="right")
+    table.add_column("Tools Used", justify="right")
+
+    for session_id in sessions:
+        stats = db.get_session_statistics(session_id)
+        if stats:
+            table.add_row(
+                session_id,
+                stats.start_time.strftime("%Y-%m-%d %H:%M:%S"),
+                str(stats.total_events),
+                str(len(stats.tool_usage)),
+            )
+
+    console.print(table)
+
+
+@cli.command()
+@click.argument("session_id")
+def show(session_id):
+    """Show detailed statistics for a session."""
+    show_session_summary(session_id, detailed=True)
+
+
+def show_session_summary(session_id: str, detailed: bool = False):
+    """Display session statistics."""
+    db = EventDatabase()
+    stats = db.get_session_statistics(session_id)
+
+    if not stats:
+        console.print(f"[red]No data found for session {session_id}[/red]")
+        return
+
+    console.print(f"\n[bold]Session Statistics: {session_id}[/bold]")
+    console.print(f"Start: {stats.start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    if stats.end_time:
+        duration = (stats.end_time - stats.start_time).total_seconds()
+        console.print(f"Duration: {duration:.1f} seconds")
+    console.print(f"Total events: {stats.total_events}")
+
+    if stats.events_by_type:
+        table = Table(title="Events by Type")
+        table.add_column("Event Type", style="cyan")
+        table.add_column("Count", justify="right")
+
+        for event_type, count in sorted(stats.events_by_type.items()):
+            table.add_row(event_type.value, str(count))
+
+        console.print(table)
+
+    if stats.tool_usage:
+        table = Table(title="Tool Usage")
+        table.add_column("Tool", style="green")
+        table.add_column("Count", justify="right")
+
+        for tool_type, count in sorted(stats.tool_usage.items(), key=lambda x: x[1], reverse=True):
+            table.add_row(tool_type.value, str(count))
+
+        console.print(table)
+
+    if stats.average_tool_duration_ms:
+        console.print(f"\nAverage tool duration: {stats.average_tool_duration_ms:.0f}ms")
+
+    if stats.error_count > 0:
+        console.print(f"[red]Errors: {stats.error_count}[/red]")
+
+    # Display git metrics if available
+    if stats.initial_git_state and stats.initial_git_state.is_git_repo:
+        console.print("\n[bold]Git Metrics[/bold]")
+        console.print(f"Commits made: [green]{stats.commits_made}[/green]")
+
+        if stats.initial_git_state.current_branch:
+            console.print(f"Branch: {stats.initial_git_state.current_branch}")
+
+        if stats.initial_git_state.has_uncommitted_changes:
+            console.print("[yellow]Had uncommitted changes at start[/yellow]")
+
+        if stats.final_git_state and stats.final_git_state.has_uncommitted_changes:
+            console.print("[yellow]Has uncommitted changes at end[/yellow]")
+
+    if detailed:
+        events = db.get_session_events(session_id)
+        tree = Tree("[bold]Event Sequence[/bold]")
+
+        display_limit = settings.event_display_limit
+        for event in events[:display_limit]:
+            label = f"{event.sequence_number}. {event.event_type.value}"
+            if event.tool_name:
+                label += f" - {event.tool_name}"
+            if event.duration_ms:
+                label += f" ({event.duration_ms}ms)"
+
+            node = tree.add(label)
+            if event.error_message:
+                node.add(f"[red]Error: {event.error_message}[/red]")
+
+        if len(events) > display_limit:
+            tree.add(f"... and {len(events) - display_limit} more events")
+
+        console.print(tree)
+
+
+@cli.command()
+@click.argument("session_id", required=False)
+@click.option("--all", "all_sessions", is_flag=True, help="Delete all sessions")
+@click.option("--yes", is_flag=True, help="Skip confirmation prompt")
+def cleanup(session_id, all_sessions, yes):
+    """Clean up session data.
+
+    If SESSION_ID is provided, delete that specific session.
+    If --all is provided, delete all sessions.
+    Otherwise, show usage help.
+    """
+    db = EventDatabase()
+
+    if session_id and all_sessions:
+        console.print("[red]Error: Cannot specify both session ID and --all[/red]")
+        return
+
+    if not session_id and not all_sessions:
+        console.print("[yellow]Usage:[/yellow]")
+        console.print("  slopometry cleanup SESSION_ID    # Delete specific session")
+        console.print("  slopometry cleanup --all         # Delete all sessions")
+        return
+
+    if session_id:
+        # Check if session exists
+        stats = db.get_session_statistics(session_id)
+        if not stats:
+            console.print(f"[red]Session {session_id} not found[/red]")
+            return
+
+        # Show session info
+        console.print(f"\n[bold]Session to delete: {session_id}[/bold]")
+        console.print(f"Start time: {stats.start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        console.print(f"Total events: {stats.total_events}")
+
+        if not yes:
+            confirm = click.confirm("\nAre you sure you want to delete this session?", default=False)
+            if not confirm:
+                console.print("[yellow]Cancelled[/yellow]")
+                return
+
+        events_deleted, files_deleted = db.cleanup_session(session_id)
+        console.print(f"[green]Deleted {events_deleted} events and {files_deleted} files[/green]")
+
+    else:  # all_sessions
+        # Get session count
+        sessions = db.list_sessions()
+        if not sessions:
+            console.print("[yellow]No sessions to delete[/yellow]")
+            return
+
+        console.print(f"\n[bold red]WARNING: This will delete ALL {len(sessions)} sessions![/bold red]")
+        console.print("This action cannot be undone.")
+
+        if not yes:
+            confirm = click.confirm("\nAre you sure you want to delete all sessions?", default=False)
+            if not confirm:
+                console.print("[yellow]Cancelled[/yellow]")
+                return
+
+        sessions_deleted, events_deleted, files_deleted = db.cleanup_all_sessions()
+        console.print(
+            f"[green]Deleted {sessions_deleted} sessions, {events_deleted} events, and {files_deleted} files[/green]"
+        )
+
+
+@cli.command()
+def status():
+    """Show installation status and hook configuration."""
+    global_settings = Path.home() / ".claude" / "settings.json"
+    local_settings = Path.cwd() / ".claude" / "settings.json"
+
+    console.print("[bold]Slopometry Installation Status[/bold]\n")
+
+    global_installed = _check_hooks_installed(global_settings)
+    status_icon = "[green]✓[/green]" if global_installed else "[red]✗[/red]"
+    console.print(f"{status_icon} Global hooks: {global_settings}")
+
+    local_installed = _check_hooks_installed(local_settings)
+    status_icon = "[green]✓[/green]" if local_installed else "[red]✗[/red]"
+    console.print(f"{status_icon} Local hooks: {local_settings}")
+
+    if not global_installed and not local_installed:
+        console.print("\n[yellow]No slopometry hooks found. Run 'slopometry install' to start tracking.[/yellow]")
+    else:
+        console.print("\n[green]Hooks are installed. Claude Code sessions are being tracked automatically.[/green]")
+
+        db = EventDatabase()
+        sessions = db.list_sessions()[:3]
+        if sessions:
+            console.print("\n[bold]Recent Sessions:[/bold]")
+            for session_id in sessions:
+                stats = db.get_session_statistics(session_id)
+                if stats:
+                    console.print(f"  • {session_id} ({stats.total_events} events)")
+
+
+def _check_hooks_installed(settings_file: Path) -> bool:
+    """Check if slopometry hooks are installed in a settings file."""
+    if not settings_file.exists():
+        return False
+
+    try:
+        with open(settings_file) as f:
+            settings_data = json.load(f)
+
+        hooks = settings_data.get("hooks", {})
+        for hook_type in hooks:
+            for hook_config in hooks[hook_type]:
+                if isinstance(hook_config.get("hooks"), builtin_list):
+                    for hook in hook_config["hooks"]:
+                        if "slopometry.hook_handler" in hook.get("command", ""):
+                            return True
+        return False
+    except (json.JSONDecodeError, KeyError):
+        return False
+
+
+if __name__ == "__main__":
+    cli()

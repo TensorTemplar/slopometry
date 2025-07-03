@@ -1,0 +1,60 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "slopometry"
+version = "0.1.0"
+description = "Claude Code session tracker - collects statistics about hook invocations"
+readme = "README.md"
+requires-python = ">=3.13"
+
+dependencies = [
+    "click>=8.0",
+    "rich>=13.0",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "sqlite-utils>=3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "mypy>=1.0.0",
+    "ruff>=0.0.244",
+    "isort>=5.12.0",
+    "pre-commit>=4.2.0",
+    "pytest>=8.3.5",
+]
+
+[project.scripts]
+slopometry = "slopometry.cli:cli"
+
+[tool.ruff]
+lint.select = ["I", "F", "UP"]
+lint.ignore = []
+line-length = 120
+target-version = "py313"
+
+[tool.isort]
+profile = "black"
+line_length = 120
+multi_line_output = 3
+force_grid_wrap = 2
+
+[tool.mypy]
+python_version = "3.13"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = true
+disallow_untyped_decorators = false
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = false
+warn_no_return = true
+warn_unreachable = true
+strict_equality = true
+mypy_path = "src"
+namespace_packages = true
+explicit_package_bases = true
