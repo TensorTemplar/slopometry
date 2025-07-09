@@ -1,8 +1,32 @@
 """Configuration settings for slopometry."""
 
+import os
+import sys
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def get_default_data_dir() -> Path:
+    """Get platform-specific default data directory."""
+    app_name = "slopometry"
+
+    if sys.platform == "win32":
+        # Windows: %LOCALAPPDATA%\slopometry
+        base = os.environ.get("LOCALAPPDATA")
+        if not base:
+            base = Path.home() / "AppData" / "Local"
+        return Path(base) / app_name
+    elif sys.platform == "darwin":
+        # macOS: ~/Library/Application Support/slopometry
+        return Path.home() / "Library" / "Application Support" / app_name
+    else:
+        # Linux/Unix: ~/.local/share/slopometry
+        xdg_data_home = os.environ.get("XDG_DATA_HOME")
+        if xdg_data_home:
+            return Path(xdg_data_home) / app_name
+        return Path.home() / ".local" / "share" / app_name
 
 
 class Settings(BaseSettings):
@@ -13,10 +37,11 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         case_sensitive=False,
         env_prefix="SLOPOMETRY_",
+        extra="ignore",  # Ignore extra environment variables
     )
 
     # Database settings
-    database_path: Path = Path(".claude/slopometry.db")
+    database_path: Path | None = None
 
     # Hook handler settings
     python_executable: str | None = None
@@ -33,9 +58,29 @@ class Settings(BaseSettings):
 
     # Debug settings
     debug_mode: bool = False
-    
+
     # Complexity feedback settings
     enable_stop_feedback: bool = False
+
+    @field_validator("database_path", mode="before")
+    @classmethod
+    def validate_database_path(cls, v):
+        """Convert string paths to Path objects."""
+        if v is None:
+            return None
+        if isinstance(v, str):
+            return Path(v)
+        return v
+
+    @property
+    def resolved_database_path(self) -> Path:
+        """Get the resolved database path, using default if not set."""
+        if self.database_path is not None:
+            return self.database_path.resolve()
+
+        # Use platform-specific default
+        data_dir = get_default_data_dir()
+        return data_dir / "slopometry.db"
 
     @property
     def hook_command(self) -> str:

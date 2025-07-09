@@ -18,6 +18,16 @@ console = Console()
 builtin_list = list
 
 
+def complete_session_id(ctx, param, incomplete):
+    """Complete session IDs from the database."""
+    try:
+        db = EventDatabase()
+        sessions = db.list_sessions()
+        return [session for session in sessions if session.startswith(incomplete)]
+    except Exception:
+        return []
+
+
 def create_slopometry_hooks() -> dict:
     """Create slopometry hook configuration for Claude Code."""
     hook_command = settings.hook_command
@@ -35,6 +45,32 @@ def create_slopometry_hooks() -> dict:
 def cli():
     """Slopometry - Claude Code session tracker."""
     pass
+
+
+@cli.command()
+@click.argument("shell", type=click.Choice(["bash", "zsh", "fish"]))
+def completion(shell):
+    """Generate shell completion script."""
+
+    if shell == "bash":
+        console.print("[bold]Add this to your ~/.bashrc:[/bold]")
+        console.print('eval "$(_SLOPOMETRY_COMPLETE=bash_source slopometry)"')
+        console.print("\n[bold]Or install directly:[/bold]")
+        console.print("_SLOPOMETRY_COMPLETE=bash_source slopometry > ~/.slopometry-complete.sh")
+        console.print("echo 'source ~/.slopometry-complete.sh' >> ~/.bashrc")
+    elif shell == "zsh":
+        console.print("[bold]Add this to your ~/.zshrc:[/bold]")
+        console.print('eval "$(_SLOPOMETRY_COMPLETE=zsh_source slopometry)"')
+        console.print("\n[bold]Or install directly:[/bold]")
+        console.print("_SLOPOMETRY_COMPLETE=zsh_source slopometry > ~/.slopometry-complete.zsh")
+        console.print("echo 'source ~/.slopometry-complete.zsh' >> ~/.zshrc")
+    elif shell == "fish":
+        console.print("[bold]Add this to your fish config:[/bold]")
+        console.print("_SLOPOMETRY_COMPLETE=fish_source slopometry | source")
+        console.print("\n[bold]Or install directly:[/bold]")
+        console.print("_SLOPOMETRY_COMPLETE=fish_source slopometry > ~/.config/fish/completions/slopometry.fish")
+
+    console.print("\n[yellow]Note: Restart your shell or source your config file after installation.[/yellow]")
 
 
 @cli.command()
@@ -147,8 +183,8 @@ def uninstall(global_):
 def list(limit):
     """List recent Claude Code sessions."""
     db = EventDatabase()
-    limit = int(limit) if limit else settings.recent_sessions_limit
-    sessions = db.list_sessions()[:limit]
+    all_sessions = db.list_sessions()
+    sessions = all_sessions[: int(limit)] if limit else all_sessions
 
     if not sessions:
         console.print("[yellow]No sessions found[/yellow]")
@@ -175,10 +211,25 @@ def list(limit):
 
 
 @cli.command()
-@click.argument("session_id")
+@click.argument("session_id", shell_complete=complete_session_id)
 def show(session_id):
     """Show detailed statistics for a session."""
     show_session_summary(session_id, detailed=True)
+
+
+@cli.command()
+def latest():
+    """Show detailed statistics for the most recent session."""
+    db = EventDatabase()
+    sessions = db.list_sessions()
+
+    if not sessions:
+        console.print("[red]No sessions found[/red]")
+        return
+
+    most_recent = sessions[0]  # list_sessions returns most recent first
+    console.print(f"[bold]Showing most recent session: {most_recent}[/bold]\n")
+    show_session_summary(most_recent, detailed=True)
 
 
 def show_session_summary(session_id: str, detailed: bool = False):
@@ -245,69 +296,73 @@ def show_session_summary(session_id: str, detailed: bool = False):
         console.print(f"Average complexity: {stats.complexity_metrics.average_complexity:.1f}")
         console.print(f"Max complexity: {stats.complexity_metrics.max_complexity}")
         console.print(f"Min complexity: {stats.complexity_metrics.min_complexity}")
-        
+
         # Show top complex files in a table
         if stats.complexity_metrics.files_by_complexity:
             table = Table(title="Files by Complexity")
             table.add_column("File", style="cyan")
             table.add_column("Complexity", justify="right")
-            
+
             # Sort by complexity (descending) and show top 10
             sorted_files = sorted(
-                stats.complexity_metrics.files_by_complexity.items(), 
-                key=lambda x: x[1], 
-                reverse=True
+                stats.complexity_metrics.files_by_complexity.items(), key=lambda x: x[1], reverse=True
             )[:10]
-            
+
             for file_path, complexity in sorted_files:
                 table.add_row(file_path, str(complexity))
-            
+
             console.print(table)
 
     # Display complexity delta if available
     if stats.complexity_delta:
         delta = stats.complexity_delta
         console.print("\n[bold]Complexity Delta (vs Previous Commit)[/bold]")
-        
+
         # Overall change summary
         if delta.total_complexity_change != 0:
             change_color = "green" if delta.total_complexity_change < 0 else "red"
-            console.print(f"Total complexity change: [{change_color}]{delta.total_complexity_change:+d}[/{change_color}]")
+            console.print(
+                f"Total complexity change: [{change_color}]{delta.total_complexity_change:+d}[/{change_color}]"
+            )
         else:
             console.print("Total complexity change: [yellow]0[/yellow]")
-        
+
         if delta.avg_complexity_change != 0:
             change_color = "green" if delta.avg_complexity_change < 0 else "red"
-            console.print(f"Average complexity change: [{change_color}]{delta.avg_complexity_change:+.1f}[/{change_color}]")
-        
+            console.print(
+                f"Average complexity change: [{change_color}]{delta.avg_complexity_change:+.1f}[/{change_color}]"
+            )
+
         # File changes summary
         if delta.net_files_change != 0:
             console.print(f"Net files change: {delta.net_files_change:+d}")
-        
+
         # Show detailed file changes
         if delta.files_added:
             console.print(f"[green]Files added ({len(delta.files_added)})[/green]: {', '.join(delta.files_added[:3])}")
             if len(delta.files_added) > 3:
                 console.print(f"  ... and {len(delta.files_added) - 3} more")
-        
+
         if delta.files_removed:
-            console.print(f"[red]Files removed ({len(delta.files_removed)})[/red]: {', '.join(delta.files_removed[:3])}")
+            console.print(
+                f"[red]Files removed ({len(delta.files_removed)})[/red]: {', '.join(delta.files_removed[:3])}"
+            )
             if len(delta.files_removed) > 3:
                 console.print(f"  ... and {len(delta.files_removed) - 3} more")
-        
+
         if delta.files_changed:
             # Show files with biggest complexity changes
             sorted_changes = sorted(delta.files_changed.items(), key=lambda x: abs(x[1]), reverse=True)[:5]
-            
+
             if sorted_changes:
                 table = Table(title="Biggest Complexity Changes")
                 table.add_column("File", style="cyan")
                 table.add_column("Change", justify="right")
-                
+
                 for file_path, change in sorted_changes:
                     change_color = "green" if change < 0 else "red"
                     table.add_row(file_path, f"[{change_color}]{change:+d}[/{change_color}]")
-                
+
                 console.print(table)
 
     # Display plan evolution if available
@@ -322,14 +377,14 @@ def show_session_summary(session_id: str, detailed: bool = False):
         console.print(f"Search events: {evolution.total_search_events}")
         console.print(f"Implementation events: {evolution.total_implementation_events}")
         console.print(f"Search/Implementation ratio: {evolution.overall_search_to_implementation_ratio:.2f}")
-        
+
         if evolution.plan_steps:
             table = Table(title="Planning Steps")
             table.add_column("Step", style="cyan", width=4)
             table.add_column("Events", justify="right", width=6)
             table.add_column("S/I Ratio", justify="right", width=8)
             table.add_column("Changes", style="yellow")
-            
+
             for step in evolution.plan_steps[:5]:  # Show first 5 steps
                 changes = []
                 if step.todos_added:
@@ -340,14 +395,16 @@ def show_session_summary(session_id: str, detailed: bool = False):
                     changes.append(f"{len(step.todos_status_changed)} status changed")
                 if step.todos_content_changed:
                     changes.append(f"{len(step.todos_content_changed)} content changed")
-                
+
                 change_summary = ", ".join(changes) if changes else "Initial plan"
-                ratio_display = f"{step.search_to_implementation_ratio:.2f}" if step.implementation_events > 0 else "N/A"
+                ratio_display = (
+                    f"{step.search_to_implementation_ratio:.2f}" if step.implementation_events > 0 else "N/A"
+                )
                 table.add_row(str(step.step_number), str(step.events_in_step), ratio_display, change_summary)
-            
+
             if len(evolution.plan_steps) > 5:
                 table.add_row("...", "...", "...", f"... and {len(evolution.plan_steps) - 5} more steps")
-            
+
             console.print(table)
 
     if detailed:
@@ -373,7 +430,7 @@ def show_session_summary(session_id: str, detailed: bool = False):
 
 
 @cli.command()
-@click.argument("session_id", required=False)
+@click.argument("session_id", required=False, shell_complete=complete_session_id)
 @click.option("--all", "all_sessions", is_flag=True, help="Delete all sessions")
 @click.option("--yes", is_flag=True, help="Skip confirmation prompt")
 def cleanup(session_id, all_sessions, yes):
@@ -446,6 +503,10 @@ def status():
 
     console.print("[bold]Slopometry Installation Status[/bold]\n")
 
+    # Show data directory
+    console.print(f"[cyan]Data directory:[/cyan] {settings.resolved_database_path.parent}")
+    console.print(f"[cyan]Database:[/cyan] {settings.resolved_database_path}\n")
+
     global_installed = _check_hooks_installed(global_settings)
     status_icon = "[green]✓[/green]" if global_installed else "[red]✗[/red]"
     console.print(f"{status_icon} Global hooks: {global_settings}")
@@ -490,63 +551,63 @@ def feedback(enable):
     # Update setting via environment variable suggestion
     env_file = Path(".env")
     env_var = "SLOPOMETRY_ENABLE_STOP_FEEDBACK"
-    
+
     if enable:
         console.print("[green]Enabling[/green] complexity feedback on stop events")
         console.print("")
         console.print("To persist this setting, add to your .env file:")
         console.print(f"  {env_var}=true")
-        
+
         # Update .env file if it exists or create it
         if env_file.exists():
             content = env_file.read_text()
             if env_var in content:
                 # Replace existing line
-                lines = content.split('\n')
+                lines = content.split("\n")
                 new_lines = []
                 for line in lines:
                     if line.startswith(f"{env_var}="):
                         new_lines.append(f"{env_var}=true")
                     else:
                         new_lines.append(line)
-                env_file.write_text('\n'.join(new_lines))
+                env_file.write_text("\n".join(new_lines))
             else:
                 # Append new line
-                with env_file.open('a') as f:
+                with env_file.open("a") as f:
                     f.write(f"\n{env_var}=true\n")
         else:
             # Create new .env file
             env_file.write_text(f"{env_var}=true\n")
-            
+
         console.print(f"[green]Added {env_var}=true to .env file[/green]")
-        
+
     else:
         console.print("[yellow]Disabling[/yellow] complexity feedback on stop events")
         console.print("")
         console.print("To persist this setting, add to your .env file:")
         console.print(f"  {env_var}=false")
-        
+
         # Update .env file
         if env_file.exists():
             content = env_file.read_text()
             if env_var in content:
                 # Replace existing line
-                lines = content.split('\n')
+                lines = content.split("\n")
                 new_lines = []
                 for line in lines:
                     if line.startswith(f"{env_var}="):
                         new_lines.append(f"{env_var}=false")
                     else:
                         new_lines.append(line)
-                env_file.write_text('\n'.join(new_lines))
+                env_file.write_text("\n".join(new_lines))
             else:
                 # Append new line
-                with env_file.open('a') as f:
+                with env_file.open("a") as f:
                     f.write(f"\n{env_var}=false\n")
         else:
             # Create new .env file
             env_file.write_text(f"{env_var}=false\n")
-            
+
         console.print(f"[green]Added {env_var}=false to .env file[/green]")
 
     console.print("")

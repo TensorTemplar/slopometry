@@ -91,7 +91,7 @@ class HookEvent(BaseModel):
 
 class ComplexityMetrics(BaseModel):
     """Cognitive complexity metrics for Python files."""
-    
+
     total_files_analyzed: int = 0
     total_complexity: int = 0
     average_complexity: float = 0.0
@@ -102,20 +102,20 @@ class ComplexityMetrics(BaseModel):
 
 class ComplexityDelta(BaseModel):
     """Complexity change comparison between two versions."""
-    
+
     total_complexity_change: int = 0
     files_added: list[str] = Field(default_factory=list)
     files_removed: list[str] = Field(default_factory=list)
     files_changed: dict[str, int] = Field(default_factory=dict)  # filename -> complexity_delta
     net_files_change: int = 0  # files_added - files_removed
     avg_complexity_change: float = 0.0
-    
+
     # Simple change to test delta tracking - very minimal edit
-    
-    
+
+
 class TodoItem(BaseModel):
     """Represents a single todo item."""
-    
+
     id: str
     content: str
     status: str  # pending, in_progress, completed
@@ -124,12 +124,14 @@ class TodoItem(BaseModel):
 
 class PlanStep(BaseModel):
     """Represents a planning step between TodoWrite events."""
-    
+
     step_number: int
     events_in_step: int  # Number of events between this and previous TodoWrite
     todos_added: list[str] = Field(default_factory=list)  # Content of new todos
     todos_removed: list[str] = Field(default_factory=list)  # Content of removed todos
-    todos_status_changed: dict[str, tuple[str, str]] = Field(default_factory=dict)  # content -> (old_status, new_status)
+    todos_status_changed: dict[str, tuple[str, str]] = Field(
+        default_factory=dict
+    )  # content -> (old_status, new_status)
     todos_content_changed: dict[str, tuple[str, str]] = Field(default_factory=dict)  # old_content -> new_content
     timestamp: datetime = Field(default_factory=datetime.now)
     search_events: int = 0  # Number of search-type tool events
@@ -139,7 +141,7 @@ class PlanStep(BaseModel):
 
 class PlanEvolution(BaseModel):
     """Tracks how the plan evolves through TodoWrite events."""
-    
+
     total_plan_steps: int = 0
     total_todos_created: int = 0
     total_todos_completed: int = 0

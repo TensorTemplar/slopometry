@@ -21,24 +21,52 @@ A tool that lurks in the shadows, tracks and analyzes Claude Code sessions provi
 *"Previously i had to READ CODE and DECIDE WHEN TO RUN SLASH COMMANDS MYSELF, but now i just periodically prompt 'Cmon, claude, you know you did...'"*  
 — TensorTemplar, insignificant idea person for this tool
 
-## What now?
+## Installation
 
-### 1.1 Install via uvx (Recommended)
 ```bash
-# Install and use directly with uvx
-uvx slopometry install     # One-time setup, this will bloat your home .claude directory
-claude                     # Normal usage - automatically tracked!
-uvx slopometry list        # View tracked sessions
+# Install directly from GitHub
+uv pip install git+https://github.com/yourusername/slopometry.git
+
+# Or with a specific branch/tag
+uv pip install git+https://github.com/yourusername/slopometry.git@main
+uv pip install git+https://github.com/yourusername/slopometry.git@v0.1.0
+
+# Or clone and install locally for development
+git clone https://github.com/yourusername/slopometry
+cd slopometry
+uv pip install -e .
 ```
 
-### 1.2 Via uv
+## Quick Start
+
 ```bash
-# Install globally
-uv tool install slopometry
+# One-time setup - install hooks
+slopometry install
+
+# Use Claude normally
+claude
+
+# View tracked sessions
+slopometry list
+slopometry show <session_id>
 ```
 
-### 1.3 Use claude normally
-check whats up with `slopometry list` and `slopometry show <session_id>`
+## Shell Completion
+
+Enable autocompletion for your shell:
+
+```bash
+# For bash
+slopometry completion bash
+
+# For zsh  
+slopometry completion zsh
+
+# For fish
+slopometry completion fish
+```
+
+The command will show you the exact instructions to add to your shell configuration.
 
 ## Features
 
@@ -69,7 +97,11 @@ check whats up with `slopometry list` and `slopometry show <session_id>`
 
 Customize via `.env` file or environment variables:
 
-- `SLOPOMETRY_DATABASE_PATH`: Database location (default: `.claude/slopometry.db`)
+- `SLOPOMETRY_DATABASE_PATH`: Custom database location (optional)
+  - Default locations:
+    - Linux: `~/.local/share/slopometry/slopometry.db`
+    - macOS: `~/Library/Application Support/slopometry/slopometry.db`  
+    - Windows: `%LOCALAPPDATA%\slopometry\slopometry.db`
 - `SLOPOMETRY_PYTHON_EXECUTABLE`: Python command for hooks (default: `uv run python`)
 - `SLOPOMETRY_SESSION_ID_PREFIX`: Custom session ID prefix
 - `SLOPOMETRY_ENABLE_STOP_FEEDBACK`: Enable complexity feedback on stop events (default: `false`)

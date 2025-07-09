@@ -5,7 +5,14 @@ import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from .models import GitState, HookEvent, HookEventType, SessionStatistics, ToolType, ComplexityMetrics, ComplexityDelta, PlanEvolution
+from .models import (
+    GitState,
+    HookEvent,
+    HookEventType,
+    PlanEvolution,
+    SessionStatistics,
+    ToolType,
+)
 from .plan_analyzer import PlanAnalyzer
 from .settings import settings
 
@@ -15,10 +22,12 @@ class EventDatabase:
 
     def __init__(self, db_path: Path | None = None):
         if db_path is None:
-            db_path = settings.database_path
-        db_path = Path(db_path).resolve()
-        db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.db_path = db_path
+            db_path = settings.resolved_database_path
+        else:
+            db_path = Path(db_path)
+
+        self.db_path = db_path.resolve()
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._plan_analyzers: dict[str, PlanAnalyzer] = {}  # session_id -> PlanAnalyzer
         self._init_db()
 
@@ -55,7 +64,7 @@ class EventDatabase:
 
             if "git_state" not in columns:
                 conn.execute("ALTER TABLE hook_events ADD COLUMN git_state TEXT")
-            
+
             if "complexity_metrics" not in columns:
                 conn.execute("ALTER TABLE hook_events ADD COLUMN complexity_metrics TEXT")
 
@@ -63,7 +72,7 @@ class EventDatabase:
         """Save a hook event to the database."""
         # Track plan evolution for this session
         self._update_plan_evolution(event)
-        
+
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.execute(
                 """
@@ -91,18 +100,18 @@ class EventDatabase:
 
     def _update_plan_evolution(self, event: HookEvent) -> None:
         """Update plan evolution tracking for a session.
-        
+
         Args:
             event: The hook event to process
         """
         session_id = event.session_id
-        
+
         # Get or create plan analyzer for this session
         if session_id not in self._plan_analyzers:
             self._plan_analyzers[session_id] = PlanAnalyzer()
-        
+
         analyzer = self._plan_analyzers[session_id]
-        
+
         # Handle TodoWrite events
         if event.tool_name == "TodoWrite" and event.event_type == HookEventType.POST_TOOL_USE:
             # Extract tool input from metadata
@@ -204,26 +213,27 @@ class EventDatabase:
         try:
             from .complexity_analyzer import ComplexityAnalyzer
             from .git_tracker import GitTracker
-            
+
             analyzer = ComplexityAnalyzer()
             git_tracker = GitTracker()
-            
+
             # Check if we can do baseline comparison
             if git_tracker.has_previous_commit():
                 # Extract baseline files from previous commit
                 baseline_dir = git_tracker.extract_files_from_commit()
-                
+
                 if baseline_dir:
                     try:
                         # Analyze with baseline comparison
                         current_metrics, complexity_delta = analyzer.analyze_complexity_with_baseline(baseline_dir)
                         stats.complexity_metrics = current_metrics
                         stats.complexity_delta = complexity_delta
-                        
+
                         # Clean up temporary directory
                         import shutil
+
                         shutil.rmtree(baseline_dir, ignore_errors=True)
-                        
+
                     except Exception:
                         # Fall back to current analysis only
                         stats.complexity_metrics = analyzer.analyze_complexity()
@@ -236,7 +246,7 @@ class EventDatabase:
                 # No previous commit, analyze current only
                 stats.complexity_metrics = analyzer.analyze_complexity()
                 stats.complexity_delta = None
-                
+
         except Exception:
             # If complexity analysis fails, continue without it
             stats.complexity_metrics = None
@@ -252,15 +262,15 @@ class EventDatabase:
 
     def _calculate_plan_evolution(self, events: list[HookEvent]) -> PlanEvolution:
         """Calculate plan evolution from session events.
-        
+
         Args:
             events: All events in the session
-            
+
         Returns:
             PlanEvolution analysis
         """
         analyzer = PlanAnalyzer()
-        
+
         for event in events:
             if event.tool_name == "TodoWrite" and event.event_type == HookEventType.POST_TOOL_USE:
                 # Extract tool input from metadata
@@ -270,7 +280,7 @@ class EventDatabase:
             elif event.event_type == HookEventType.POST_TOOL_USE:
                 # Only count PostToolUse events to avoid double-counting
                 analyzer.increment_event_count(event.tool_type)
-        
+
         return analyzer.get_plan_evolution()
 
     def list_sessions(self) -> list[str]:

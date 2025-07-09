@@ -3,7 +3,6 @@
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import List
 
 from .models import GitState
 
@@ -113,12 +112,12 @@ class GitTracker:
 
         return max(0, final_state.commit_count - initial_state.commit_count)
 
-    def get_python_files_from_commit(self, commit_ref: str = "HEAD~1") -> List[str]:
+    def get_python_files_from_commit(self, commit_ref: str = "HEAD~1") -> list[str]:
         """Get list of Python files that existed in a specific commit.
-        
+
         Args:
             commit_ref: Git commit reference (default: HEAD~1 for previous commit)
-            
+
         Returns:
             List of relative paths to Python files
         """
@@ -130,24 +129,24 @@ class GitTracker:
                 text=True,
                 timeout=10,
             )
-            
+
             if result.returncode == 0:
-                all_files = result.stdout.strip().split('\n')
+                all_files = result.stdout.strip().split("\n")
                 # Filter for Python files
-                python_files = [f for f in all_files if f.endswith('.py')]
+                python_files = [f for f in all_files if f.endswith(".py")]
                 return python_files
-            
+
         except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError):
             pass
-        
+
         return []
 
     def extract_files_from_commit(self, commit_ref: str = "HEAD~1") -> Path | None:
         """Extract Python files from a specific commit to a temporary directory.
-        
+
         Args:
             commit_ref: Git commit reference (default: HEAD~1 for previous commit)
-            
+
         Returns:
             Path to temporary directory containing extracted files, or None if failed
         """
@@ -156,10 +155,10 @@ class GitTracker:
             python_files = self.get_python_files_from_commit(commit_ref)
             if not python_files:
                 return None
-            
+
             # Create temporary directory
             temp_dir = Path(tempfile.mkdtemp(prefix="slopometry_baseline_"))
-            
+
             # Extract each Python file
             for file_path in python_files:
                 try:
@@ -171,21 +170,21 @@ class GitTracker:
                         text=True,
                         timeout=5,
                     )
-                    
+
                     if result.returncode == 0:
                         # Create directory structure in temp dir
                         target_file = temp_dir / file_path
                         target_file.parent.mkdir(parents=True, exist_ok=True)
-                        
+
                         # Write file content
                         target_file.write_text(result.stdout)
-                        
+
                 except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError):
                     # Skip files that can't be extracted
                     continue
-            
+
             return temp_dir
-            
+
         except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError):
             return None
 
