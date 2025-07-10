@@ -33,34 +33,31 @@ class Settings(BaseSettings):
     """Application settings with support for .env files."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=[
+            Path.home() / ".config/slopometry/.env",
+            ".env",
+        ],
         env_file_encoding="utf-8",
         case_sensitive=False,
         env_prefix="SLOPOMETRY_",
-        extra="ignore",  # Ignore extra environment variables
+        extra="ignore",
     )
 
-    # Database settings
     database_path: Path | None = None
 
-    # Hook handler settings
     python_executable: str | None = None
 
-    # Session settings
     session_id_prefix: str = ""
 
-    # Claude settings backup
     backup_existing_settings: bool = True
 
-    # Display settings
     event_display_limit: int = 50
     recent_sessions_limit: int = 10
 
-    # Debug settings
     debug_mode: bool = False
 
-    # Complexity feedback settings
-    enable_stop_feedback: bool = False
+    enable_complexity_analysis: bool = True
+    enable_complexity_feedback: bool = False
 
     @field_validator("database_path", mode="before")
     @classmethod
@@ -78,18 +75,18 @@ class Settings(BaseSettings):
         if self.database_path is not None:
             return self.database_path.resolve()
 
-        # Use platform-specific default
         data_dir = get_default_data_dir()
         return data_dir / "slopometry.db"
 
     @property
     def hook_command(self) -> str:
         """Get the hook command to execute."""
-        # Use uv run to ensure we use the correct environment
         if self.python_executable:
             return f"{self.python_executable} -m slopometry.hook_handler"
-        return "uv run python -m slopometry.hook_handler"
+
+        # Use uvx to run slopometry's hook-handler subcommand
+        # This works when slopometry is installed as a uv tool
+        return "uvx slopometry hook-handler"
 
 
-# Global settings instance
 settings = Settings()

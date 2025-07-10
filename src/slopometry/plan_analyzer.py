@@ -3,13 +3,12 @@
 from datetime import datetime
 from typing import Any
 
-from .models import PlanEvolution, PlanStep, TodoItem, ToolType
+from slopometry.models import PlanEvolution, PlanStep, TodoItem, ToolType
 
 
 class PlanAnalyzer:
     """Analyzes TodoWrite events to track plan evolution."""
 
-    # Define search vs implementation tool categorization
     SEARCH_TOOLS = {
         ToolType.GREP,
         ToolType.GLOB,
@@ -68,27 +67,22 @@ class PlanAnalyzer:
             tool_input: The tool input containing todos
             timestamp: When the event occurred
         """
-        # Extract todos from tool input
         todos_data = tool_input.get("todos", [])
         if not todos_data:
             return
 
-        # Parse current todos
         current_todos = {}
         for todo_data in todos_data:
             try:
                 todo = TodoItem(**todo_data)
                 current_todos[todo.id] = todo
             except Exception:
-                # Skip malformed todo items
                 continue
 
-        # Calculate diff from previous todos
         plan_step = self._calculate_plan_step(current_todos, timestamp)
         if plan_step:
             self.plan_steps.append(plan_step)
 
-        # Update state
         self.previous_todos = current_todos
         self.events_since_last_todo = 0
         self.search_events_since_last_todo = 0
@@ -113,20 +107,16 @@ class PlanAnalyzer:
         if not self.plan_steps:
             return PlanEvolution()
 
-        # Track unique todos and their final status
         all_todo_contents = set()
         completed_todo_contents = set()
 
-        # Collect all todos ever mentioned across all steps
         for step in self.plan_steps:
             all_todo_contents.update(step.todos_added)
-            # Track todos that reached completed status in this step
             for content, (_, new_status) in step.todos_status_changed.items():
                 all_todo_contents.add(content)
                 if new_status == "completed":
                     completed_todo_contents.add(content)
 
-        # Also count todos that are currently completed in final state
         for todo in self.previous_todos.values():
             all_todo_contents.add(todo.content)
             if todo.status == "completed":
@@ -142,7 +132,6 @@ class PlanAnalyzer:
 
         final_todo_count = len(self.previous_todos)
 
-        # Calculate total search vs implementation events
         total_search_events = sum(step.search_events for step in self.plan_steps)
         total_implementation_events = sum(step.implementation_events for step in self.plan_steps)
         overall_search_to_implementation_ratio = (
@@ -174,14 +163,12 @@ class PlanAnalyzer:
         """
         self.step_number += 1
 
-        # Calculate search to implementation ratio
         search_to_implementation_ratio = (
             self.search_events_since_last_todo / self.implementation_events_since_last_todo
             if self.implementation_events_since_last_todo > 0
             else 0.0
         )
 
-        # For the first TodoWrite, just record it without diff
         if not self.previous_todos:
             return PlanStep(
                 step_number=self.step_number,
@@ -193,19 +180,15 @@ class PlanAnalyzer:
                 search_to_implementation_ratio=search_to_implementation_ratio,
             )
 
-        # Calculate differences
         previous_ids = set(self.previous_todos.keys())
         current_ids = set(current_todos.keys())
 
-        # New todos (by ID)
         new_todo_ids = current_ids - previous_ids
         todos_added = [current_todos[todo_id].content for todo_id in new_todo_ids]
 
-        # Removed todos (by ID)
         removed_todo_ids = previous_ids - current_ids
         todos_removed = [self.previous_todos[todo_id].content for todo_id in removed_todo_ids]
 
-        # Changed todos (same ID, different content or status)
         common_ids = previous_ids & current_ids
         todos_status_changed = {}
         todos_content_changed = {}
@@ -214,11 +197,9 @@ class PlanAnalyzer:
             prev_todo = self.previous_todos[todo_id]
             curr_todo = current_todos[todo_id]
 
-            # Status change
             if prev_todo.status != curr_todo.status:
                 todos_status_changed[curr_todo.content] = (prev_todo.status, curr_todo.status)
 
-            # Content change (same ID, different content)
             if prev_todo.content != curr_todo.content:
                 todos_content_changed[prev_todo.content] = (prev_todo.content, curr_todo.content)
 

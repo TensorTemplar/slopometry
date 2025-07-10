@@ -15,15 +15,28 @@ uv sync --all-extras
 # The CLI is available as 'slopometry' after installation
 
 # Configure settings (optional)
+# For development: copy to project directory
 cp .env.example .env
-# Edit .env to customize settings
+
+# For global config: copy to user config directory
+mkdir -p ~/.config/slopometry
+cp .env.example ~/.config/slopometry/.env
 ```
+
+## Installation as uv Tool
+
+When installing slopometry as a global uv tool:
+```bash
+uv tool install .
+```
+
+The hook handler uses `uvx slopometry hook-handler` to execute within the tool's isolated environment, ensuring it works from any directory without requiring a local `pyproject.toml` or package registry access.
 
 ## Key Architecture
 
 ### Core Components
 - **CLI** (`src/slopometry/cli.py`): Click-based interface with commands: install, uninstall, list, show, status
-- **Database** (`src/slopometry/database.py`): SQLite storage (default: `.claude/slopometry.db` in project dir)
+- **Database** (`src/slopometry/database.py`): SQLite storage with platform-specific default locations
 - **Hook Handler** (`src/slopometry/hook_handler.py`): Script invoked by Claude Code hooks to capture events
 - **Models** (`src/slopometry/models.py`): Pydantic models for HookEvent, SessionStatistics
 - **Settings** (`src/slopometry/settings.py`): Pydantic-settings configuration with .env support
@@ -47,10 +60,10 @@ cp .env.example .env
 When modifying the hook handler, test it manually using the actual Claude Code hook schema:
 ```bash
 # Test PreToolUse hook
-echo '{"session_id": "test123", "transcript_path": "/tmp/transcript.jsonl", "tool_name": "Bash", "tool_input": {"command": "ls"}}' | uv run python -m slopometry.hook_handler
+echo '{"session_id": "test123", "transcript_path": "/tmp/transcript.jsonl", "tool_name": "Bash", "tool_input": {"command": "ls"}}' | uvx slopometry hook-handler
 
 # Test PostToolUse hook  
-echo '{"session_id": "test123", "transcript_path": "/tmp/transcript.jsonl", "tool_name": "Bash", "tool_input": {"command": "ls"}, "tool_response": {"success": true}}' | uv run python -m slopometry.hook_handler
+echo '{"session_id": "test123", "transcript_path": "/tmp/transcript.jsonl", "tool_name": "Bash", "tool_input": {"command": "ls"}, "tool_response": {"success": true}}' | uvx slopometry hook-handler
 ```
 
 ## Adding New Tool Types

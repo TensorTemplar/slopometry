@@ -1,6 +1,7 @@
 """CLI for the slopometry Claude Code tracker."""
 
 import json
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -9,8 +10,8 @@ from rich.console import Console
 from rich.table import Table
 from rich.tree import Tree
 
-from .database import EventDatabase
-from .settings import settings
+from slopometry.database import EventDatabase
+from slopometry.settings import settings
 
 console = Console()
 
@@ -30,14 +31,18 @@ def complete_session_id(ctx, param, incomplete):
 
 def create_slopometry_hooks() -> dict:
     """Create slopometry hook configuration for Claude Code."""
-    hook_command = settings.hook_command
+    base_command = settings.hook_command.replace("hook-handler", "hook-{}")
 
     return {
-        "PreToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": hook_command}]}],
-        "PostToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": hook_command}]}],
-        "Notification": [{"hooks": [{"type": "command", "command": hook_command}]}],
-        "Stop": [{"hooks": [{"type": "command", "command": hook_command}]}],
-        "SubagentStop": [{"hooks": [{"type": "command", "command": hook_command}]}],
+        "PreToolUse": [
+            {"matcher": ".*", "hooks": [{"type": "command", "command": base_command.format("pre-tool-use")}]}
+        ],
+        "PostToolUse": [
+            {"matcher": ".*", "hooks": [{"type": "command", "command": base_command.format("post-tool-use")}]}
+        ],
+        "Notification": [{"hooks": [{"type": "command", "command": base_command.format("notification")}]}],
+        "Stop": [{"hooks": [{"type": "command", "command": base_command.format("stop")}]}],
+        "SubagentStop": [{"hooks": [{"type": "command", "command": base_command.format("subagent-stop")}]}],
     }
 
 
@@ -45,6 +50,59 @@ def create_slopometry_hooks() -> dict:
 def cli():
     """Slopometry - Claude Code session tracker."""
     pass
+
+
+@cli.command("hook-handler", hidden=True)
+def hook_handler():
+    """Internal command for processing hook events."""
+    from slopometry.hook_handler import handle_hook
+
+    sys.exit(handle_hook())
+
+
+@cli.command("hook-pre-tool-use", hidden=True)
+def hook_pre_tool_use():
+    """Internal command for processing PreToolUse hook events."""
+    from slopometry.hook_handler import handle_hook
+    from slopometry.models import HookEventType
+
+    sys.exit(handle_hook(event_type_override=HookEventType.PRE_TOOL_USE))
+
+
+@cli.command("hook-post-tool-use", hidden=True)
+def hook_post_tool_use():
+    """Internal command for processing PostToolUse hook events."""
+    from slopometry.hook_handler import handle_hook
+    from slopometry.models import HookEventType
+
+    sys.exit(handle_hook(event_type_override=HookEventType.POST_TOOL_USE))
+
+
+@cli.command("hook-notification", hidden=True)
+def hook_notification():
+    """Internal command for processing Notification hook events."""
+    from slopometry.hook_handler import handle_hook
+    from slopometry.models import HookEventType
+
+    sys.exit(handle_hook(event_type_override=HookEventType.NOTIFICATION))
+
+
+@cli.command("hook-stop", hidden=True)
+def hook_stop():
+    """Internal command for processing Stop hook events."""
+    from slopometry.hook_handler import handle_hook
+    from slopometry.models import HookEventType
+
+    sys.exit(handle_hook(event_type_override=HookEventType.STOP))
+
+
+@cli.command("hook-subagent-stop", hidden=True)
+def hook_subagent_stop():
+    """Internal command for processing SubagentStop hook events."""
+    from slopometry.hook_handler import handle_hook
+    from slopometry.models import HookEventType
+
+    sys.exit(handle_hook(event_type_override=HookEventType.SUBAGENT_STOP))
 
 
 @cli.command()
@@ -112,7 +170,7 @@ def install(global_):
             for h in existing_settings["hooks"][hook_type]
             if not (
                 isinstance(h.get("hooks"), builtin_list)
-                and any("slopometry.hook_handler" in hook.get("command", "") for hook in h.get("hooks", []))
+                and any("slopometry hook-" in hook.get("command", "") for hook in h.get("hooks", []))
             )
         ]
 
@@ -157,7 +215,7 @@ def uninstall(global_):
             for h in settings_data["hooks"][hook_type]
             if not (
                 isinstance(h.get("hooks"), builtin_list)
-                and any("slopometry.hook_handler" in hook.get("command", "") for hook in h.get("hooks", []))
+                and any("slopometry hook-" in hook.get("command", "") for hook in h.get("hooks", []))
             )
         ]
         if len(settings_data["hooks"][hook_type]) < original_length:
@@ -193,6 +251,7 @@ def list(limit):
 
     table = Table(title="Recent Sessions")
     table.add_column("Session ID", style="cyan")
+    table.add_column("Project", style="magenta")
     table.add_column("Start Time", style="green")
     table.add_column("Events", justify="right")
     table.add_column("Tools Used", justify="right")
@@ -200,8 +259,10 @@ def list(limit):
     for session_id in sessions:
         stats = db.get_session_statistics(session_id)
         if stats:
+            project_display = f"{stats.project.name} ({stats.project.source.value})" if stats.project else "N/A"
             table.add_row(
                 session_id,
+                project_display,
                 stats.start_time.strftime("%Y-%m-%d %H:%M:%S"),
                 str(stats.total_events),
                 str(len(stats.tool_usage)),
@@ -227,7 +288,7 @@ def latest():
         console.print("[red]No sessions found[/red]")
         return
 
-    most_recent = sessions[0]  # list_sessions returns most recent first
+    most_recent = sessions[0]
     console.print(f"[bold]Showing most recent session: {most_recent}[/bold]\n")
     show_session_summary(most_recent, detailed=True)
 
@@ -243,9 +304,13 @@ def show_session_summary(session_id: str, detailed: bool = False):
 
     console.print(f"\n[bold]Session Statistics: {session_id}[/bold]")
     console.print(f"Start: {stats.start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    if stats.project:
+        console.print(f"Project: [magenta]{stats.project.name}[/] ({stats.project.source.value})")
     if stats.end_time:
         duration = (stats.end_time - stats.start_time).total_seconds()
         console.print(f"Duration: {duration:.1f} seconds")
+    if stats.working_directory:
+        console.print(f"Working Directory: {stats.working_directory}")
     console.print(f"Total events: {stats.total_events}")
 
     if stats.events_by_type:
@@ -303,7 +368,6 @@ def show_session_summary(session_id: str, detailed: bool = False):
             table.add_column("File", style="cyan")
             table.add_column("Complexity", justify="right")
 
-            # Sort by complexity (descending) and show top 10
             sorted_files = sorted(
                 stats.complexity_metrics.files_by_complexity.items(), key=lambda x: x[1], reverse=True
             )[:10]
@@ -318,7 +382,6 @@ def show_session_summary(session_id: str, detailed: bool = False):
         delta = stats.complexity_delta
         console.print("\n[bold]Complexity Delta (vs Previous Commit)[/bold]")
 
-        # Overall change summary
         if delta.total_complexity_change != 0:
             change_color = "green" if delta.total_complexity_change < 0 else "red"
             console.print(
@@ -337,7 +400,6 @@ def show_session_summary(session_id: str, detailed: bool = False):
         if delta.net_files_change != 0:
             console.print(f"Net files change: {delta.net_files_change:+d}")
 
-        # Show detailed file changes
         if delta.files_added:
             console.print(f"[green]Files added ({len(delta.files_added)})[/green]: {', '.join(delta.files_added[:3])}")
             if len(delta.files_added) > 3:
@@ -351,7 +413,6 @@ def show_session_summary(session_id: str, detailed: bool = False):
                 console.print(f"  ... and {len(delta.files_removed) - 3} more")
 
         if delta.files_changed:
-            # Show files with biggest complexity changes
             sorted_changes = sorted(delta.files_changed.items(), key=lambda x: abs(x[1]), reverse=True)[:5]
 
             if sorted_changes:
@@ -385,7 +446,7 @@ def show_session_summary(session_id: str, detailed: bool = False):
             table.add_column("S/I Ratio", justify="right", width=8)
             table.add_column("Changes", style="yellow")
 
-            for step in evolution.plan_steps[:5]:  # Show first 5 steps
+            for step in evolution.plan_steps[:5]:
                 changes = []
                 if step.todos_added:
                     changes.append(f"+{len(step.todos_added)} added")
@@ -453,13 +514,11 @@ def cleanup(session_id, all_sessions, yes):
         return
 
     if session_id:
-        # Check if session exists
         stats = db.get_session_statistics(session_id)
         if not stats:
             console.print(f"[red]Session {session_id} not found[/red]")
             return
 
-        # Show session info
         console.print(f"\n[bold]Session to delete: {session_id}[/bold]")
         console.print(f"Start time: {stats.start_time.strftime('%Y-%m-%d %H:%M:%S')}")
         console.print(f"Total events: {stats.total_events}")
@@ -473,8 +532,7 @@ def cleanup(session_id, all_sessions, yes):
         events_deleted, files_deleted = db.cleanup_session(session_id)
         console.print(f"[green]Deleted {events_deleted} events and {files_deleted} files[/green]")
 
-    else:  # all_sessions
-        # Get session count
+    else:
         sessions = db.list_sessions()
         if not sessions:
             console.print("[yellow]No sessions to delete[/yellow]")
@@ -503,7 +561,6 @@ def status():
 
     console.print("[bold]Slopometry Installation Status[/bold]\n")
 
-    # Show data directory
     console.print(f"[cyan]Data directory:[/cyan] {settings.resolved_database_path.parent}")
     console.print(f"[cyan]Database:[/cyan] {settings.resolved_database_path}\n")
 
@@ -535,7 +592,6 @@ def status():
 def feedback(enable):
     """Configure complexity feedback on stop events."""
     if enable is None:
-        # Show current setting
         current_status = "enabled" if settings.enable_stop_feedback else "disabled"
         console.print(f"[bold]Complexity feedback is currently {current_status}[/bold]")
         console.print("")
@@ -548,7 +604,6 @@ def feedback(enable):
             console.print("[yellow]complexity analysis when Claude Code sessions end.[/yellow]")
         return
 
-    # Update setting via environment variable suggestion
     env_file = Path(".env")
     env_var = "SLOPOMETRY_ENABLE_STOP_FEEDBACK"
 
@@ -558,11 +613,9 @@ def feedback(enable):
         console.print("To persist this setting, add to your .env file:")
         console.print(f"  {env_var}=true")
 
-        # Update .env file if it exists or create it
         if env_file.exists():
             content = env_file.read_text()
             if env_var in content:
-                # Replace existing line
                 lines = content.split("\n")
                 new_lines = []
                 for line in lines:
@@ -572,11 +625,9 @@ def feedback(enable):
                         new_lines.append(line)
                 env_file.write_text("\n".join(new_lines))
             else:
-                # Append new line
                 with env_file.open("a") as f:
                     f.write(f"\n{env_var}=true\n")
         else:
-            # Create new .env file
             env_file.write_text(f"{env_var}=true\n")
 
         console.print(f"[green]Added {env_var}=true to .env file[/green]")
@@ -587,11 +638,9 @@ def feedback(enable):
         console.print("To persist this setting, add to your .env file:")
         console.print(f"  {env_var}=false")
 
-        # Update .env file
         if env_file.exists():
             content = env_file.read_text()
             if env_var in content:
-                # Replace existing line
                 lines = content.split("\n")
                 new_lines = []
                 for line in lines:
@@ -601,11 +650,9 @@ def feedback(enable):
                         new_lines.append(line)
                 env_file.write_text("\n".join(new_lines))
             else:
-                # Append new line
                 with env_file.open("a") as f:
                     f.write(f"\n{env_var}=false\n")
         else:
-            # Create new .env file
             env_file.write_text(f"{env_var}=false\n")
 
         console.print(f"[green]Added {env_var}=false to .env file[/green]")
@@ -628,7 +675,8 @@ def _check_hooks_installed(settings_file: Path) -> bool:
             for hook_config in hooks[hook_type]:
                 if isinstance(hook_config.get("hooks"), builtin_list):
                     for hook in hook_config["hooks"]:
-                        if "slopometry.hook_handler" in hook.get("command", ""):
+                        command = hook.get("command", "")
+                        if "slopometry hook-" in command:
                             return True
         return False
     except (json.JSONDecodeError, KeyError):

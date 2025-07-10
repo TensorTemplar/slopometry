@@ -1,11 +1,13 @@
 """Hook handler script invoked by Claude Code for each event."""
 
 import json
+import os
 import sys
+from pathlib import Path
 
-from .database import EventDatabase, SessionManager
-from .git_tracker import GitTracker
-from .models import (
+from slopometry.database import EventDatabase, SessionManager
+from slopometry.git_tracker import GitTracker
+from slopometry.models import (
     ComplexityDelta,
     ComplexityMetrics,
     HookEvent,
@@ -18,7 +20,8 @@ from .models import (
     SubagentStopInput,
     ToolType,
 )
-from .settings import settings
+from slopometry.project_tracker import ProjectTracker
+from slopometry.settings import settings
 
 
 def get_tool_type(tool_name: str) -> ToolType:
@@ -95,8 +98,12 @@ def parse_hook_input(raw_data: dict) -> HookInputUnion:
         raise ValueError(f"Unknown hook input schema with fields: {fields}")
 
 
-def handle_hook():
-    """Main hook handler function."""
+def handle_hook(event_type_override: HookEventType | None = None):
+    """Main hook handler function.
+
+    Args:
+        event_type_override: Optional override for the event type, used when called via specific hook entrypoints
+    """
     stdin_input = sys.stdin.read().strip()
     if not stdin_input:
         return 0
@@ -105,23 +112,24 @@ def handle_hook():
 
     parsed_input = parse_hook_input(raw_data)
 
-    event_type = _detect_event_type_from_parsed(parsed_input)
+    event_type = event_type_override if event_type_override else _detect_event_type_from_parsed(parsed_input)
 
     session_id = parsed_input.session_id
 
     session_manager = SessionManager()
     sequence_number = session_manager.get_next_sequence_number(session_id)
 
-    # Track git state for session start and notifications
+    git_tracker = GitTracker()
     git_state = None
-    if event_type in (HookEventType.PRE_TOOL_USE, HookEventType.NOTIFICATION) and sequence_number == 1:
-        # First event in session - capture initial git state
-        git_tracker = GitTracker()
-        git_state = git_tracker.get_git_state()
-    elif event_type == HookEventType.NOTIFICATION:
-        # Notification event - capture current git state
-        git_tracker = GitTracker()
-        git_state = git_tracker.get_git_state()
+    match (event_type, sequence_number):
+        case (HookEventType.PRE_TOOL_USE, 1) | (HookEventType.STOP, 1):
+            git_state = git_tracker.get_git_state()
+        case (HookEventType.STOP, _):
+            git_state = git_tracker.get_git_state()
+
+    working_directory = os.getcwd()
+    project_tracker = ProjectTracker(working_dir=Path(working_directory))
+    project = project_tracker.get_project()
 
     event = HookEvent(
         session_id=session_id,
@@ -129,30 +137,33 @@ def handle_hook():
         sequence_number=sequence_number,
         metadata=raw_data,
         git_state=git_state,
+        working_directory=working_directory,
+        project=project,
     )
 
     if isinstance(parsed_input, PreToolUseInput | PostToolUseInput):
         event.tool_name = parsed_input.tool_name
         event.tool_type = get_tool_type(parsed_input.tool_name)
 
-        # For PostToolUse, extract timing from tool_response
         if isinstance(parsed_input, PostToolUseInput):
-            # Handle both string and dictionary responses
             if isinstance(parsed_input.tool_response, dict):
                 event.duration_ms = parsed_input.tool_response.get("duration_ms")
                 event.exit_code = parsed_input.tool_response.get("exit_code")
                 event.error_message = parsed_input.tool_response.get("error")
             else:
-                # For string responses, we can't extract timing info
                 event.duration_ms = None
                 event.exit_code = None
                 event.error_message = None
 
-    db = EventDatabase()
-    db.save_event(event)
+    try:
+        db = EventDatabase()
+        db.save_event(event)
+    except KeyError:
+        # This can happen if the project table is not found in the pyproject.toml
+        # In this case, we just ignore the event and don't block the user.
+        pass
 
-    # Handle Stop/SubagentStop events with complexity delta feedback (if enabled)
-    if event_type in (HookEventType.STOP, HookEventType.SUBAGENT_STOP) and settings.enable_stop_feedback:
+    if event_type in (HookEventType.STOP, HookEventType.SUBAGENT_STOP) and settings.enable_complexity_analysis:
         return handle_stop_event(session_id, parsed_input)
 
     if settings.debug_mode:
@@ -167,13 +178,13 @@ def handle_hook():
                 "parsed_input_type": type(parsed_input).__name__,
             }
         }
-        print(f"Slopometry captured: {json.dumps(debug_info, indent=2)}")
+        print(f"Slopometry captured: {json.dumps(debug_info, indent=2)}", file=sys.stderr)
 
     return 0
 
 
 def handle_stop_event(session_id: str, parsed_input: "StopInput | SubagentStopInput") -> int:
-    """Handle Stop events with complexity delta feedback to Claude.
+    """Handle Stop events with complexity analysis and optional feedback to Claude.
 
     Args:
         session_id: The session ID
@@ -187,32 +198,33 @@ def handle_stop_event(session_id: str, parsed_input: "StopInput | SubagentStopIn
         return 0
 
     try:
-        # Calculate session statistics with complexity delta
         db = EventDatabase()
         stats = db.get_session_statistics(session_id)
 
-        if not stats or not stats.complexity_delta:
-            # No complexity data available, let Claude stop normally
+        if not stats:
             return 0
 
-        delta = stats.complexity_delta
+        current_metrics, delta = db.calculate_complexity_metrics(stats.working_directory)
 
-        # Check if there are significant complexity changes worth reporting
+        # TODO: Store complexity metrics in database for analytics
+
+        if not settings.enable_complexity_feedback:
+            return 0
+
+        if not delta or not current_metrics:
+            return 0
+
         if abs(delta.total_complexity_change) < 5 and not delta.files_added and not delta.files_removed:
-            # Minor or no changes, let Claude stop normally
             return 0
 
-        # Format complexity feedback for Claude
-        feedback = format_complexity_feedback(stats.complexity_metrics, delta)
+        feedback = format_complexity_feedback(current_metrics, delta)
 
-        # Output JSON feedback to stdout for Claude to read
         hook_output = {"decision": "block", "reason": feedback}
 
         print(json.dumps(hook_output))
         return 2  # Block Claude from stopping and show feedback
 
     except Exception:
-        # If anything fails, don't block Claude from stopping
         return 0
 
 
@@ -228,11 +240,9 @@ def format_complexity_feedback(current_metrics: "ComplexityMetrics", delta: "Com
     """
     lines = []
 
-    # Session impact summary
     lines.append("**Complexity Analysis Summary**")
     lines.append("")
 
-    # Total complexity change
     if delta.total_complexity_change > 0:
         lines.append(
             f"**Complexity increased by +{delta.total_complexity_change}** (now {current_metrics.total_complexity} total)"
@@ -244,7 +254,6 @@ def format_complexity_feedback(current_metrics: "ComplexityMetrics", delta: "Com
     else:
         lines.append(f"**No net complexity change** ({current_metrics.total_complexity} total)")
 
-    # File changes
     if delta.files_added:
         lines.append(f"**Added {len(delta.files_added)} files**: {', '.join(delta.files_added[:3])}")
         if len(delta.files_added) > 3:
@@ -255,7 +264,6 @@ def format_complexity_feedback(current_metrics: "ComplexityMetrics", delta: "Com
         if len(delta.files_removed) > 3:
             lines.append(f"   ... and {len(delta.files_removed) - 3} more")
 
-    # Biggest complexity changes
     if delta.files_changed:
         lines.append("")
         lines.append("**Biggest complexity changes**:")
@@ -266,7 +274,6 @@ def format_complexity_feedback(current_metrics: "ComplexityMetrics", delta: "Com
             else:
                 lines.append(f"   • {file_path}: {change}")
 
-    # Complexity guidance
     lines.append("")
     if delta.total_complexity_change > 20:
         lines.append("**Consider**: Breaking down complex functions or refactoring to reduce cognitive load.")

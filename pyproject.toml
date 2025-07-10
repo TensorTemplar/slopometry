@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "slopometry"
-version = "0.1.0"
+version = "20250710-1"
 description = "Claude Code session tracker - collects statistics about hook invocations"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -30,12 +30,13 @@ dependencies = [
     "pydantic-settings>=2.0",
     "sqlite-utils>=3.0",
     "radon>=6.0.1",
+    "toml>=0.10.2",
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/slopometry"
-Repository = "https://github.com/yourusername/slopometry.git"
-Issues = "https://github.com/yourusername/slopometry/issues"
+Homepage = "https://github.com/TensorTemplar/slopometry"
+Repository = "https://github.com/TensorTemplar/slopometry.git"
+Issues = "https://github.com/TensorTemplar/slopometry/issues"
 
 [project.optional-dependencies]
 dev = [

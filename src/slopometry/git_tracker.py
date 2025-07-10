@@ -4,7 +4,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from .models import GitState
+from slopometry.models import GitState
 
 
 class GitTracker:
@@ -16,7 +16,6 @@ class GitTracker:
     def get_git_state(self) -> GitState:
         """Get current git repository state."""
         try:
-            # Check if we're in a git repository
             result = subprocess.run(
                 ["git", "rev-parse", "--is-inside-work-tree"],
                 cwd=self.working_dir,
@@ -28,13 +27,10 @@ class GitTracker:
             if result.returncode != 0:
                 return GitState(is_git_repo=False)
 
-            # Get commit count
             commit_count = self._get_commit_count()
 
-            # Get current branch
             current_branch = self._get_current_branch()
 
-            # Check for uncommitted changes
             has_uncommitted_changes = self._has_uncommitted_changes()
 
             return GitState(
@@ -132,7 +128,6 @@ class GitTracker:
 
             if result.returncode == 0:
                 all_files = result.stdout.strip().split("\n")
-                # Filter for Python files
                 python_files = [f for f in all_files if f.endswith(".py")]
                 return python_files
 
@@ -151,18 +146,14 @@ class GitTracker:
             Path to temporary directory containing extracted files, or None if failed
         """
         try:
-            # Get list of Python files in the commit
             python_files = self.get_python_files_from_commit(commit_ref)
             if not python_files:
                 return None
 
-            # Create temporary directory
             temp_dir = Path(tempfile.mkdtemp(prefix="slopometry_baseline_"))
 
-            # Extract each Python file
             for file_path in python_files:
                 try:
-                    # Get file content from commit
                     result = subprocess.run(
                         ["git", "show", f"{commit_ref}:{file_path}"],
                         cwd=self.working_dir,
@@ -172,15 +163,12 @@ class GitTracker:
                     )
 
                     if result.returncode == 0:
-                        # Create directory structure in temp dir
                         target_file = temp_dir / file_path
                         target_file.parent.mkdir(parents=True, exist_ok=True)
 
-                        # Write file content
                         target_file.write_text(result.stdout)
 
                 except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError):
-                    # Skip files that can't be extracted
                     continue
 
             return temp_dir

@@ -7,6 +7,20 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
+class ProjectSource(str, Enum):
+    """Source of project identification."""
+
+    GIT = "git"
+    PYPROJECT = "pyproject"
+
+
+class Project(BaseModel):
+    """Represents a project being worked on."""
+
+    name: str
+    source: ProjectSource
+
+
 class HookEventType(str, Enum):
     """Types of hook events in Claude Code."""
 
@@ -73,7 +87,7 @@ class GitState(BaseModel):
 
 
 class HookEvent(BaseModel):
-    """Represents a single hook event."""
+    """Represents a single hook invocation event."""
 
     id: int | None = None
     session_id: str
@@ -82,11 +96,13 @@ class HookEvent(BaseModel):
     sequence_number: int
     tool_name: str | None = None
     tool_type: ToolType | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict = Field(default_factory=dict)
     duration_ms: int | None = None
     exit_code: int | None = None
     error_message: str | None = None
     git_state: GitState | None = None
+    working_directory: str
+    project: Project | None = None
 
 
 class ComplexityMetrics(BaseModel):
@@ -97,7 +113,9 @@ class ComplexityMetrics(BaseModel):
     average_complexity: float = 0.0
     max_complexity: int = 0
     min_complexity: int = 0
-    files_by_complexity: dict[str, int] = Field(default_factory=dict)  # filename -> complexity
+    files_by_complexity: dict[str, int] = Field(
+        default_factory=dict, description="Mapping of filename to complexity score"
+    )
 
 
 class ComplexityDelta(BaseModel):
@@ -106,11 +124,9 @@ class ComplexityDelta(BaseModel):
     total_complexity_change: int = 0
     files_added: list[str] = Field(default_factory=list)
     files_removed: list[str] = Field(default_factory=list)
-    files_changed: dict[str, int] = Field(default_factory=dict)  # filename -> complexity_delta
-    net_files_change: int = 0  # files_added - files_removed
+    files_changed: dict[str, int] = Field(default_factory=dict, description="Mapping of filename to complexity delta")
+    net_files_change: int = Field(default=0, description="Net change in number of files (files_added - files_removed)")
     avg_complexity_change: float = 0.0
-
-    # Simple change to test delta tracking - very minimal edit
 
 
 class TodoItem(BaseModel):
@@ -118,25 +134,29 @@ class TodoItem(BaseModel):
 
     id: str
     content: str
-    status: str  # pending, in_progress, completed
-    priority: str  # high, medium, low
+    status: str = Field(description="Status of the todo item: pending, in_progress, or completed")
+    priority: str = Field(description="Priority level: high, medium, or low")
 
 
 class PlanStep(BaseModel):
     """Represents a planning step between TodoWrite events."""
 
     step_number: int
-    events_in_step: int  # Number of events between this and previous TodoWrite
-    todos_added: list[str] = Field(default_factory=list)  # Content of new todos
-    todos_removed: list[str] = Field(default_factory=list)  # Content of removed todos
+    events_in_step: int = Field(description="Number of events between this and previous TodoWrite")
+    todos_added: list[str] = Field(default_factory=list, description="Content of new todos added in this step")
+    todos_removed: list[str] = Field(default_factory=list, description="Content of todos removed in this step")
     todos_status_changed: dict[str, tuple[str, str]] = Field(
-        default_factory=dict
-    )  # content -> (old_status, new_status)
-    todos_content_changed: dict[str, tuple[str, str]] = Field(default_factory=dict)  # old_content -> new_content
+        default_factory=dict, description="Mapping of todo content to (old_status, new_status) for status changes"
+    )
+    todos_content_changed: dict[str, tuple[str, str]] = Field(
+        default_factory=dict, description="Mapping of old_content to new_content for content changes"
+    )
     timestamp: datetime = Field(default_factory=datetime.now)
-    search_events: int = 0  # Number of search-type tool events
-    implementation_events: int = 0  # Number of implementation-type tool events
-    search_to_implementation_ratio: float = 0.0  # search_events / implementation_events (0 if no impl events)
+    search_events: int = Field(default=0, description="Number of search-type tool events")
+    implementation_events: int = Field(default=0, description="Number of implementation-type tool events")
+    search_to_implementation_ratio: float = Field(
+        default=0.0, description="Ratio of search events to implementation events (0 if no implementation events)"
+    )
 
 
 class PlanEvolution(BaseModel):
@@ -148,7 +168,7 @@ class PlanEvolution(BaseModel):
     average_events_per_step: float = 0.0
     plan_steps: list[PlanStep] = Field(default_factory=list)
     final_todo_count: int = 0
-    planning_efficiency: float = 0.0  # completed_todos / total_todos_created
+    planning_efficiency: float = Field(default=0.0, description="Ratio of completed todos to total todos created")
     total_search_events: int = 0
     total_implementation_events: int = 0
     overall_search_to_implementation_ratio: float = 0.0
@@ -161,17 +181,19 @@ class SessionStatistics(BaseModel):
     start_time: datetime
     end_time: datetime | None = None
     total_events: int = 0
+    working_directory: str
     events_by_type: dict[HookEventType, int] = Field(default_factory=dict)
     tool_usage: dict[ToolType, int] = Field(default_factory=dict)
     error_count: int = 0
     total_duration_ms: int = 0
-    average_tool_duration_ms: float | None = None
+    average_tool_duration_ms: float = 0.0
     initial_git_state: GitState | None = None
     final_git_state: GitState | None = None
     commits_made: int = 0
     complexity_metrics: ComplexityMetrics | None = None
     complexity_delta: ComplexityDelta | None = None
     plan_evolution: PlanEvolution | None = None
+    project: Project | None = None
 
 
 class PreToolUseInput(BaseModel):
@@ -237,7 +259,7 @@ class HookOutput(BaseModel):
     continue_: bool | None = Field(None, alias="continue")
     stop_reason: str | None = Field(None, alias="stopReason")
     suppress_output: bool | None = Field(None, alias="suppressOutput")
-    decision: str | None = None  # "approve", "block", or undefined
+    decision: str | None = Field(default=None, description="Decision outcome: approve, block, or undefined")
     reason: str | None = None
 
     model_config = {"extra": "allow", "populate_by_name": True}

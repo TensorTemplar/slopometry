@@ -5,16 +5,20 @@ import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from .models import (
+from slopometry.models import (
+    ComplexityDelta,
+    ComplexityMetrics,
     GitState,
     HookEvent,
     HookEventType,
     PlanEvolution,
+    Project,
+    ProjectSource,
     SessionStatistics,
     ToolType,
 )
-from .plan_analyzer import PlanAnalyzer
-from .settings import settings
+from slopometry.plan_analyzer import PlanAnalyzer
+from slopometry.settings import settings
 
 
 class EventDatabase:
@@ -28,12 +32,15 @@ class EventDatabase:
 
         self.db_path = db_path.resolve()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._plan_analyzers: dict[str, PlanAnalyzer] = {}  # session_id -> PlanAnalyzer
-        self._init_db()
+        self._plan_analyzers: dict[str, PlanAnalyzer] = {}
+        self._create_tables()
 
-    def _init_db(self):
-        """Initialize database schema."""
-        with sqlite3.connect(self.db_path) as conn:
+    def _get_db_connection(self):
+        return sqlite3.connect(self.db_path)
+
+    def _create_tables(self):
+        """Create database tables."""
+        with self._get_db_connection() as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS hook_events (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -43,44 +50,39 @@ class EventDatabase:
                     sequence_number INTEGER NOT NULL,
                     tool_name TEXT,
                     tool_type TEXT,
-                    metadata TEXT,
+                    metadata TEXT DEFAULT '{}',
                     duration_ms INTEGER,
                     exit_code INTEGER,
-                    error_message TEXT
+                    error_message TEXT,
+                    git_state TEXT,
+                    working_directory TEXT,
+                    project_name TEXT,
+                    project_source TEXT
                 )
             """)
             conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_session_id 
+                CREATE INDEX IF NOT EXISTS idx_hook_events_session_id 
                 ON hook_events(session_id)
             """)
             conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_timestamp 
+                CREATE INDEX IF NOT EXISTS idx_hook_events_timestamp 
                 ON hook_events(timestamp)
             """)
-
-            # Check if git_state column exists and add it if not
-            cursor = conn.execute("PRAGMA table_info(hook_events)")
-            columns = [row[1] for row in cursor.fetchall()]
-
-            if "git_state" not in columns:
-                conn.execute("ALTER TABLE hook_events ADD COLUMN git_state TEXT")
-
-            if "complexity_metrics" not in columns:
-                conn.execute("ALTER TABLE hook_events ADD COLUMN complexity_metrics TEXT")
+            conn.commit()
 
     def save_event(self, event: HookEvent) -> int:
         """Save a hook event to the database."""
-        # Track plan evolution for this session
         self._update_plan_evolution(event)
 
-        with sqlite3.connect(self.db_path) as conn:
+        with self._get_db_connection() as conn:
             cursor = conn.execute(
                 """
                 INSERT INTO hook_events (
                     session_id, event_type, timestamp, sequence_number,
-                    tool_name, tool_type, metadata, duration_ms, 
-                    exit_code, error_message, git_state
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    tool_name, tool_type, metadata, duration_ms,
+                    exit_code, error_message, git_state, working_directory,
+                    project_name, project_source
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     event.session_id,
@@ -94,57 +96,58 @@ class EventDatabase:
                     event.exit_code,
                     event.error_message,
                     event.git_state.model_dump_json() if event.git_state else None,
+                    event.working_directory,
+                    event.project.name if event.project else None,
+                    event.project.source.value if event.project else None,
                 ),
             )
             return cursor.lastrowid or 0
 
     def _update_plan_evolution(self, event: HookEvent) -> None:
-        """Update plan evolution tracking for a session.
-
-        Args:
-            event: The hook event to process
-        """
+        """Update plan evolution tracking for a session."""
         session_id = event.session_id
-
-        # Get or create plan analyzer for this session
         if session_id not in self._plan_analyzers:
             self._plan_analyzers[session_id] = PlanAnalyzer()
-
         analyzer = self._plan_analyzers[session_id]
-
-        # Handle TodoWrite events
         if event.tool_name == "TodoWrite" and event.event_type == HookEventType.POST_TOOL_USE:
-            # Extract tool input from metadata
             tool_input = event.metadata.get("tool_input", {})
             if tool_input:
                 analyzer.analyze_todo_write_event(tool_input, event.timestamp)
         elif event.event_type == HookEventType.POST_TOOL_USE:
-            # Only count PostToolUse events to avoid double-counting
             analyzer.increment_event_count(event.tool_type)
 
     def get_session_events(self, session_id: str) -> list[HookEvent]:
         """Get all events for a session."""
-        with sqlite3.connect(self.db_path) as conn:
+        with self._get_db_connection() as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
-                """
-                SELECT * FROM hook_events 
-                WHERE session_id = ?
-                ORDER BY sequence_number
-            """,
+                "SELECT * FROM hook_events WHERE session_id = ? ORDER BY sequence_number",
                 (session_id,),
             ).fetchall()
 
             events = []
             for row in rows:
-                # Handle git_state column safely (might not exist in older databases)
+                row_keys = row.keys()
                 git_state = None
-                if "git_state" in row.keys() and row["git_state"]:
+                if "git_state" in row_keys and row["git_state"]:
                     try:
                         git_state_data = json.loads(row["git_state"])
                         git_state = GitState.model_validate(git_state_data)
                     except (json.JSONDecodeError, ValueError):
                         git_state = None
+
+                working_directory = (
+                    row["working_directory"]
+                    if "working_directory" in row_keys and row["working_directory"]
+                    else "Unknown"
+                )
+
+                project = None
+                if "project_name" in row_keys and row["project_name"]:
+                    project = Project(
+                        name=row["project_name"],
+                        source=ProjectSource(row["project_source"]),
+                    )
 
                 events.append(
                     HookEvent(
@@ -160,6 +163,8 @@ class EventDatabase:
                         exit_code=row["exit_code"],
                         error_message=row["error_message"],
                         git_state=git_state,
+                        working_directory=working_directory,
+                        project=project,
                     )
                 )
             return events
@@ -170,22 +175,31 @@ class EventDatabase:
         if not events:
             return None
 
+        working_directory = "Unknown"
+        project = None
+        for event in events:
+            if event.working_directory and event.working_directory != "Unknown":
+                working_directory = event.working_directory
+            if event.project:
+                project = event.project
+            if working_directory != "Unknown" and project:
+                break
+
         stats = SessionStatistics(
             session_id=session_id,
             start_time=events[0].timestamp,
             end_time=events[-1].timestamp if events else None,
             total_events=len(events),
+            working_directory=working_directory,
+            project=project,
         )
 
         for event in events:
             stats.events_by_type[event.event_type] = stats.events_by_type.get(event.event_type, 0) + 1
-
             if event.tool_type:
                 stats.tool_usage[event.tool_type] = stats.tool_usage.get(event.tool_type, 0) + 1
-
             if event.error_message:
                 stats.error_count += 1
-
             if event.duration_ms:
                 stats.total_duration_ms += event.duration_ms
 
@@ -193,66 +207,20 @@ class EventDatabase:
         if tool_events_with_duration:
             stats.average_tool_duration_ms = stats.total_duration_ms / len(tool_events_with_duration)
 
-        # Calculate git metrics
         git_events = [e for e in events if e.git_state]
         if git_events:
-            # First git state (initial)
             stats.initial_git_state = git_events[0].git_state
-
-            # Last git state (final)
             stats.final_git_state = git_events[-1].git_state
-
-            # Calculate commits made during session
             if stats.initial_git_state and stats.final_git_state:
-                from .git_tracker import GitTracker
+                from slopometry.git_tracker import GitTracker
 
                 git_tracker = GitTracker()
                 stats.commits_made = git_tracker.calculate_commits_made(stats.initial_git_state, stats.final_git_state)
 
-        # Calculate complexity metrics - analyze current working directory at end of session
-        try:
-            from .complexity_analyzer import ComplexityAnalyzer
-            from .git_tracker import GitTracker
+        # Complexity analysis is now handled only in Stop hook events
+        stats.complexity_metrics = None
+        stats.complexity_delta = None
 
-            analyzer = ComplexityAnalyzer()
-            git_tracker = GitTracker()
-
-            # Check if we can do baseline comparison
-            if git_tracker.has_previous_commit():
-                # Extract baseline files from previous commit
-                baseline_dir = git_tracker.extract_files_from_commit()
-
-                if baseline_dir:
-                    try:
-                        # Analyze with baseline comparison
-                        current_metrics, complexity_delta = analyzer.analyze_complexity_with_baseline(baseline_dir)
-                        stats.complexity_metrics = current_metrics
-                        stats.complexity_delta = complexity_delta
-
-                        # Clean up temporary directory
-                        import shutil
-
-                        shutil.rmtree(baseline_dir, ignore_errors=True)
-
-                    except Exception:
-                        # Fall back to current analysis only
-                        stats.complexity_metrics = analyzer.analyze_complexity()
-                        stats.complexity_delta = None
-                else:
-                    # No baseline available, analyze current only
-                    stats.complexity_metrics = analyzer.analyze_complexity()
-                    stats.complexity_delta = None
-            else:
-                # No previous commit, analyze current only
-                stats.complexity_metrics = analyzer.analyze_complexity()
-                stats.complexity_delta = None
-
-        except Exception:
-            # If complexity analysis fails, continue without it
-            stats.complexity_metrics = None
-            stats.complexity_delta = None
-
-        # Calculate plan evolution from session events
         try:
             stats.plan_evolution = self._calculate_plan_evolution(events)
         except Exception:
@@ -261,77 +229,74 @@ class EventDatabase:
         return stats
 
     def _calculate_plan_evolution(self, events: list[HookEvent]) -> PlanEvolution:
-        """Calculate plan evolution from session events.
-
-        Args:
-            events: All events in the session
-
-        Returns:
-            PlanEvolution analysis
-        """
+        """Calculate plan evolution from session events."""
         analyzer = PlanAnalyzer()
-
         for event in events:
             if event.tool_name == "TodoWrite" and event.event_type == HookEventType.POST_TOOL_USE:
-                # Extract tool input from metadata
                 tool_input = event.metadata.get("tool_input", {})
                 if tool_input:
                     analyzer.analyze_todo_write_event(tool_input, event.timestamp)
             elif event.event_type == HookEventType.POST_TOOL_USE:
-                # Only count PostToolUse events to avoid double-counting
                 analyzer.increment_event_count(event.tool_type)
-
         return analyzer.get_plan_evolution()
+
+    def calculate_complexity_metrics(
+        self, working_directory: str
+    ) -> tuple[ComplexityMetrics | None, ComplexityDelta | None]:
+        """Calculate complexity metrics for a specific working directory.
+
+        This method is specifically for Stop hook events to avoid running
+        complexity analysis during regular CLI operations.
+        """
+        try:
+            from slopometry.complexity_analyzer import ComplexityAnalyzer
+            from slopometry.git_tracker import GitTracker
+
+            analyzer = ComplexityAnalyzer(working_directory=Path(working_directory))
+            git_tracker = GitTracker()
+            if git_tracker.has_previous_commit():
+                baseline_dir = git_tracker.extract_files_from_commit()
+                if baseline_dir:
+                    try:
+                        current_metrics, complexity_delta = analyzer.analyze_complexity_with_baseline(baseline_dir)
+                        import shutil
+
+                        shutil.rmtree(baseline_dir, ignore_errors=True)
+                        return current_metrics, complexity_delta
+                    except Exception:
+                        current_metrics = analyzer.analyze_complexity()
+                        return current_metrics, None
+                else:
+                    current_metrics = analyzer.analyze_complexity()
+                    return current_metrics, None
+            else:
+                current_metrics = analyzer.analyze_complexity()
+                return current_metrics, None
+        except Exception:
+            return None, None
 
     def list_sessions(self) -> list[str]:
         """List all unique session IDs."""
-        with sqlite3.connect(self.db_path) as conn:
-            rows = conn.execute("""
-                SELECT session_id, MIN(timestamp) as first_event
-                FROM hook_events 
-                GROUP BY session_id
-                ORDER BY first_event DESC
-            """).fetchall()
+        with self._get_db_connection() as conn:
+            rows = conn.execute(
+                "SELECT session_id, MIN(timestamp) as first_event FROM hook_events GROUP BY session_id ORDER BY first_event DESC"
+            ).fetchall()
             return [row[0] for row in rows]
 
     def cleanup_old_data(self, days: int, dry_run: bool = False) -> tuple[int, int]:
-        """Clean up old session data and associated files.
-
-        Args:
-            days: Delete sessions older than this many days
-            dry_run: If True, only count what would be deleted
-
-        Returns:
-            Tuple of (deleted_sessions_count, deleted_files_count)
-        """
+        """Clean up old session data and associated files."""
         cutoff_date = datetime.now() - timedelta(days=days)
-
-        with sqlite3.connect(self.db_path) as conn:
-            # Find sessions to delete
+        with self._get_db_connection() as conn:
             rows = conn.execute(
-                """
-                SELECT DISTINCT session_id 
-                FROM hook_events 
-                WHERE timestamp < ?
-            """,
+                "SELECT DISTINCT session_id FROM hook_events WHERE timestamp < ?",
                 (cutoff_date.isoformat(),),
             ).fetchall()
-
             session_ids_to_delete = [row[0] for row in rows]
-
             if not dry_run and session_ids_to_delete:
-                # Delete events for old sessions
-                conn.execute(
-                    """
-                    DELETE FROM hook_events 
-                    WHERE timestamp < ?
-                """,
-                    (cutoff_date.isoformat(),),
-                )
+                conn.execute("DELETE FROM hook_events WHERE timestamp < ?", (cutoff_date.isoformat(),))
 
         files_deleted = 0
         state_dir = Path.home() / ".claude" / "slopometry"
-
         if state_dir.exists():
             for session_id in session_ids_to_delete:
                 seq_file = state_dir / f"seq_{session_id}.txt"
@@ -339,64 +304,37 @@ class EventDatabase:
                     if not dry_run:
                         seq_file.unlink()
                     files_deleted += 1
-
         return len(session_ids_to_delete), files_deleted
 
     def cleanup_session(self, session_id: str) -> tuple[int, int]:
-        """Clean up a specific session and its associated files.
-
-        Args:
-            session_id: The session ID to delete
-
-        Returns:
-            Tuple of (deleted_events_count, deleted_files_count)
-        """
-        with sqlite3.connect(self.db_path) as conn:
-            # Count events to delete
-            result = conn.execute(
-                "SELECT COUNT(*) FROM hook_events WHERE session_id = ?",
-                (session_id,),
-            ).fetchone()
+        """Clean up a specific session and its associated files."""
+        with self._get_db_connection() as conn:
+            result = conn.execute("SELECT COUNT(*) FROM hook_events WHERE session_id = ?", (session_id,)).fetchone()
             events_count = result[0] if result else 0
-
-            # Delete events
             conn.execute("DELETE FROM hook_events WHERE session_id = ?", (session_id,))
 
-        # Clean up sequence file
         files_deleted = 0
         state_dir = Path.home() / ".claude" / "slopometry"
         seq_file = state_dir / f"seq_{session_id}.txt"
         if seq_file.exists():
             seq_file.unlink()
             files_deleted = 1
-
         return events_count, files_deleted
 
     def cleanup_all_sessions(self) -> tuple[int, int, int]:
-        """Clean up all sessions and associated files.
-
-        Returns:
-            Tuple of (deleted_sessions_count, deleted_events_count, deleted_files_count)
-        """
-        # Get all sessions before deletion
+        """Clean up all sessions and associated files."""
         sessions = self.list_sessions()
-
-        with sqlite3.connect(self.db_path) as conn:
-            # Count events to delete
+        with self._get_db_connection() as conn:
             result = conn.execute("SELECT COUNT(*) FROM hook_events").fetchone()
             events_count = result[0] if result else 0
-
-            # Delete all events
             conn.execute("DELETE FROM hook_events")
 
-        # Clean up all sequence files
         files_deleted = 0
         state_dir = Path.home() / ".claude" / "slopometry"
         if state_dir.exists():
             for seq_file in state_dir.glob("seq_*.txt"):
                 seq_file.unlink()
                 files_deleted += 1
-
         return len(sessions), events_count, files_deleted
 
 
@@ -410,7 +348,6 @@ class SessionManager:
     def get_next_sequence_number(self, session_id: str) -> int:
         """Get the next sequence number for a session."""
         seq_file = self.state_dir / f"seq_{session_id}.txt"
-
         if seq_file.exists():
             try:
                 current_seq = int(seq_file.read_text().strip())
@@ -419,6 +356,5 @@ class SessionManager:
                 next_seq = 1
         else:
             next_seq = 1
-
         seq_file.write_text(str(next_seq))
         return next_seq

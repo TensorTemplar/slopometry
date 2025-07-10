@@ -23,25 +23,69 @@ A tool that lurks in the shadows, tracks and analyzes Claude Code sessions provi
 
 ## Installation
 
+### Install as a uv tool (Recommended)
+
 ```bash
-# Install directly from GitHub
-uv pip install git+https://github.com/yourusername/slopometry.git
+# Install as a global tool
+uv tool install git+https://github.com/TensorTemplar/slopometry.git
 
-# Or with a specific branch/tag
-uv pip install git+https://github.com/yourusername/slopometry.git@main
-uv pip install git+https://github.com/yourusername/slopometry.git@v0.1.0
-
-# Or clone and install locally for development
-git clone https://github.com/yourusername/slopometry
+# Or install from a local directory
+git clone https://github.com/TensorTemplar/slopometry
 cd slopometry
-uv pip install -e .
+uv tool install .
+```
+
+### Development Installation
+
+```bash
+# Clone and install in development mode
+git clone https://github.com/TensorTemplar/slopometry
+cd slopometry
+uv sync --all-extras
+```
+
+## Upgrading
+
+### Upgrade the uv tool
+
+```bash
+# Uninstall and reinstall to get the latest version
+uv tool uninstall slopometry
+uv tool install git+https://github.com/TensorTemplar/slopometry.git
+
+# Or if installed from local directory
+cd slopometry
+git pull
+uv tool uninstall slopometry
+uv tool install .  --refresh
+
+# Note: After upgrading, you may need to reinstall hooks if the default config changed
+slopometry install
+```
+
+## Configuration
+
+Slopometry can be configured using environment variables or a `.env` file:
+
+1. **Global configuration**: `~/.config/slopometry/.env`
+2. **Project-specific**: `.env` in your project directory
+
+```bash
+# Create config directory and copy example config
+mkdir -p ~/.config/slopometry
+# If installing from git:
+curl -o ~/.config/slopometry/.env https://raw.githubusercontent.com/TensorTemplar/slopometry/main/.env.example
+# Or if you have the repo cloned:
+# cp .env.example ~/.config/slopometry/.env
+
+# Edit ~/.config/slopometry/.env with your preferences
 ```
 
 ## Quick Start
 
 ```bash
-# One-time setup - install hooks
-slopometry install
+# Install hooks globally (recommended)
+slopometry install --global
 
 # Use Claude normally
 claude
@@ -89,10 +133,12 @@ The command will show you the exact instructions to add to your shell configurat
 - `slopometry list [--limit N]` - List recent sessions
 - `slopometry show <session-id>` - Show detailed session statistics
 
-### Feedback Configuration
-- `slopometry feedback` - Show current feedback settings
-- `slopometry feedback --enable` - Enable complexity feedback on stop events
-- `slopometry feedback --disable` - Disable complexity feedback (default)
+### Complexity Analysis Configuration
+Configure complexity analysis via environment variables:
+- `SLOPOMETRY_ENABLE_COMPLEXITY_ANALYSIS=true` - Collect complexity metrics (default: `true`)
+- `SLOPOMETRY_ENABLE_COMPLEXITY_FEEDBACK=false` - Provide feedback to Claude (default: `false`)
+
+Recommended: Keep analysis enabled for data collection, disable feedback for uninterrupted workflow.
 
 
 Customize via `.env` file or environment variables:
@@ -102,9 +148,10 @@ Customize via `.env` file or environment variables:
     - Linux: `~/.local/share/slopometry/slopometry.db`
     - macOS: `~/Library/Application Support/slopometry/slopometry.db`  
     - Windows: `%LOCALAPPDATA%\slopometry\slopometry.db`
-- `SLOPOMETRY_PYTHON_EXECUTABLE`: Python command for hooks (default: `uv run python`)
+- `SLOPOMETRY_PYTHON_EXECUTABLE`: Python command for hooks (default: uses uv tool's python)
 - `SLOPOMETRY_SESSION_ID_PREFIX`: Custom session ID prefix
-- `SLOPOMETRY_ENABLE_STOP_FEEDBACK`: Enable complexity feedback on stop events (default: `false`)
+- `SLOPOMETRY_ENABLE_COMPLEXITY_ANALYSIS`: Collect complexity metrics (default: `true`)
+- `SLOPOMETRY_ENABLE_COMPLEXITY_FEEDBACK`: Provide feedback to Claude (default: `false`)
 
 ## Architecture
 
@@ -116,7 +163,7 @@ Customize via `.env` file or environment variables:
 
 ## Roadmap
 
-[ ] - Actually make a package so people can install this  
+[x] - Actually make a package so people can install this  
 [ ] - Add hindsight-justified requirements from implemented commits of the future  
 [x] - Add plan evolution log based on claude's todo shenenigans  
 [ ] - Use [PR-CLI](https://tensortemplar.substack.com/p/humans-are-no-longer-embodied-amortization) (TM) training objective on plans as process reward while doing huge subtree rollouts just to win an argument on the internet  

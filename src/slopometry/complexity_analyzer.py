@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from .models import ComplexityDelta, ComplexityMetrics
+from slopometry.models import ComplexityDelta, ComplexityMetrics
 
 
 class ComplexityAnalyzer:
@@ -37,19 +37,15 @@ class ComplexityAnalyzer:
             Tuple of (current_metrics, complexity_delta)
         """
         try:
-            # Analyze current directory
             current_metrics = self._analyze_directory(self.working_directory)
 
-            # Analyze baseline directory
             baseline_metrics = self._analyze_directory(baseline_dir)
 
-            # Calculate delta
             delta = self._calculate_delta(baseline_metrics, current_metrics)
 
             return current_metrics, delta
 
         except Exception:
-            # Return current metrics with empty delta on any error
             current_metrics = self._analyze_directory(self.working_directory)
             return current_metrics, ComplexityDelta()
 
@@ -63,25 +59,21 @@ class ComplexityAnalyzer:
             ComplexityMetrics with aggregated complexity data.
         """
         try:
-            # Run radon cc command to get cyclomatic complexity in JSON format
             result = subprocess.run(
                 ["radon", "cc", "--json", "--show-complexity", str(directory)],
                 capture_output=True,
                 text=True,
-                timeout=30,  # 30 second timeout
+                timeout=30,
             )
 
             if result.returncode != 0:
-                # Return empty metrics if radon fails
                 return ComplexityMetrics()
 
-            # Parse radon output
             radon_data = json.loads(result.stdout)
 
             return self._process_radon_output(radon_data, directory)
 
         except (subprocess.TimeoutExpired, subprocess.CalledProcessError, json.JSONDecodeError):
-            # Return empty metrics on any error
             return ComplexityMetrics()
 
     def _process_radon_output(self, radon_data: dict[str, Any], reference_dir: Path | None = None) -> ComplexityMetrics:
@@ -100,18 +92,15 @@ class ComplexityAnalyzer:
         reference_directory = reference_dir or self.working_directory
 
         for file_path, functions in radon_data.items():
-            if not functions:  # Skip files with no functions
+            if not functions:
                 continue
 
-            # Calculate total complexity for this file
             file_complexity = sum(func.get("complexity", 0) for func in functions)
 
-            # Convert absolute path to relative path for cleaner display
             relative_path = self._get_relative_path(file_path, reference_directory)
             files_by_complexity[relative_path] = file_complexity
             all_complexities.append(file_complexity)
 
-        # Calculate aggregated metrics
         total_files = len(all_complexities)
         total_complexity = sum(all_complexities)
 
@@ -148,11 +137,9 @@ class ComplexityAnalyzer:
         baseline_files = set(baseline_metrics.files_by_complexity.keys())
         current_files = set(current_metrics.files_by_complexity.keys())
 
-        # Files added and removed
         files_added = list(current_files - baseline_files)
         files_removed = list(baseline_files - current_files)
 
-        # Files that exist in both (changed files)
         common_files = baseline_files & current_files
         files_changed = {}
 
@@ -164,10 +151,8 @@ class ComplexityAnalyzer:
             if complexity_change != 0:
                 files_changed[file_path] = complexity_change
 
-        # Calculate total complexity change
         total_complexity_change = current_metrics.total_complexity - baseline_metrics.total_complexity
 
-        # Calculate average complexity change for common files
         if common_files:
             baseline_avg = sum(baseline_metrics.files_by_complexity[f] for f in common_files) / len(common_files)
             current_avg = sum(current_metrics.files_by_complexity[f] for f in common_files) / len(common_files)
