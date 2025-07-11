@@ -21,6 +21,10 @@ A tool that lurks in the shadows, tracks and analyzes Claude Code sessions provi
 *"Previously i had to READ CODE and DECIDE WHEN TO RUN SLASH COMMANDS MYSELF, but now i just periodically prompt 'Cmon, claude, you know you did...'"*  
 — TensorTemplar, insignificant idea person for this tool
 
+### sherbie
+*"Let's slop up all the things."*
+— sherbie, opinionated SDET
+
 ## Installation
 
 ### Install claude code
