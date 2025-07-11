@@ -5,11 +5,11 @@ build-backend = "hatchling.build"
 [project]
 name = "slopometry"
 version = "20250710-1"
-description = "Claude Code session tracker - collects statistics about hook invocations"
+description = "Claude Code session tracker / experiment runner"
 readme = "README.md"
 requires-python = ">=3.13"
 authors = [
-    {name = "TensorTemplar", email = "tensor@templar.dev"},
+    {name = "TensorTemplar", email = "ghp.rectify565@passinbox.com"},
 ]
 license = {text = "MIT"}
 keywords = ["claude", "code", "tracking", "metrics", "hooks"]
@@ -45,6 +45,7 @@ dev = [
     "isort>=5.12.0",
     "pre-commit>=4.2.0",
     "pytest>=8.3.5",
+    "types-toml>=0.10.8.20240310",
 ]
 
 [project.scripts]

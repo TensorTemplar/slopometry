@@ -43,7 +43,6 @@ def get_tool_type(tool_name: str) -> ToolType:
         "notebookread": ToolType.NOTEBOOK_READ,
         "notebookedit": ToolType.NOTEBOOK_EDIT,
         "exit_plan_mode": ToolType.EXIT_PLAN_MODE,
-        # MCP (Model Context Protocol) tools
         "mcp__ide__getdiagnostics": ToolType.MCP_IDE_GET_DIAGNOSTICS,
         "mcp__ide__executecode": ToolType.MCP_IDE_EXECUTE_CODE,
         "mcp__ide__getworkspaceinfo": ToolType.MCP_IDE_GET_WORKSPACE_INFO,
@@ -66,7 +65,6 @@ def get_tool_type(tool_name: str) -> ToolType:
         "mcp__slack__listchannels": ToolType.MCP_SLACK_LIST_CHANNELS,
     }
 
-    # Handle generic MCP tools that don't match specific mappings
     if tool_name.lower().startswith("mcp__") and tool_name.lower() not in tool_map:
         return ToolType.MCP_OTHER
 
@@ -112,7 +110,7 @@ def handle_hook(event_type_override: HookEventType | None = None):
 
     parsed_input = parse_hook_input(raw_data)
 
-    event_type = event_type_override if event_type_override else _detect_event_type_from_parsed(parsed_input)
+    event_type = event_type_override if event_type_override else detect_event_type_from_parsed(parsed_input)
 
     session_id = parsed_input.session_id
 
@@ -164,7 +162,8 @@ def handle_hook(event_type_override: HookEventType | None = None):
         pass
 
     if event_type in (HookEventType.STOP, HookEventType.SUBAGENT_STOP) and settings.enable_complexity_analysis:
-        return handle_stop_event(session_id, parsed_input)
+        # mypy: parsed_input is StopInput or SubagentStopInput based on event_type check above
+        return handle_stop_event(session_id, parsed_input)  # type: ignore[arg-type]
 
     if settings.debug_mode:
         debug_info = {
@@ -193,7 +192,6 @@ def handle_stop_event(session_id: str, parsed_input: "StopInput | SubagentStopIn
     Returns:
         Exit code (0 for success, 2 for blocking with feedback)
     """
-    # Check if stop hook is already active to prevent infinite loops
     if parsed_input.stop_hook_active:
         return 0
 
@@ -222,7 +220,7 @@ def handle_stop_event(session_id: str, parsed_input: "StopInput | SubagentStopIn
         hook_output = {"decision": "block", "reason": feedback}
 
         print(json.dumps(hook_output))
-        return 2  # Block Claude from stopping and show feedback
+        return 2
 
     except Exception:
         return 0
@@ -285,21 +283,19 @@ def format_complexity_feedback(current_metrics: "ComplexityMetrics", delta: "Com
     return "\n".join(lines)
 
 
-def _detect_event_type_from_parsed(parsed_input: HookInputUnion) -> HookEventType:
+def detect_event_type_from_parsed(parsed_input: HookInputUnion) -> HookEventType:
     """Detect event type from parsed input model."""
-    if isinstance(parsed_input, PreToolUseInput):
-        return HookEventType.PRE_TOOL_USE
-    elif isinstance(parsed_input, PostToolUseInput):
-        return HookEventType.POST_TOOL_USE
-    elif isinstance(parsed_input, NotificationInput):
-        return HookEventType.NOTIFICATION
-    elif isinstance(parsed_input, StopInput):
-        return HookEventType.STOP
-    elif isinstance(parsed_input, SubagentStopInput):
-        return HookEventType.SUBAGENT_STOP
-    else:
-        # Final fallback for unknown types
-        return HookEventType.NOTIFICATION
+    match parsed_input:
+        case PreToolUseInput():
+            return HookEventType.PRE_TOOL_USE
+        case PostToolUseInput():
+            return HookEventType.POST_TOOL_USE
+        case NotificationInput():
+            return HookEventType.NOTIFICATION
+        case StopInput():
+            return HookEventType.STOP
+        case SubagentStopInput():
+            return HookEventType.SUBAGENT_STOP
 
 
 def main():

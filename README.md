@@ -23,7 +23,13 @@ A tool that lurks in the shadows, tracks and analyzes Claude Code sessions provi
 
 ## Installation
 
-### Install as a uv tool (Recommended)
+### Install claude code
+
+```bash
+curl -fsSL http://claude.ai/install.sh | bash
+```
+
+### Install slopometry as a uv tool
 
 ```bash
 # Install as a global tool
@@ -35,14 +41,37 @@ cd slopometry
 uv tool install .
 ```
 
-### Development Installation
+## Quick Start
 
 ```bash
-# Clone and install in development mode
-git clone https://github.com/TensorTemplar/slopometry
-cd slopometry
-uv sync --all-extras
+# Install hooks globally (recommended)
+slopometry install --global
+
+# Use Claude normally
+claude
+
+# View tracked sessions
+slopometry ls
+slopometry show <session_id>
 ```
+
+## Shell Completion
+
+Enable autocompletion for your shell:
+
+```bash
+# For bash
+slopometry completion bash
+
+# For zsh  
+slopometry completion zsh
+
+# For fish
+slopometry completion fish
+```
+
+The command will show you the exact instructions to add to your shell configuration.
+
 
 ## Upgrading
 
@@ -81,37 +110,6 @@ curl -o ~/.config/slopometry/.env https://raw.githubusercontent.com/TensorTempla
 # Edit ~/.config/slopometry/.env with your preferences
 ```
 
-## Quick Start
-
-```bash
-# Install hooks globally (recommended)
-slopometry install --global
-
-# Use Claude normally
-claude
-
-# View tracked sessions
-slopometry list
-slopometry show <session_id>
-```
-
-## Shell Completion
-
-Enable autocompletion for your shell:
-
-```bash
-# For bash
-slopometry completion bash
-
-# For zsh  
-slopometry completion zsh
-
-# For fish
-slopometry completion fish
-```
-
-The command will show you the exact instructions to add to your shell configuration.
-
 ## Features
 
 ![session statistics](assets/session-stat.png)  
@@ -123,6 +121,14 @@ The command will show you the exact instructions to add to your shell configurat
 ![a detailed event log, totally not for any RL later](assets/log.png)  
 
 ## Here be powerusers
+
+### Development Installation
+
+```bash
+git clone https://github.com/TensorTemplar/slopometry
+cd slopometry
+uv sync --all-extras
+```
 
 ### Installation Management
 - `slopometry install [--global|--local]` - Install tracking hooks
@@ -164,8 +170,8 @@ Customize via `.env` file or environment variables:
 ## Roadmap
 
 [x] - Actually make a package so people can install this  
-[ ] - Add hindsight-justified requirements from implemented commits of the future  
+[ ] - Add hindsight-justified user stories with acceptance criteria based off of future commits
 [x] - Add plan evolution log based on claude's todo shenenigans  
-[ ] - Use [PR-CLI](https://tensortemplar.substack.com/p/humans-are-no-longer-embodied-amortization) (TM) training objective on plans as process reward while doing huge subtree rollouts just to win an argument on the internet  
+[ ] - Use [NFP-CLI](https://tensortemplar.substack.com/p/humans-are-no-longer-embodied-amortization) (TM) training objective over plans with complexity metrics informing a process reward, while doing huge subtree rollouts just to win an argument on the internet  
 [ ] - Add LLM-as-judge feedback over style guide as policy  
 [ ] - Not go bankrupt from having to maintain open source in my free time, no wait...

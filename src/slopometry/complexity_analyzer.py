@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from slopometry.models import ComplexityDelta, ComplexityMetrics
+from slopometry.models import ComplexityDelta, ComplexityMetrics, ExtendedComplexityMetrics
 
 
 class ComplexityAnalyzer:
@@ -60,7 +60,7 @@ class ComplexityAnalyzer:
         """
         try:
             result = subprocess.run(
-                ["radon", "cc", "--json", "--show-complexity", str(directory)],
+                ["uvx", "radon", "cc", "--json", "--show-complexity", str(directory)],
                 capture_output=True,
                 text=True,
                 timeout=30,
@@ -189,3 +189,140 @@ class ComplexityAnalyzer:
                 return str(abs_path)
         except (ValueError, OSError):
             return file_path
+
+    def analyze_extended_complexity(self, directory: Path | None = None) -> ExtendedComplexityMetrics:
+        """Analyze with CC, Halstead, and MI metrics.
+
+        Args:
+            directory: Directory to analyze. Defaults to working_directory.
+
+        Returns:
+            ExtendedComplexityMetrics with all radon metrics.
+        """
+        target_dir = directory or self.working_directory
+
+        try:
+            # Cyclomatic Complexity
+            cc_result = subprocess.run(
+                ["uvx", "radon", "cc", "--json", "--show-complexity", str(target_dir)],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+            # Halstead Metrics
+            hal_result = subprocess.run(
+                ["uvx", "radon", "hal", "--json", str(target_dir)],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+            # Maintainability Index
+            mi_result = subprocess.run(
+                ["uvx", "radon", "mi", "--json", str(target_dir)],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+            if cc_result.returncode != 0 or hal_result.returncode != 0 or mi_result.returncode != 0:
+                return ExtendedComplexityMetrics()
+
+            return self._merge_metrics(
+                json.loads(cc_result.stdout),
+                json.loads(hal_result.stdout),
+                json.loads(mi_result.stdout),
+                target_dir,
+            )
+
+        except (subprocess.TimeoutExpired, subprocess.CalledProcessError, json.JSONDecodeError):
+            return ExtendedComplexityMetrics()
+
+    def _merge_metrics(
+        self,
+        cc_data: dict[str, Any],
+        hal_data: dict[str, Any],
+        mi_data: dict[str, Any],
+        reference_dir: Path,
+    ) -> ExtendedComplexityMetrics:
+        """Merge metrics from different radon commands into ExtendedComplexityMetrics.
+
+        Args:
+            cc_data: Cyclomatic complexity data
+            hal_data: Halstead metrics data
+            mi_data: Maintainability index data
+            reference_dir: Reference directory for path calculation
+
+        Returns:
+            Merged ExtendedComplexityMetrics
+        """
+        # Process cyclomatic complexity
+        files_by_complexity = {}
+        all_complexities = []
+
+        for file_path, functions in cc_data.items():
+            if not functions:
+                continue
+
+            file_complexity = sum(func.get("complexity", 0) for func in functions)
+            relative_path = self._get_relative_path(file_path, reference_dir)
+            files_by_complexity[relative_path] = file_complexity
+            all_complexities.append(file_complexity)
+
+        total_files = len(all_complexities)
+        total_complexity = sum(all_complexities)
+        average_complexity = total_complexity / total_files if total_files > 0 else 0.0
+        max_complexity = max(all_complexities) if all_complexities else 0
+        min_complexity = min(all_complexities) if all_complexities else 0
+
+        # Process Halstead metrics
+        total_volume = 0.0
+        total_difficulty = 0.0
+        total_effort = 0.0
+        hal_file_count = 0
+
+        for file_path, hal_metrics in hal_data.items():
+            if isinstance(hal_metrics, dict) and "total" in hal_metrics:
+                total_metrics = hal_metrics["total"]
+                if total_metrics:
+                    total_volume += total_metrics.get("volume", 0.0)
+                    total_difficulty += total_metrics.get("difficulty", 0.0)
+                    total_effort += total_metrics.get("effort", 0.0)
+                    hal_file_count += 1
+
+        average_volume = total_volume / hal_file_count if hal_file_count > 0 else 0.0
+        average_difficulty = total_difficulty / hal_file_count if hal_file_count > 0 else 0.0
+
+        # Process Maintainability Index
+        total_mi = 0.0
+        mi_file_count = 0
+
+        for file_path, mi_value in mi_data.items():
+            if isinstance(mi_value, dict) and "mi" in mi_value:
+                mi_score = mi_value["mi"]
+            elif isinstance(mi_value, int | float):
+                mi_score = float(mi_value)
+            else:
+                continue
+
+            total_mi += mi_score
+            mi_file_count += 1
+
+        average_mi = total_mi / mi_file_count if mi_file_count > 0 else 0.0
+
+        return ExtendedComplexityMetrics(
+            total_complexity=total_complexity,
+            average_complexity=average_complexity,
+            max_complexity=max_complexity,
+            min_complexity=min_complexity,
+            total_volume=total_volume,
+            total_difficulty=total_difficulty,
+            total_effort=total_effort,
+            average_volume=average_volume,
+            average_difficulty=average_difficulty,
+            total_mi=total_mi,
+            average_mi=average_mi,
+            total_files_analyzed=total_files,
+            files_by_complexity=files_by_complexity,
+        )

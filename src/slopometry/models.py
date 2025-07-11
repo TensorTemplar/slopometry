@@ -2,7 +2,9 @@
 
 from datetime import datetime
 from enum import Enum
+from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
@@ -51,7 +53,6 @@ class ToolType(str, Enum):
     NOTEBOOK_EDIT = "NotebookEdit"
     EXIT_PLAN_MODE = "exit_plan_mode"
 
-    # MCP (Model Context Protocol) tools
     MCP_IDE_GET_DIAGNOSTICS = "mcp__ide__getDiagnostics"
     MCP_IDE_EXECUTE_CODE = "mcp__ide__executeCode"
     MCP_IDE_GET_WORKSPACE_INFO = "mcp__ide__getWorkspaceInfo"
@@ -128,6 +129,14 @@ class ComplexityDelta(BaseModel):
     net_files_change: int = Field(default=0, description="Net change in number of files (files_added - files_removed)")
     avg_complexity_change: float = 0.0
 
+    total_volume_change: float = 0.0
+    avg_volume_change: float = 0.0
+    total_difficulty_change: float = 0.0
+    avg_difficulty_change: float = 0.0
+    total_effort_change: float = 0.0
+    total_mi_change: float = 0.0
+    avg_mi_change: float = 0.0
+
 
 class TodoItem(BaseModel):
     """Represents a single todo item."""
@@ -190,7 +199,7 @@ class SessionStatistics(BaseModel):
     initial_git_state: GitState | None = None
     final_git_state: GitState | None = None
     commits_made: int = 0
-    complexity_metrics: ComplexityMetrics | None = None
+    complexity_metrics: "ExtendedComplexityMetrics | None" = None
     complexity_delta: ComplexityDelta | None = None
     plan_evolution: PlanEvolution | None = None
     project: Project | None = None
@@ -263,3 +272,143 @@ class HookOutput(BaseModel):
     reason: str | None = None
 
     model_config = {"extra": "allow", "populate_by_name": True}
+
+
+class ExperimentStatus(str, Enum):
+    """Status of an experiment run."""
+
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class UserStory(BaseModel):
+    """Represents a single user story for feature development."""
+
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    title: str = Field(description="Short title of the user story")
+    description: str = Field(description="Detailed description of the user story")
+    acceptance_criteria: list[str] = Field(default_factory=list, description="List of acceptance criteria")
+    priority: int = Field(default=1, description="Priority level (1=highest, 5=lowest)")
+    estimated_complexity: int = Field(default=0, description="Estimated complexity points")
+    tags: list[str] = Field(default_factory=list, description="Tags for categorization")
+
+
+class NextFeaturePrediction(BaseModel):
+    """Next Feature Prediction objective containing user stories."""
+
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    target_commit: str = Field(description="The commit SHA this NFP targets (e.g., HEAD)")
+    base_commit: str = Field(description="The starting commit SHA (e.g., HEAD~1)")
+    repository_path: Path = Field(description="Path to the repository this NFP belongs to")
+    title: str = Field(description="Overall title for this feature set")
+    description: str = Field(description="High-level description of the feature development")
+    user_stories: list[UserStory] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: datetime = Field(default_factory=datetime.now)
+
+    @property
+    def total_estimated_complexity(self) -> int:
+        """Calculate total estimated complexity across all user stories."""
+        return sum(story.estimated_complexity for story in self.user_stories)
+
+    @property
+    def story_count(self) -> int:
+        """Get total number of user stories."""
+        return len(self.user_stories)
+
+    def get_stories_by_priority(self, priority: int) -> list[UserStory]:
+        """Get all user stories with specific priority level."""
+        return [story for story in self.user_stories if story.priority == priority]
+
+    def get_high_priority_stories(self) -> list[UserStory]:
+        """Get high priority user stories (priority 1-2)."""
+        return [story for story in self.user_stories if story.priority <= 2]
+
+
+class ExtendedComplexityMetrics(BaseModel):
+    """Extended metrics including Halstead and Maintainability Index."""
+
+    total_complexity: int = 0
+    average_complexity: float = 0.0
+    max_complexity: int = 0
+    min_complexity: int = 0
+
+    total_volume: float = 0.0
+    total_difficulty: float = 0.0
+    total_effort: float = 0.0
+    average_volume: float = 0.0
+    average_difficulty: float = 0.0
+
+    total_mi: float = 0.0
+    average_mi: float = Field(default=0.0, description="Higher is better (0-100 scale)")
+
+    total_files_analyzed: int = 0
+    files_by_complexity: dict[str, int] = Field(default_factory=dict)
+
+
+class ExperimentRun(BaseModel):
+    """Represents a single experiment run."""
+
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    repository_path: Path
+    start_commit: str  # SHA of starting commit (e.g., HEAD~1)
+    target_commit: str  # SHA of target commit (e.g., HEAD)
+    process_id: int
+    worktree_path: Path | None = None
+    start_time: datetime = Field(default_factory=datetime.now)
+    end_time: datetime | None = None
+    status: ExperimentStatus = ExperimentStatus.PENDING
+    nfp_objective: NextFeaturePrediction | None = None  # Feature objectives for this experiment
+
+
+class ExperimentProgress(BaseModel):
+    """Tracks real-time progress with CLI metric."""
+
+    experiment_id: str
+    timestamp: datetime = Field(default_factory=datetime.now)
+    current_metrics: ExtendedComplexityMetrics
+    target_metrics: ExtendedComplexityMetrics  # From HEAD commit
+
+    cli_score: float = Field(
+        default=0.0, description="Numeric objective: 1.0 = perfect match, <0 = overshooting target"
+    )
+
+    complexity_score: float = 0.0
+    halstead_score: float = 0.0
+    maintainability_score: float = 0.0
+
+
+class CommitComplexitySnapshot(BaseModel):
+    """Complexity metrics for a specific commit."""
+
+    commit_sha: str
+    commit_message: str
+    timestamp: datetime
+    complexity_metrics: ExtendedComplexityMetrics
+    parent_commit_sha: str | None = None
+    complexity_delta: ComplexityDelta | None = None  # Delta from parent
+
+
+class CommitChain(BaseModel):
+    """Represents a chain of commits with complexity evolution."""
+
+    repository_path: Path
+    base_commit: str  # Starting point (e.g., HEAD~10)
+    head_commit: str  # End point (e.g., HEAD)
+    commits: list[CommitComplexitySnapshot] = Field(default_factory=list)
+    total_complexity_growth: int = 0
+    average_complexity_per_commit: float = 0.0
+
+
+class ComplexityEvolution(BaseModel):
+    """Tracks how complexity evolves across commits."""
+
+    commit_sha: str
+    cumulative_complexity: int  # Total complexity up to this commit
+    incremental_complexity: int  # Complexity added in this commit
+    files_modified: int
+    functions_added: int
+    functions_removed: int
+    functions_modified: int

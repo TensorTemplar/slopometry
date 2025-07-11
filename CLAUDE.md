@@ -71,6 +71,28 @@ echo '{"session_id": "test123", "transcript_path": "/tmp/transcript.jsonl", "too
 1. Add to `ToolType` enum in models.py
 2. Update `TOOL_TYPE_MAP` in hook_handler.py
 3. No database migration needed (sqlite-utils handles schema)
+
+## Experiment Tracking
+
+The experiment tracking feature includes:
+
+### CLI Commands
+- `run-experiments`: Run parallel experiments across commit history
+- `analyze-commits`: Analyze complexity evolution between commits  
+- `list-experiments`: List all experiment runs
+- `show-experiment <id>`: Show detailed progress for an experiment
+
+### Key Components
+- **CLI Calculator**: Measures "Completeness Likelihood Improval" (0-1.0 scale)
+- **Extended Complexity Analyzer**: Collects Cyclomatic Complexity + Halstead + MI metrics
+- **Worktree Manager**: Creates isolated git environments for parallel experiments
+- **Experiment Orchestrator**: Coordinates parallel experiment execution
+
+### Important Notes
+- All `radon` calls use `uvx radon` to ensure proper uv environment execution
+- Experiments create temporary git worktrees for isolation
+- CLI scores: 1.0 = perfect match, <0 = overshooting target (prevents overfitting)
+- Database handles duplicate analysis runs gracefully
   
 ## Upstream Hook docs  
 available in `./claude-hooks-doc.md`  
