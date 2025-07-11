@@ -40,6 +40,7 @@ The hook handler uses `uvx slopometry hook-handler` to execute within the tool's
 - **Hook Handler** (`src/slopometry/hook_handler.py`): Script invoked by Claude Code hooks to capture events
 - **Models** (`src/slopometry/models.py`): Pydantic models for HookEvent, SessionStatistics
 - **Settings** (`src/slopometry/settings.py`): Pydantic-settings configuration with .env support
+- **LLM Wrapper** (`src/slopometry/llm_wrapper.py`): AI agents for analyzing git diffs and generating user stories
 
 ### How It Works
 1. `slopometry install` configures Claude Code hooks in settings.json
@@ -79,6 +80,8 @@ The experiment tracking feature includes:
 ### CLI Commands
 - `run-experiments`: Run parallel experiments across commit history
 - `analyze-commits`: Analyze complexity evolution between commits  
+- `userstorify-commits`: Generate user stories from commit diffs using AI
+- `list-features`: Detect feature boundaries from merge commits
 - `list-experiments`: List all experiment runs
 - `show-experiment <id>`: Show detailed progress for an experiment
 

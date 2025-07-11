@@ -1,6 +1,6 @@
 # Slopometry
 
-A tool that lurks in the shadows, tracks and analyzes Claude Code sessions providing metrics that neither of you knew you needed.
+A tool that lurks in the shadows, tracks and analyzes Claude Code sessions providing metrics that none of you knew you needed.
 
 ![slopometry-logo](assets/slopometry-logo.jpg)  
 
@@ -18,7 +18,7 @@ A tool that lurks in the shadows, tracks and analyzes Claude Code sessions provi
 — C. Opus, overpaid, infrequent contributor
 
 ### TensorTemplar
-*"Previously i had to READ CODE and DECIDE WHEN TO RUN SLASH COMMANDS MYSELF, but now i just periodically prompt 'Cmon, claude, you know you did...'"*  
+*"Previously i had to READ CODE and DECIDE WHEN TO RUN SLASH COMMANDS MYSELF, but now i just periodically prompt 'Cmon, claude, you know what you did...'"*  
 — TensorTemplar, insignificant idea person for this tool
 
 ### sherbie

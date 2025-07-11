@@ -412,3 +412,22 @@ class ComplexityEvolution(BaseModel):
     functions_added: int
     functions_removed: int
     functions_modified: int
+
+
+class MergeCommit(BaseModel):
+    """Information about a merge commit in git history."""
+
+    hash: str = Field(description="The commit hash")
+    parents: list[str] = Field(description="Parent commit hashes")
+    message: str = Field(description="Commit message")
+    feature_branch: str = Field(description="The feature branch commit (second parent)")
+
+
+class FeatureBoundary(BaseModel):
+    """Represents a feature's boundary commits."""
+
+    base_commit: str = Field(description="Common ancestor of the merge")
+    head_commit: str = Field(description="Feature branch tip commit")
+    merge_commit: str = Field(description="The merge commit hash")
+    merge_message: str = Field(description="Message from the merge commit")
+    feature_message: str = Field(description="Message from the feature branch tip")

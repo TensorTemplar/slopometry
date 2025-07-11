@@ -11,6 +11,12 @@ from rich.table import Table
 
 from slopometry.database import EventDatabase
 from slopometry.experiment_orchestrator import ExperimentOrchestrator
+from slopometry.llm_wrapper import (
+    get_commit_diff,
+    get_feature_boundaries,
+    get_user_story_prompt,
+    user_story_agent,
+)
 from slopometry.models import NextFeaturePrediction, UserStory
 from slopometry.settings import settings
 
@@ -789,6 +795,116 @@ def analyze_commits(base_commit: str, head_commit: str, repo_path: Path | None):
     except Exception as e:
         console.print(f"[red]Failed to analyze commits: {e}[/red]")
         sys.exit(1)
+
+
+@cli.command()
+@click.option("--base-commit", "-b", default="HEAD~10", help="Base commit (default: HEAD~10)")
+@click.option("--head-commit", "-h", default="HEAD", help="Head commit (default: HEAD)")
+@click.option(
+    "--repo-path",
+    "-r",
+    type=click.Path(exists=True, path_type=Path),
+    help="Repository path (default: current directory)",
+)
+def userstorify_commits(base_commit: str, head_commit: str, repo_path: Path | None):
+    """Generate user stories from commits using AI analysis."""
+    if repo_path is None:
+        repo_path = Path.cwd()
+
+    console.print(f"[bold]Generating user stories from {base_commit} to {head_commit}[/bold]")
+    console.print(f"Repository: {repo_path}")
+
+    # Change to the repository directory to run git commands
+    import os
+
+    original_dir = os.getcwd()
+    try:
+        os.chdir(repo_path)
+
+        # Get the diff
+        console.print("\n[yellow]Fetching commit diff...[/yellow]")
+        diff = get_commit_diff(base_commit)
+
+        if not diff:
+            console.print("[red]No changes found between commits[/red]")
+            return
+
+        # Generate the prompt
+        prompt = get_user_story_prompt(diff)
+
+        # Call the expensive agent
+        console.print("\n[yellow]Analyzing diff with AI agent (this may take a moment)...[/yellow]")
+        result = user_story_agent.run_sync(prompt)
+
+        # Display the results
+        console.print("\n[bold green]Generated User Stories:[/bold green]\n")
+        console.print(result.data)
+
+    except Exception as e:
+        console.print(f"[red]Failed to generate user stories: {e}[/red]")
+        sys.exit(1)
+    finally:
+        os.chdir(original_dir)
+
+
+@cli.command()
+@click.option(
+    "--limit",
+    "-l",
+    default=20,
+    help="Maximum number of feature merges to analyze (default: 20)",
+)
+@click.option(
+    "--repo-path",
+    "-r",
+    type=click.Path(exists=True, path_type=Path),
+    help="Repository path (default: current directory)",
+)
+def list_features(limit: int, repo_path: Path | None):
+    """List detected feature boundaries from merge commits."""
+    if repo_path is None:
+        repo_path = Path.cwd()
+
+    console.print(f"[bold]Detecting feature boundaries in {repo_path}[/bold]")
+
+    # Change to the repository directory
+    import os
+
+    original_dir = os.getcwd()
+    try:
+        os.chdir(repo_path)
+
+        # Get feature boundaries
+        features = get_feature_boundaries(limit=limit)
+
+        if not features:
+            console.print("[yellow]No feature merge commits found[/yellow]")
+            return
+
+        # Create a table for features
+        table = Table(title="Detected Features", show_lines=True)
+        table.add_column("Feature", style="cyan", no_wrap=False)
+        table.add_column("Base → Head", style="green")
+        table.add_column("Merge Message", style="yellow", no_wrap=False)
+
+        for feature in features:
+            # Truncate commits for display
+            base_short = feature.base_commit[:8]
+            head_short = feature.head_commit[:8]
+
+            table.add_row(feature.feature_message, f"{base_short} → {head_short}", feature.merge_message)
+
+        console.print(table)
+
+        # Show usage hint
+        console.print("\n[dim]To analyze a feature, use:[/dim]")
+        console.print("[cyan]slopometry userstorify-commits --base-commit <base> --head-commit <head>[/cyan]")
+
+    except Exception as e:
+        console.print(f"[red]Failed to list features: {e}[/red]")
+        sys.exit(1)
+    finally:
+        os.chdir(original_dir)
 
 
 @cli.command()

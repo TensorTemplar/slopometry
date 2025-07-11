@@ -191,7 +191,7 @@ class ExperimentOrchestrator:
             head_commit: Ending commit (e.g., HEAD)
         """
         console = Console()
-        
+
         result = subprocess.run(
             ["git", "rev-list", "--reverse", f"{base_commit}..{head_commit}"],
             cwd=self.repo_path,
@@ -211,7 +211,7 @@ class ExperimentOrchestrator:
 
         analyzer = ComplexityAnalyzer(self.repo_path)
         previous_metrics = None
-        
+
         # Track cumulative changes
         cumulative_cc = 0
         cumulative_volume = 0.0
@@ -228,7 +228,7 @@ class ExperimentOrchestrator:
 
             try:
                 metrics = analyzer.analyze_extended_complexity(temp_dir)
-                
+
                 # Calculate deltas if we have previous metrics
                 if previous_metrics:
                     delta_table = Table(title=f"Changes in {commit_sha[:8]}")
@@ -236,7 +236,7 @@ class ExperimentOrchestrator:
                     delta_table.add_column("Previous", justify="right")
                     delta_table.add_column("Current", justify="right")
                     delta_table.add_column("Change", justify="right")
-                    
+
                     # Cyclomatic Complexity
                     cc_change = metrics.total_complexity - previous_metrics.total_complexity
                     cc_color = "green" if cc_change < 0 else "red" if cc_change > 0 else "yellow"
@@ -244,9 +244,9 @@ class ExperimentOrchestrator:
                         "Cyclomatic Complexity",
                         str(previous_metrics.total_complexity),
                         str(metrics.total_complexity),
-                        f"[{cc_color}]{cc_change:+d}[/{cc_color}]"
+                        f"[{cc_color}]{cc_change:+d}[/{cc_color}]",
                     )
-                    
+
                     # Halstead Volume
                     vol_change = metrics.total_volume - previous_metrics.total_volume
                     vol_color = "green" if vol_change < 0 else "red" if vol_change > 0 else "yellow"
@@ -254,9 +254,9 @@ class ExperimentOrchestrator:
                         "Halstead Volume",
                         f"{previous_metrics.total_volume:.1f}",
                         f"{metrics.total_volume:.1f}",
-                        f"[{vol_color}]{vol_change:+.1f}[/{vol_color}]"
+                        f"[{vol_color}]{vol_change:+.1f}[/{vol_color}]",
                     )
-                    
+
                     # Halstead Difficulty
                     diff_change = metrics.total_difficulty - previous_metrics.total_difficulty
                     diff_color = "green" if diff_change < 0 else "red" if diff_change > 0 else "yellow"
@@ -264,9 +264,9 @@ class ExperimentOrchestrator:
                         "Halstead Difficulty",
                         f"{previous_metrics.total_difficulty:.1f}",
                         f"{metrics.total_difficulty:.1f}",
-                        f"[{diff_color}]{diff_change:+.1f}[/{diff_color}]"
+                        f"[{diff_color}]{diff_change:+.1f}[/{diff_color}]",
                     )
-                    
+
                     # Halstead Effort
                     effort_change = metrics.total_effort - previous_metrics.total_effort
                     effort_color = "green" if effort_change < 0 else "red" if effort_change > 0 else "yellow"
@@ -274,9 +274,9 @@ class ExperimentOrchestrator:
                         "Halstead Effort",
                         f"{previous_metrics.total_effort:.1f}",
                         f"{metrics.total_effort:.1f}",
-                        f"[{effort_color}]{effort_change:+.1f}[/{effort_color}]"
+                        f"[{effort_color}]{effort_change:+.1f}[/{effort_color}]",
                     )
-                    
+
                     # Maintainability Index (higher is better)
                     mi_change = metrics.average_mi - previous_metrics.average_mi
                     mi_color = "red" if mi_change < 0 else "green" if mi_change > 0 else "yellow"
@@ -284,9 +284,9 @@ class ExperimentOrchestrator:
                         "Avg Maintainability Index",
                         f"{previous_metrics.average_mi:.1f}",
                         f"{metrics.average_mi:.1f}",
-                        f"[{mi_color}]{mi_change:+.1f}[/{mi_color}]"
+                        f"[{mi_color}]{mi_change:+.1f}[/{mi_color}]",
                     )
-                    
+
                     # Files
                     files_change = metrics.total_files_analyzed - previous_metrics.total_files_analyzed
                     files_color = "green" if files_change < 0 else "red" if files_change > 0 else "yellow"
@@ -294,11 +294,11 @@ class ExperimentOrchestrator:
                         "Files Analyzed",
                         str(previous_metrics.total_files_analyzed),
                         str(metrics.total_files_analyzed),
-                        f"[{files_color}]{files_change:+d}[/{files_color}]"
+                        f"[{files_color}]{files_change:+d}[/{files_color}]",
                     )
-                    
+
                     console.print(delta_table)
-                    
+
                     # Update cumulative totals
                     cumulative_cc += cc_change
                     cumulative_volume += vol_change
@@ -310,14 +310,14 @@ class ExperimentOrchestrator:
                     initial_table = Table(title=f"Initial State at {commit_sha[:8]}")
                     initial_table.add_column("Metric", style="cyan")
                     initial_table.add_column("Value", justify="right")
-                    
+
                     initial_table.add_row("Cyclomatic Complexity", str(metrics.total_complexity))
                     initial_table.add_row("Halstead Volume", f"{metrics.total_volume:.1f}")
                     initial_table.add_row("Halstead Difficulty", f"{metrics.total_difficulty:.1f}")
                     initial_table.add_row("Halstead Effort", f"{metrics.total_effort:.1f}")
                     initial_table.add_row("Avg Maintainability Index", f"{metrics.average_mi:.1f}")
                     initial_table.add_row("Files Analyzed", str(metrics.total_files_analyzed))
-                    
+
                     console.print(initial_table)
 
                 self.db.save_complexity_evolution(
@@ -325,14 +325,16 @@ class ExperimentOrchestrator:
                     commit_sha=commit_sha,
                     commit_order=i,
                     cumulative_complexity=metrics.total_complexity,
-                    incremental_complexity=metrics.total_complexity - (previous_metrics.total_complexity if previous_metrics else 0),
+                    incremental_complexity=metrics.total_complexity
+                    - (previous_metrics.total_complexity if previous_metrics else 0),
                     file_metrics=metrics.model_dump_json(),
                 )
-                
+
                 previous_metrics = metrics
 
             finally:
                 import shutil
+
                 shutil.rmtree(temp_dir, ignore_errors=True)
 
         # Show cumulative summary
@@ -342,40 +344,40 @@ class ExperimentOrchestrator:
             summary_table.add_column("Metric", style="cyan")
             summary_table.add_column("Total Change", justify="right")
             summary_table.add_column("Average per Commit", justify="right")
-            
+
             cc_color = "green" if cumulative_cc < 0 else "red" if cumulative_cc > 0 else "yellow"
             summary_table.add_row(
                 "Cyclomatic Complexity",
                 f"[{cc_color}]{cumulative_cc:+d}[/{cc_color}]",
-                f"{cumulative_cc / len(commits):.1f}"
+                f"{cumulative_cc / len(commits):.1f}",
             )
-            
+
             vol_color = "green" if cumulative_volume < 0 else "red" if cumulative_volume > 0 else "yellow"
             summary_table.add_row(
                 "Halstead Volume",
                 f"[{vol_color}]{cumulative_volume:+.1f}[/{vol_color}]",
-                f"{cumulative_volume / len(commits):.1f}"
+                f"{cumulative_volume / len(commits):.1f}",
             )
-            
+
             diff_color = "green" if cumulative_difficulty < 0 else "red" if cumulative_difficulty > 0 else "yellow"
             summary_table.add_row(
                 "Halstead Difficulty",
                 f"[{diff_color}]{cumulative_difficulty:+.1f}[/{diff_color}]",
-                f"{cumulative_difficulty / len(commits):.1f}"
+                f"{cumulative_difficulty / len(commits):.1f}",
             )
-            
+
             effort_color = "green" if cumulative_effort < 0 else "red" if cumulative_effort > 0 else "yellow"
             summary_table.add_row(
                 "Halstead Effort",
                 f"[{effort_color}]{cumulative_effort:+.1f}[/{effort_color}]",
-                f"{cumulative_effort / len(commits):.1f}"
+                f"{cumulative_effort / len(commits):.1f}",
             )
-            
+
             mi_color = "red" if cumulative_mi < 0 else "green" if cumulative_mi > 0 else "yellow"
             summary_table.add_row(
                 "Avg Maintainability Index",
                 f"[{mi_color}]{cumulative_mi:+.1f}[/{mi_color}]",
-                f"{cumulative_mi / len(commits):.1f}"
+                f"{cumulative_mi / len(commits):.1f}",
             )
-            
+
             console.print(summary_table)

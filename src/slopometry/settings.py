@@ -59,6 +59,9 @@ class Settings(BaseSettings):
     enable_complexity_analysis: bool = True
     enable_complexity_feedback: bool = False
 
+    llm_proxy_url: str = ""
+    llm_proxy_api_key: str = ""
+
     @field_validator("database_path", mode="before")
     @classmethod
     def validate_database_path(cls, v):
