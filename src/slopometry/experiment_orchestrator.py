@@ -7,6 +7,9 @@ from concurrent.futures import Future, ProcessPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
+from rich.console import Console
+from rich.table import Table
+
 from slopometry.cli_calculator import CLICalculator
 from slopometry.complexity_analyzer import ComplexityAnalyzer
 from slopometry.database import EventDatabase
@@ -187,6 +190,8 @@ class ExperimentOrchestrator:
             base_commit: Starting commit (e.g., HEAD~10)
             head_commit: Ending commit (e.g., HEAD)
         """
+        console = Console()
+        
         result = subprocess.run(
             ["git", "rev-list", "--reverse", f"{base_commit}..{head_commit}"],
             cwd=self.repo_path,
@@ -197,18 +202,25 @@ class ExperimentOrchestrator:
 
         commits = result.stdout.strip().split("\n")
         if not commits:
-            print(f"No commits found between {base_commit} and {head_commit}")
+            console.print(f"[yellow]No commits found between {base_commit} and {head_commit}[/yellow]")
             return
 
-        print(f"\nAnalyzing {len(commits)} commits from {base_commit} to {head_commit}")
+        console.print(f"\n[bold]Analyzing {len(commits)} commits from {base_commit} to {head_commit}[/bold]")
 
         chain_id = self.db.create_commit_chain(str(self.repo_path), base_commit, head_commit, len(commits))
 
-        cumulative_complexity = 0
         analyzer = ComplexityAnalyzer(self.repo_path)
+        previous_metrics = None
+        
+        # Track cumulative changes
+        cumulative_cc = 0
+        cumulative_volume = 0.0
+        cumulative_difficulty = 0.0
+        cumulative_effort = 0.0
+        cumulative_mi = 0.0
 
         for i, commit_sha in enumerate(commits):
-            print(f"Analyzing commit {i + 1}/{len(commits)}: {commit_sha[:8]}")
+            console.print(f"\n[cyan]Analyzing commit {i + 1}/{len(commits)}: {commit_sha[:8]}[/cyan]")
 
             temp_dir = self.git_tracker.extract_files_from_commit(commit_sha)
             if not temp_dir:
@@ -216,22 +228,154 @@ class ExperimentOrchestrator:
 
             try:
                 metrics = analyzer.analyze_extended_complexity(temp_dir)
-                incremental_complexity = metrics.total_complexity - cumulative_complexity
-                cumulative_complexity = metrics.total_complexity
+                
+                # Calculate deltas if we have previous metrics
+                if previous_metrics:
+                    delta_table = Table(title=f"Changes in {commit_sha[:8]}")
+                    delta_table.add_column("Metric", style="cyan")
+                    delta_table.add_column("Previous", justify="right")
+                    delta_table.add_column("Current", justify="right")
+                    delta_table.add_column("Change", justify="right")
+                    
+                    # Cyclomatic Complexity
+                    cc_change = metrics.total_complexity - previous_metrics.total_complexity
+                    cc_color = "green" if cc_change < 0 else "red" if cc_change > 0 else "yellow"
+                    delta_table.add_row(
+                        "Cyclomatic Complexity",
+                        str(previous_metrics.total_complexity),
+                        str(metrics.total_complexity),
+                        f"[{cc_color}]{cc_change:+d}[/{cc_color}]"
+                    )
+                    
+                    # Halstead Volume
+                    vol_change = metrics.total_volume - previous_metrics.total_volume
+                    vol_color = "green" if vol_change < 0 else "red" if vol_change > 0 else "yellow"
+                    delta_table.add_row(
+                        "Halstead Volume",
+                        f"{previous_metrics.total_volume:.1f}",
+                        f"{metrics.total_volume:.1f}",
+                        f"[{vol_color}]{vol_change:+.1f}[/{vol_color}]"
+                    )
+                    
+                    # Halstead Difficulty
+                    diff_change = metrics.total_difficulty - previous_metrics.total_difficulty
+                    diff_color = "green" if diff_change < 0 else "red" if diff_change > 0 else "yellow"
+                    delta_table.add_row(
+                        "Halstead Difficulty",
+                        f"{previous_metrics.total_difficulty:.1f}",
+                        f"{metrics.total_difficulty:.1f}",
+                        f"[{diff_color}]{diff_change:+.1f}[/{diff_color}]"
+                    )
+                    
+                    # Halstead Effort
+                    effort_change = metrics.total_effort - previous_metrics.total_effort
+                    effort_color = "green" if effort_change < 0 else "red" if effort_change > 0 else "yellow"
+                    delta_table.add_row(
+                        "Halstead Effort",
+                        f"{previous_metrics.total_effort:.1f}",
+                        f"{metrics.total_effort:.1f}",
+                        f"[{effort_color}]{effort_change:+.1f}[/{effort_color}]"
+                    )
+                    
+                    # Maintainability Index (higher is better)
+                    mi_change = metrics.average_mi - previous_metrics.average_mi
+                    mi_color = "red" if mi_change < 0 else "green" if mi_change > 0 else "yellow"
+                    delta_table.add_row(
+                        "Avg Maintainability Index",
+                        f"{previous_metrics.average_mi:.1f}",
+                        f"{metrics.average_mi:.1f}",
+                        f"[{mi_color}]{mi_change:+.1f}[/{mi_color}]"
+                    )
+                    
+                    # Files
+                    files_change = metrics.total_files_analyzed - previous_metrics.total_files_analyzed
+                    files_color = "green" if files_change < 0 else "red" if files_change > 0 else "yellow"
+                    delta_table.add_row(
+                        "Files Analyzed",
+                        str(previous_metrics.total_files_analyzed),
+                        str(metrics.total_files_analyzed),
+                        f"[{files_color}]{files_change:+d}[/{files_color}]"
+                    )
+                    
+                    console.print(delta_table)
+                    
+                    # Update cumulative totals
+                    cumulative_cc += cc_change
+                    cumulative_volume += vol_change
+                    cumulative_difficulty += diff_change
+                    cumulative_effort += effort_change
+                    cumulative_mi += mi_change
+                else:
+                    # First commit - show initial state
+                    initial_table = Table(title=f"Initial State at {commit_sha[:8]}")
+                    initial_table.add_column("Metric", style="cyan")
+                    initial_table.add_column("Value", justify="right")
+                    
+                    initial_table.add_row("Cyclomatic Complexity", str(metrics.total_complexity))
+                    initial_table.add_row("Halstead Volume", f"{metrics.total_volume:.1f}")
+                    initial_table.add_row("Halstead Difficulty", f"{metrics.total_difficulty:.1f}")
+                    initial_table.add_row("Halstead Effort", f"{metrics.total_effort:.1f}")
+                    initial_table.add_row("Avg Maintainability Index", f"{metrics.average_mi:.1f}")
+                    initial_table.add_row("Files Analyzed", str(metrics.total_files_analyzed))
+                    
+                    console.print(initial_table)
 
                 self.db.save_complexity_evolution(
                     chain_id=chain_id,
                     commit_sha=commit_sha,
                     commit_order=i,
-                    cumulative_complexity=cumulative_complexity,
-                    incremental_complexity=incremental_complexity,
+                    cumulative_complexity=metrics.total_complexity,
+                    incremental_complexity=metrics.total_complexity - (previous_metrics.total_complexity if previous_metrics else 0),
                     file_metrics=metrics.model_dump_json(),
                 )
+                
+                previous_metrics = metrics
 
             finally:
                 import shutil
-
                 shutil.rmtree(temp_dir, ignore_errors=True)
 
-        print(f"\nTotal complexity growth: {cumulative_complexity}")
-        print(f"Average complexity per commit: {cumulative_complexity / len(commits):.2f}")
+        # Show cumulative summary
+        if len(commits) > 1:
+            console.print("\n[bold]Cumulative Changes Summary[/bold]")
+            summary_table = Table()
+            summary_table.add_column("Metric", style="cyan")
+            summary_table.add_column("Total Change", justify="right")
+            summary_table.add_column("Average per Commit", justify="right")
+            
+            cc_color = "green" if cumulative_cc < 0 else "red" if cumulative_cc > 0 else "yellow"
+            summary_table.add_row(
+                "Cyclomatic Complexity",
+                f"[{cc_color}]{cumulative_cc:+d}[/{cc_color}]",
+                f"{cumulative_cc / len(commits):.1f}"
+            )
+            
+            vol_color = "green" if cumulative_volume < 0 else "red" if cumulative_volume > 0 else "yellow"
+            summary_table.add_row(
+                "Halstead Volume",
+                f"[{vol_color}]{cumulative_volume:+.1f}[/{vol_color}]",
+                f"{cumulative_volume / len(commits):.1f}"
+            )
+            
+            diff_color = "green" if cumulative_difficulty < 0 else "red" if cumulative_difficulty > 0 else "yellow"
+            summary_table.add_row(
+                "Halstead Difficulty",
+                f"[{diff_color}]{cumulative_difficulty:+.1f}[/{diff_color}]",
+                f"{cumulative_difficulty / len(commits):.1f}"
+            )
+            
+            effort_color = "green" if cumulative_effort < 0 else "red" if cumulative_effort > 0 else "yellow"
+            summary_table.add_row(
+                "Halstead Effort",
+                f"[{effort_color}]{cumulative_effort:+.1f}[/{effort_color}]",
+                f"{cumulative_effort / len(commits):.1f}"
+            )
+            
+            mi_color = "red" if cumulative_mi < 0 else "green" if cumulative_mi > 0 else "yellow"
+            summary_table.add_row(
+                "Avg Maintainability Index",
+                f"[{mi_color}]{cumulative_mi:+.1f}[/{mi_color}]",
+                f"{cumulative_mi / len(commits):.1f}"
+            )
+            
+            console.print(summary_table)
