@@ -431,3 +431,28 @@ class FeatureBoundary(BaseModel):
     merge_commit: str = Field(description="The merge commit hash")
     merge_message: str = Field(description="Message from the merge commit")
     feature_message: str = Field(description="Message from the feature branch tip")
+
+
+class DiffUserStoryDataset(BaseModel):
+    """Dataset entry for diff <> user story pairs with ratings."""
+
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    created_at: datetime = Field(default_factory=datetime.now)
+
+    # Git diff information
+    base_commit: str = Field(description="Base commit reference")
+    head_commit: str = Field(description="Head commit reference")
+    diff_content: str = Field(description="The git diff content")
+    stride_size: int = Field(default=1, description="Number of intermediate commits spanned")
+
+    # Generated content
+    user_stories: str = Field(description="Generated user stories markdown")
+
+    # Ratings and feedback
+    rating: int = Field(ge=1, le=5, description="User rating from 1-5")
+    guidelines_for_improving: str = Field(default="", description="Guidelines for improving the user story generation")
+
+    # Metadata
+    model_used: str = Field(default="o3", description="Model used for generation")
+    prompt_template: str = Field(default="", description="Template used for prompt")
+    repository_path: str = Field(default="", description="Repository path")

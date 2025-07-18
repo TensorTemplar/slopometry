@@ -4,7 +4,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from slopometry.models import GitState
+from slopometry.core.models import GitState
 
 
 class GitTracker:

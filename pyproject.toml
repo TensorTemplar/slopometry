@@ -32,6 +32,10 @@ dependencies = [
     "radon>=6.0.1",
     "toml>=0.10.2",
     "pydantic-ai>=0.4.2",
+    "pandas>=2.0.0",
+    "pyarrow>=14.0.0",
+    "datasets>=2.14.0",
+    "huggingface-hub>=0.20.0",    
 ]
 
 [project.urls]

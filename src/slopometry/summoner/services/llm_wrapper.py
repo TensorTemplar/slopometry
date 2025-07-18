@@ -4,15 +4,16 @@ from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
-from slopometry.models import FeatureBoundary, MergeCommit
-from slopometry.settings import settings
+from slopometry.core.models import FeatureBoundary, MergeCommit
+from slopometry.core.settings import settings
 
 llm_gateway = OpenAIProvider(base_url=settings.llm_proxy_url, api_key=settings.llm_proxy_api_key)
 
+# In llm gateway land, everything is an openai model
 gemma_fp8 = OpenAIModel(model_name="gemma3:27b-it-q8_0", provider=llm_gateway)
-o3 = OpenAIModel(model_name="o3", provider=llm_gateway)
-
-user_story_agent = Agent(model=o3)
+cluade = Agent(model=OpenAIModel(model_name="claude-opus-4", provider=llm_gateway))
+gemini = Agent(model=OpenAIModel(model_name="gemini-2.5-pro", provider=llm_gateway))
+user_story_agent = Agent(model=OpenAIModel(model_name="o3", provider=llm_gateway))
 
 
 def get_user_story_prompt(diff: str) -> str:
@@ -44,6 +45,41 @@ Your output should be formatted markdown.
 {diff}
 </diff_to_inspect>
 """
+
+
+def resolve_commit_reference(commit_ref: str) -> str:
+    """Resolve a commit reference to its absolute hash.
+
+    Args:
+        commit_ref: Git commit reference (e.g., 'HEAD~3', 'abc123', 'main')
+
+    Returns:
+        The absolute commit hash
+    """
+    try:
+        result = subprocess.run(["git", "rev-parse", commit_ref], capture_output=True, text=True, check=True)
+        return result.stdout.strip()
+    except subprocess.CalledProcessError:
+        return commit_ref  # Return original if resolution fails
+
+
+def calculate_stride_size(base_commit: str, head_commit: str) -> int:
+    """Calculate the number of commits between base and head.
+
+    Args:
+        base_commit: Base commit reference
+        head_commit: Head commit reference
+
+    Returns:
+        Number of commits between base and head (stride size)
+    """
+    try:
+        result = subprocess.run(
+            ["git", "rev-list", "--count", f"{base_commit}..{head_commit}"], capture_output=True, text=True, check=True
+        )
+        return int(result.stdout.strip())
+    except (subprocess.CalledProcessError, ValueError):
+        return 1  # Default to 1 if calculation fails
 
 
 def get_commit_diff(commit_ref: str) -> str:

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import toml
 
-from slopometry.models import Project, ProjectSource
+from slopometry.core.models import Project, ProjectSource
 
 
 class ProjectTracker:

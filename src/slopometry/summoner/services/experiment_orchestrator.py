@@ -10,12 +10,12 @@ from pathlib import Path
 from rich.console import Console
 from rich.table import Table
 
-from slopometry.cli_calculator import CLICalculator
-from slopometry.complexity_analyzer import ComplexityAnalyzer
-from slopometry.database import EventDatabase
-from slopometry.git_tracker import GitTracker
-from slopometry.models import ExperimentProgress, ExperimentRun, ExperimentStatus, ExtendedComplexityMetrics
-from slopometry.worktree_manager import WorktreeManager
+from slopometry.core.complexity_analyzer import ComplexityAnalyzer
+from slopometry.core.database import EventDatabase
+from slopometry.core.git_tracker import GitTracker
+from slopometry.core.models import ExperimentProgress, ExperimentRun, ExperimentStatus, ExtendedComplexityMetrics
+from slopometry.summoner.services.cli_calculator import CLICalculator
+from slopometry.summoner.services.worktree_manager import WorktreeManager
 
 
 class ExperimentOrchestrator:
@@ -45,7 +45,6 @@ class ExperimentOrchestrator:
         with ProcessPoolExecutor(max_workers=max_workers) as executor:
             future_to_experiment: dict[Future[None], ExperimentRun] = {}
 
-            # Submit all experiments
             for start_commit, target_commit in commit_pairs:
                 experiment = ExperimentRun(
                     repository_path=self.repo_path,
@@ -55,7 +54,6 @@ class ExperimentOrchestrator:
                 )
                 experiments[experiment.id] = experiment
 
-                # Save initial experiment state
                 self.db.save_experiment_run(experiment)
 
                 future = executor.submit(
@@ -66,7 +64,6 @@ class ExperimentOrchestrator:
                 )
                 future_to_experiment[future] = experiment
 
-            # Monitor progress while experiments run
             while future_to_experiment:
                 self.display_aggregate_progress()
 
@@ -122,7 +119,6 @@ class ExperimentOrchestrator:
             self._simulate_agent_progress(experiment_id, worktree_path, target_metrics)
 
         finally:
-            # Clean up worktree
             if worktree_path:
                 self.worktree_manager.cleanup_worktree(worktree_path)
 
@@ -212,7 +208,6 @@ class ExperimentOrchestrator:
         analyzer = ComplexityAnalyzer(self.repo_path)
         previous_metrics = None
 
-        # Track cumulative changes
         cumulative_cc = 0
         cumulative_volume = 0.0
         cumulative_difficulty = 0.0
@@ -299,7 +294,6 @@ class ExperimentOrchestrator:
 
                     console.print(delta_table)
 
-                    # Update cumulative totals
                     cumulative_cc += cc_change
                     cumulative_volume += vol_change
                     cumulative_difficulty += diff_change

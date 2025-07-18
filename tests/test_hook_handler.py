@@ -1,7 +1,7 @@
 """Tests for hook handler functionality."""
 
-from slopometry.hook_handler import detect_event_type_from_parsed
-from slopometry.models import (
+from slopometry.core.hook_handler import detect_event_type_from_parsed
+from slopometry.core.models import (
     HookEventType,
     NotificationInput,
     PostToolUseInput,
