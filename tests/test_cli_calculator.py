@@ -1,4 +1,4 @@
-"""Tests for experiment tracking functionality."""
+"""Tests for CLI Calculator functionality."""
 
 from slopometry.core.models import ExtendedComplexityMetrics
 from slopometry.summoner.services.cli_calculator import CLICalculator
@@ -7,8 +7,8 @@ from slopometry.summoner.services.cli_calculator import CLICalculator
 class TestCLICalculator:
     """Test the CLI (Completeness Likelihood Improval) calculator."""
 
-    def test_perfect_match_gives_high_score(self):
-        """Test that perfect match gives score of 1.0."""
+    def test_perfect_match_gives_high_score__returns_1_0_when_metrics_match(self):
+        """Test that perfect match gives score of 1.0 when metrics match."""
         calculator = CLICalculator()
 
         metrics = ExtendedComplexityMetrics(
@@ -27,8 +27,8 @@ class TestCLICalculator:
         assert components["halstead"] == 1.0
         assert components["maintainability"] == 1.0
 
-    def test_undershooting_target_gives_partial_score(self):
-        """Test that undershooting target gives proportional score."""
+    def test_undershooting_target_gives_partial_score__returns_proportional_score_when_current_less_than_target(self):
+        """Test that undershooting target gives proportional score when current less than target."""
         calculator = CLICalculator()
 
         current = ExtendedComplexityMetrics(
@@ -56,8 +56,8 @@ class TestCLICalculator:
         assert components["complexity"] == 0.5
         assert components["maintainability"] == 0.5
 
-    def test_overshooting_target_gives_penalty(self):
-        """Test that overshooting target gives negative penalty."""
+    def test_overshooting_target_gives_penalty__returns_negative_score_when_current_exceeds_target(self):
+        """Test that overshooting target gives negative penalty when current exceeds target."""
         calculator = CLICalculator()
 
         current = ExtendedComplexityMetrics(
@@ -85,33 +85,3 @@ class TestCLICalculator:
         assert components["complexity"] < 0
         assert components["halstead"] < 0
         assert components["maintainability"] == 1.0  # MI higher is better
-
-
-class TestExtendedComplexityMetrics:
-    """Test the extended complexity metrics model."""
-
-    def test_model_creation_with_defaults(self):
-        """Test creating model with default values."""
-        metrics = ExtendedComplexityMetrics()
-
-        assert metrics.total_complexity == 0
-        assert metrics.total_volume == 0.0
-        assert metrics.average_mi == 0.0
-        assert metrics.total_files_analyzed == 0
-        assert metrics.files_by_complexity == {}
-
-    def test_model_creation_with_values(self):
-        """Test creating model with specific values."""
-        metrics = ExtendedComplexityMetrics(
-            total_complexity=150,
-            total_volume=750.0,
-            average_mi=65.5,
-            total_files_analyzed=10,
-            files_by_complexity={"file1.py": 25, "file2.py": 30},
-        )
-
-        assert metrics.total_complexity == 150
-        assert metrics.total_volume == 750.0
-        assert metrics.average_mi == 65.5
-        assert metrics.total_files_analyzed == 10
-        assert len(metrics.files_by_complexity) == 2

@@ -414,17 +414,17 @@ def user_story_stats():
         stats = user_story_service.get_user_story_statistics()
 
         console.print("[bold]User Story Statistics[/bold]\\n")
-        console.print(f"Total entries: {stats['total_entries']}")
-        console.print(f"Average rating: {stats['avg_rating']}/5")
-        console.print(f"Unique models used: {stats['unique_models']}")
-        console.print(f"Unique repositories: {stats['unique_repos']}")
+        console.print(f"Total entries: {stats.total_entries}")
+        console.print(f"Average rating: {stats.avg_rating}/5")
+        console.print(f"Unique models used: {stats.unique_models}")
+        console.print(f"Unique repositories: {stats.unique_repos}")
 
-        if stats["rating_distribution"]:
+        if stats.rating_distribution:
             console.print("\\n[bold]Rating Distribution:[/bold]")
-            for rating, count in stats["rating_distribution"].items():
+            for rating, count in stats.rating_distribution.items():
                 console.print(f"  {rating}/5: {count} entries")
 
-        if stats["total_entries"] > 0:
+        if stats.total_entries > 0:
             console.print("\\n[dim]Use 'slopometry summoner list-user-stories' to view individual entries[/dim]")
 
     except Exception as e:

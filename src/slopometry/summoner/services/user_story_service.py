@@ -7,7 +7,7 @@ import click
 from rich.console import Console
 
 from slopometry.core.database import EventDatabase
-from slopometry.core.models import UserStoryEntry
+from slopometry.core.models import UserStoryDisplayData, UserStoryEntry, UserStoryStatistics
 from slopometry.core.settings import settings
 
 console = Console()
@@ -19,39 +19,40 @@ class UserStoryService:
     def __init__(self, db: EventDatabase | None = None):
         self.db = db or EventDatabase()
 
-    def get_user_story_statistics(self) -> dict:
+    def get_user_story_statistics(self) -> UserStoryStatistics:
         """Get comprehensive user story statistics."""
         try:
-            return self.db.get_user_story_stats()
+            stats_dict = self.db.get_user_story_stats()
+            return UserStoryStatistics(**stats_dict)
         except Exception:
-            return {
-                "total_entries": 0,
-                "avg_rating": 0,
-                "unique_models": 0,
-                "unique_repos": 0,
-                "rating_distribution": {},
-            }
+            return UserStoryStatistics(
+                total_entries=0,
+                avg_rating=0,
+                unique_models=0,
+                unique_repos=0,
+                rating_distribution={},
+            )
 
-    def get_user_story_entries(self, limit: int = 10) -> list:
+    def get_user_story_entries(self, limit: int = 10) -> list[UserStoryEntry]:
         """Get recent user story entries."""
         try:
             return self.db.get_user_story_entries(limit=limit)
         except Exception:
             return []
 
-    def prepare_entries_data_for_display(self, entries: list) -> list[dict]:
+    def prepare_entries_data_for_display(self, entries: list[UserStoryEntry]) -> list[UserStoryDisplayData]:
         """Prepare user story entries for display formatting."""
         entries_data = []
         for entry in entries:
             entries_data.append(
-                {
-                    "entry_id": entry.short_id,
-                    "date": entry.created_at.strftime("%Y-%m-%d %H:%M"),
-                    "commits": f"{entry.base_commit[:8]}→{entry.head_commit[:8]}",
-                    "rating": f"{entry.rating}/5",
-                    "model": entry.model_used,
-                    "repository": Path(entry.repository_path).name,
-                }
+                UserStoryDisplayData(
+                    entry_id=entry.short_id,
+                    date=entry.created_at.strftime("%Y-%m-%d %H:%M"),
+                    commits=f"{entry.base_commit[:8]}→{entry.head_commit[:8]}",
+                    rating=f"{entry.rating}/5",
+                    model=entry.model_used,
+                    repository=Path(entry.repository_path).name,
+                )
             )
         return entries_data
 
@@ -87,7 +88,7 @@ class UserStoryService:
 
     def filter_entries_for_rating(
         self, limit: int, filter_model: str | None = None, unrated_only: bool = False
-    ) -> list:
+    ) -> list[UserStoryEntry]:
         """Filter user story entries for rating workflow."""
         # Get entries for rating (more than needed to filter)
         entries = self.get_user_story_entries(limit=limit * 2)
@@ -132,7 +133,7 @@ class UserStoryService:
 
         return rating, guidelines
 
-    def rate_user_story_entry(self, entry, new_rating: int, guidelines: str) -> None:
+    def rate_user_story_entry(self, entry: UserStoryEntry, new_rating: int, guidelines: str) -> None:
         """Update rating and guidelines for a user story entry."""
         entry.rating = new_rating
         entry.guidelines_for_improving = guidelines

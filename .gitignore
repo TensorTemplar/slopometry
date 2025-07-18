@@ -43,3 +43,11 @@ Thumbs.db
 slopometry.db
 *.parquet
 *.log
+
+# Testing and coverage
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+*.cover
+.hypothesis/
