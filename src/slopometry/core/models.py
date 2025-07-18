@@ -468,3 +468,24 @@ class UserStoryEntry(BaseModel):
     def short_id(self) -> str:
         """Get the first 8 characters of the user story entry ID for display."""
         return self.id[:8]
+
+
+class UserStoryStatistics(BaseModel):
+    """Statistics about user story entries."""
+
+    total_entries: int = Field(description="Total number of user story entries")
+    avg_rating: float = Field(description="Average rating across all entries")
+    unique_models: int = Field(description="Number of unique models used")
+    unique_repos: int = Field(description="Number of unique repositories")
+    rating_distribution: dict[str, int] = Field(description="Distribution of ratings")
+
+
+class UserStoryDisplayData(BaseModel):
+    """Display data for user story entries in tables."""
+
+    entry_id: str = Field(description="Short ID of the entry")
+    date: str = Field(description="Formatted creation date")
+    commits: str = Field(description="Short commit range display")
+    rating: str = Field(description="Formatted rating display")
+    model: str = Field(description="Model used for generation")
+    repository: str = Field(description="Repository name")

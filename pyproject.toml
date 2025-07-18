@@ -50,6 +50,7 @@ dev = [
     "isort>=5.12.0",
     "pre-commit>=4.2.0",
     "pytest>=8.3.5",
+    "pytest-cov>=4.1.0",
     "types-toml>=0.10.8.20240310",
 ]
 
@@ -85,3 +86,39 @@ strict_equality = true
 mypy_path = "src"
 namespace_packages = true
 explicit_package_bases = true
+
+[tool.pytest.ini_options]
+addopts = [
+    "--cov=slopometry",
+    "--cov-report=html",
+    "--cov-report=term-missing",
+    "--cov-report=xml",
+    "-v",
+]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.coverage.run]
+source = ["src/slopometry"]
+omit = [
+    "*/tests/*",
+    "*/__init__.py",
+    "*/cli.py",  # CLI is interactive and hard to test
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if self.debug:",
+    "if __name__ == .__main__.:",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+]
+show_missing = true
+skip_covered = false
+precision = 2
+
+[tool.coverage.html]
+directory = "htmlcov"

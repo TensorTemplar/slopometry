@@ -339,12 +339,12 @@ def create_user_story_entries_table(entries_data, count: int) -> Table:
 
     for entry_data in entries_data:
         table.add_row(
-            entry_data["entry_id"],
-            entry_data["date"],
-            entry_data["commits"],
-            entry_data["rating"],
-            entry_data["model"],
-            entry_data["repository"],
+            entry_data.entry_id,
+            entry_data.date,
+            entry_data.commits,
+            entry_data.rating,
+            entry_data.model,
+            entry_data.repository,
         )
 
     return table
