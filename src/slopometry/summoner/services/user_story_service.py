@@ -1,4 +1,4 @@
-"""Dataset management service for summoner features."""
+"""User story management service for summoner features."""
 
 import re
 from pathlib import Path
@@ -7,22 +7,22 @@ import click
 from rich.console import Console
 
 from slopometry.core.database import EventDatabase
-from slopometry.core.models import DiffUserStoryDataset
+from slopometry.core.models import UserStoryEntry
 from slopometry.core.settings import settings
 
 console = Console()
 
 
-class DatasetService:
-    """Handles dataset management and export for summoner users."""
+class UserStoryService:
+    """Handles user story management and export for summoner users."""
 
     def __init__(self, db: EventDatabase | None = None):
         self.db = db or EventDatabase()
 
-    def get_dataset_statistics(self) -> dict:
-        """Get comprehensive dataset statistics."""
+    def get_user_story_statistics(self) -> dict:
+        """Get comprehensive user story statistics."""
         try:
-            return self.db.get_dataset_stats()
+            return self.db.get_user_story_stats()
         except Exception:
             return {
                 "total_entries": 0,
@@ -32,19 +32,20 @@ class DatasetService:
                 "rating_distribution": {},
             }
 
-    def get_dataset_entries(self, limit: int = 10) -> list:
-        """Get recent dataset entries."""
+    def get_user_story_entries(self, limit: int = 10) -> list:
+        """Get recent user story entries."""
         try:
-            return self.db.get_dataset_entries(limit=limit)
+            return self.db.get_user_story_entries(limit=limit)
         except Exception:
             return []
 
     def prepare_entries_data_for_display(self, entries: list) -> list[dict]:
-        """Prepare dataset entries for display formatting."""
+        """Prepare user story entries for display formatting."""
         entries_data = []
         for entry in entries:
             entries_data.append(
                 {
+                    "entry_id": entry.short_id,
                     "date": entry.created_at.strftime("%Y-%m-%d %H:%M"),
                     "commits": f"{entry.base_commit[:8]}→{entry.head_commit[:8]}",
                     "rating": f"{entry.rating}/5",
@@ -54,15 +55,15 @@ class DatasetService:
             )
         return entries_data
 
-    def export_dataset(self, output_path: Path) -> int:
-        """Export dataset to Parquet format."""
+    def export_user_stories(self, output_path: Path) -> int:
+        """Export user stories to Parquet format."""
         try:
-            return self.db.export_dataset(output_path)
+            return self.db.export_user_stories(output_path)
         except ImportError as e:
             raise ImportError(f"Missing required dependencies for export: {e}")
 
     def upload_to_huggingface(self, output_path: Path, hf_repo: str | None = None) -> str:
-        """Upload dataset to Hugging Face."""
+        """Upload user stories to Hugging Face."""
         if not hf_repo:
             # Use default from settings if available
             if settings.hf_default_repo:
@@ -72,7 +73,7 @@ class DatasetService:
                 project_name = Path.cwd().name.lower().replace("_", "-").replace(" ", "-")
                 # Remove any non-alphanumeric chars except hyphens
                 project_name = re.sub(r"[^a-z0-9-]", "", project_name)
-                hf_repo = f"slopometry-{project_name}-dataset"
+                hf_repo = f"slopometry-{project_name}-userstories"
 
         try:
             from slopometry.summoner.services.hf_uploader import upload_to_huggingface
@@ -87,9 +88,9 @@ class DatasetService:
     def filter_entries_for_rating(
         self, limit: int, filter_model: str | None = None, unrated_only: bool = False
     ) -> list:
-        """Filter dataset entries for rating workflow."""
+        """Filter user story entries for rating workflow."""
         # Get entries for rating (more than needed to filter)
-        entries = self.get_dataset_entries(limit=limit * 2)
+        entries = self.get_user_story_entries(limit=limit * 2)
 
         if not entries:
             return []
@@ -107,8 +108,8 @@ class DatasetService:
         return filtered_entries[:limit]
 
     def collect_user_rating_and_feedback(self) -> tuple[int, str]:
-        """Collect rating and feedback from user for dataset entry."""
-        console.print("\\n[bold yellow]Dataset Collection[/bold yellow]")
+        """Collect rating and feedback from user for user story entry."""
+        console.print("\\n[bold yellow]User Story Collection[/bold yellow]")
         console.print("Please rate the generated user stories and provide feedback for improvement.")
 
         # Get rating
@@ -132,11 +133,11 @@ class DatasetService:
         return rating, guidelines
 
     def rate_user_story_entry(self, entry, new_rating: int, guidelines: str) -> None:
-        """Update rating and guidelines for a dataset entry."""
+        """Update rating and guidelines for a user story entry."""
         entry.rating = new_rating
         entry.guidelines_for_improving = guidelines
-        self.db.save_dataset_entry(entry)
+        self.db.save_user_story_entry(entry)
 
-    def save_dataset_entry(self, entry: DiffUserStoryDataset) -> None:
-        """Save a dataset entry to the database."""
-        self.db.save_dataset_entry(entry)
+    def save_user_story_entry(self, entry: UserStoryEntry) -> None:
+        """Save a user story entry to the database."""
+        self.db.save_user_story_entry(entry)

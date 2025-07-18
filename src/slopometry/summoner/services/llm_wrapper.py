@@ -1,4 +1,5 @@
 import subprocess
+from pathlib import Path
 
 from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIModel
@@ -151,8 +152,10 @@ def get_feature_boundaries(limit: int = 20) -> list[FeatureBoundary]:
     Returns:
         List of feature info with base commit, head commit, and description
     """
+
     merge_commits = find_merge_commits(limit=limit)
     features = []
+    current_repo_path = Path.cwd()
 
     for merge in merge_commits:
         try:
@@ -175,6 +178,7 @@ def get_feature_boundaries(limit: int = 20) -> list[FeatureBoundary]:
                     merge_commit=merge.hash,
                     merge_message=merge.message,
                     feature_message=feature_tip_message,
+                    repository_path=current_repo_path,
                 )
             )
         except subprocess.CalledProcessError:

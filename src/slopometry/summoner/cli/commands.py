@@ -7,16 +7,16 @@ import click
 from rich.console import Console
 
 from slopometry.display.formatters import (
-    create_dataset_entries_table,
     create_experiment_table,
     create_features_table,
     create_nfp_objectives_table,
     create_progress_history_table,
+    create_user_story_entries_table,
 )
-from slopometry.summoner.services.dataset_service import DatasetService
 from slopometry.summoner.services.experiment_service import ExperimentService
 from slopometry.summoner.services.llm_service import LLMService
 from slopometry.summoner.services.nfp_service import NFPService
+from slopometry.summoner.services.user_story_service import UserStoryService
 
 console = Console()
 
@@ -37,6 +37,33 @@ def complete_nfp_id(ctx, param, incomplete):
         nfp_service = NFPService()
         objectives = nfp_service.list_nfp_objectives()
         return [obj.id for obj in objectives if obj.id.startswith(incomplete)]
+    except Exception:
+        return []
+
+
+def complete_feature_id(ctx, param, incomplete):
+    """Complete feature IDs from the database."""
+    try:
+        from pathlib import Path
+
+        from slopometry.core.database import EventDatabase
+
+        db = EventDatabase()
+        repo_path = Path.cwd()
+        feature_ids = db.get_feature_ids_for_completion(repo_path)
+        return [fid for fid in feature_ids if fid.startswith(incomplete)]
+    except Exception:
+        return []
+
+
+def complete_user_story_entry_id(ctx, param, incomplete):
+    """Complete user story entry IDs from the database."""
+    try:
+        from slopometry.core.database import EventDatabase
+
+        db = EventDatabase()
+        entry_ids = db.get_user_story_entry_ids_for_completion()
+        return [eid for eid in entry_ids if eid.startswith(incomplete)]
     except Exception:
         return []
 
@@ -156,22 +183,70 @@ def show_experiment(experiment_id: str):
 
 
 @summoner.command("userstorify")
-@click.option("--base-commit", "-b", default="HEAD~3", help="Base commit (default: HEAD~3)")
-@click.option("--head-commit", "-h", default="HEAD", help="Head commit (default: HEAD)")
+@click.option("--base-commit", "-b", help="Base commit (required with --head-commit)")
+@click.option("--head-commit", "-h", help="Head commit (required with --base-commit)")
+@click.option(
+    "--feature-id",
+    "-f",
+    shell_complete=complete_feature_id,
+    help="Feature ID to analyze (alternative to --base-commit/--head-commit)",
+)
 @click.option(
     "--repo-path",
     "-r",
     type=click.Path(exists=True, path_type=Path),
     help="Repository path (default: current directory)",
 )
-def userstorify(base_commit: str, head_commit: str, repo_path: Path | None):
-    """Generate user stories from commits using configured AI agents and save permanently to dataset."""
+def userstorify(base_commit: str | None, head_commit: str | None, feature_id: str | None, repo_path: Path | None):
+    """Generate user stories from commits using configured AI agents and save permanently to user story collection."""
     if repo_path is None:
         repo_path = Path.cwd()
 
     llm_service = LLMService()
 
-    console.print(f"[bold]Generating user stories from {base_commit} to {head_commit}[/bold]")
+    # Handle feature ID resolution
+    if feature_id:
+        if base_commit or head_commit:
+            console.print("[red]Cannot specify both --feature-id and --base-commit/--head-commit[/red]")
+            sys.exit(1)
+
+        from slopometry.core.database import EventDatabase
+
+        db = EventDatabase()
+
+        # Use match statement with length-based strategy
+        match len(feature_id):
+            case 36:  # Full UUID4 length
+                feature = db.get_feature_boundary_by_id(feature_id, repo_path)
+                if not feature:
+                    console.print(f"[red]Feature ID not found: {feature_id}[/red]")
+                    console.print("[dim]Use 'slopometry summoner list-features' to see all available features[/dim]")
+                    sys.exit(1)
+            case length if length < 36:  # Partial ID
+                full_id = db.resolve_feature_id(feature_id, repo_path)
+                if full_id is None:
+                    console.print(f"[red]Ambiguous or not found feature ID: {feature_id}[/red]")
+                    console.print("[dim]Use 'slopometry summoner list-features' to see all available features[/dim]")
+                    sys.exit(1)
+                feature = db.get_feature_boundary_by_id(full_id, repo_path)
+            case _:  # Invalid length
+                console.print(f"[red]Invalid feature ID format: {feature_id}[/red]")
+                console.print("[dim]Feature IDs should be UUID4 format (36 chars) or partial (< 36 chars)[/dim]")
+                sys.exit(1)
+
+        base_commit = feature.base_commit
+        head_commit = feature.head_commit
+
+        console.print(f"[bold]Generating user stories for feature: {feature.short_id}[/bold]")
+        console.print(f"Feature: {feature.feature_message}")
+        console.print(f"Commits: {base_commit[:8]} → {head_commit[:8]}")
+    elif base_commit and head_commit:
+        console.print(f"[bold]Generating user stories from {base_commit} to {head_commit}[/bold]")
+    else:
+        console.print("[red]Must specify either --feature-id or both --base-commit and --head-commit[/red]")
+        console.print("[dim]Use 'slopometry summoner list-features' to see available features[/dim]")
+        sys.exit(1)
+
     console.print(f"Repository: {repo_path}")
     console.print(f"Using agents: {', '.join(llm_service.get_configured_agents())}")
 
@@ -195,9 +270,9 @@ def userstorify(base_commit: str, head_commit: str, repo_path: Path | None):
 
         if successful_generations > 0:
             console.print(
-                f"\\n[bold green]Successfully generated {successful_generations} dataset entries[/bold green]"
+                f"\\n[bold green]Successfully generated {successful_generations} user story entries[/bold green]"
             )
-            console.print("[dim]View with: slopometry dataset-entries[/dim]")
+            console.print("[dim]View with: slopometry summoner list-user-stories[/dim]")
         else:
             console.print("\\n[red]Failed to generate any user stories[/red]")
 
@@ -211,11 +286,11 @@ def userstorify(base_commit: str, head_commit: str, repo_path: Path | None):
 @click.option("--filter-model", help="Filter by specific model")
 @click.option("--unrated-only", is_flag=True, help="Show only unrated entries (rating = 3)")
 def rate_user_stories(limit: int, filter_model: str | None, unrated_only: bool):
-    """Rate existing user stories in the dataset."""
-    dataset_service = DatasetService()
+    """Rate existing user stories in the user story collection."""
+    user_story_service = UserStoryService()
 
     try:
-        filtered_entries = dataset_service.filter_entries_for_rating(limit, filter_model, unrated_only)
+        filtered_entries = user_story_service.filter_entries_for_rating(limit, filter_model, unrated_only)
 
         if not filtered_entries:
             console.print("[yellow]No entries match the specified filters[/yellow]")
@@ -272,7 +347,7 @@ def rate_user_stories(limit: int, filter_model: str | None, unrated_only: bool):
                     "Guidelines for improving (optional)", default=entry.guidelines_for_improving, show_default=False
                 )
 
-                dataset_service.rate_user_story_entry(entry, new_rating_int, guidelines)
+                user_story_service.rate_user_story_entry(entry, new_rating_int, guidelines)
                 updated_count += 1
 
                 console.print(f"[green]✓ Updated rating to {new_rating_int}/5[/green]")
@@ -321,22 +396,24 @@ def list_features(limit: int, repo_path: Path | None):
         console.print(table)
 
         console.print("\\n[dim]To analyze a feature, use:[/dim]")
-        console.print("[cyan]slopometry userstorify --base-commit <base> --head-commit <head>[/cyan]")
+        console.print("[cyan]slopometry summoner userstorify --feature-id <feature-id>[/cyan]")
+        console.print("[dim]Or with specific commits:[/dim]")
+        console.print("[cyan]slopometry summoner userstorify --base-commit <base> --head-commit <head>[/cyan]")
 
     except Exception as e:
         console.print(f"[red]Failed to list features: {e}[/red]")
         sys.exit(1)
 
 
-@summoner.command("dataset-stats")
-def dataset_stats():
-    """Show statistics about the collected diff/user story dataset."""
-    dataset_service = DatasetService()
+@summoner.command("user-story-stats")
+def user_story_stats():
+    """Show statistics about the collected user stories."""
+    user_story_service = UserStoryService()
 
     try:
-        stats = dataset_service.get_dataset_statistics()
+        stats = user_story_service.get_user_story_statistics()
 
-        console.print("[bold]Dataset Statistics[/bold]\\n")
+        console.print("[bold]User Story Statistics[/bold]\\n")
         console.print(f"Total entries: {stats['total_entries']}")
         console.print(f"Average rating: {stats['avg_rating']}/5")
         console.print(f"Unique models used: {stats['unique_models']}")
@@ -348,64 +425,64 @@ def dataset_stats():
                 console.print(f"  {rating}/5: {count} entries")
 
         if stats["total_entries"] > 0:
-            console.print("\\n[dim]Use 'slopometry dataset-entries' to view individual entries[/dim]")
+            console.print("\\n[dim]Use 'slopometry summoner list-user-stories' to view individual entries[/dim]")
 
     except Exception as e:
-        console.print(f"[red]Failed to get dataset statistics: {e}[/red]")
+        console.print(f"[red]Failed to get user story statistics: {e}[/red]")
 
 
-@summoner.command("dataset-entries")
+@summoner.command("list-user-stories")
 @click.option("--limit", "-l", default=10, help="Number of entries to show (default: 10)")
-def dataset_entries(limit: int):
-    """Show recent dataset entries."""
-    dataset_service = DatasetService()
+def list_user_stories(limit: int):
+    """Show recent user story entries."""
+    user_story_service = UserStoryService()
 
     try:
-        entries = dataset_service.get_dataset_entries(limit)
+        entries = user_story_service.get_user_story_entries(limit)
 
         if not entries:
-            console.print("[yellow]No dataset entries found[/yellow]")
+            console.print("[yellow]No user story entries found[/yellow]")
             return
 
-        entries_data = dataset_service.prepare_entries_data_for_display(entries)
-        table = create_dataset_entries_table(entries_data, len(entries))
+        entries_data = user_story_service.prepare_entries_data_for_display(entries)
+        table = create_user_story_entries_table(entries_data, len(entries))
         console.print(table)
 
     except Exception as e:
-        console.print(f"[red]Failed to get dataset entries: {e}[/red]")
+        console.print(f"[red]Failed to get user story entries: {e}[/red]")
 
 
-@summoner.command("dataset-export")
-@click.option("--output", "-o", type=click.Path(), help="Output file path (default: slopometry_dataset.parquet)")
+@summoner.command("user-story-export")
+@click.option("--output", "-o", type=click.Path(), help="Output file path (default: slopometry_user_stories.parquet)")
 @click.option("--upload-to-hf", is_flag=True, help="Upload to Hugging Face after export")
-@click.option("--hf-repo", help="Hugging Face dataset repository (e.g., username/dataset-name)")
-def dataset_export(output: str | None, upload_to_hf: bool, hf_repo: str | None):
-    """Export the dataset to Parquet format."""
-    dataset_service = DatasetService()
+@click.option("--hf-repo", help="Hugging Face user story repository (e.g., username/repository-name)")
+def user_story_export(output: str | None, upload_to_hf: bool, hf_repo: str | None):
+    """Export user stories to Parquet format."""
+    user_story_service = UserStoryService()
 
     if output is None:
-        output = "slopometry_dataset.parquet"
+        output = "slopometry_user_stories.parquet"
     output_path = Path(output)
 
     try:
-        console.print(f"[yellow]Exporting dataset to {output_path}...[/yellow]")
+        console.print(f"[yellow]Exporting user stories to {output_path}...[/yellow]")
 
         try:
-            count = dataset_service.export_dataset(output_path)
+            count = user_story_service.export_user_stories(output_path)
         except ImportError as e:
             console.print(f"[red]Missing required dependencies for export: {e}[/red]")
             console.print("Install with: pip install pandas pyarrow")
             return
 
         if count == 0:
-            console.print("[yellow]No dataset entries to export[/yellow]")
+            console.print("[yellow]No user story entries to export[/yellow]")
             return
 
         console.print(f"[green]✓ Exported {count} entries to {output_path}[/green]")
 
         if upload_to_hf:
             try:
-                hf_repo_name = dataset_service.upload_to_huggingface(output_path, hf_repo)
+                hf_repo_name = user_story_service.upload_to_huggingface(output_path, hf_repo)
                 console.print(f"\\n[yellow]Uploading to Hugging Face: {hf_repo_name}...[/yellow]")
                 console.print(
                     f"[green]✓ Successfully uploaded to https://huggingface.co/datasets/{hf_repo_name}[/green]"
@@ -416,7 +493,57 @@ def dataset_export(output: str | None, upload_to_hf: bool, hf_repo: str | None):
                 console.print(f"[red]Failed to upload to Hugging Face: {e}[/red]")
 
     except Exception as e:
-        console.print(f"[red]Failed to export dataset: {e}[/red]")
+        console.print(f"[red]Failed to export user stories: {e}[/red]")
+
+
+@summoner.command("show-user-story")
+@click.argument("entry_id", shell_complete=complete_user_story_entry_id)
+def show_user_story(entry_id: str):
+    """Show detailed information for a user story entry."""
+    from slopometry.core.database import EventDatabase
+
+    db = EventDatabase()
+
+    # Use match statement with length-based strategy like feature IDs
+    match len(entry_id):
+        case 36:  # Full UUID4 length
+            entry = db.get_user_story_entry_by_id(entry_id)
+            if not entry:
+                console.print(f"[red]User story entry not found: {entry_id}[/red]")
+                console.print("[dim]Use 'slopometry summoner list-user-stories' to see all entries[/dim]")
+                sys.exit(1)
+        case length if length < 36:  # Partial ID
+            full_id = db.resolve_user_story_entry_id(entry_id)
+            if full_id is None:
+                console.print(f"[red]Ambiguous or not found user story entry ID: {entry_id}[/red]")
+                console.print("[dim]Use 'slopometry summoner list-user-stories' to see all entries[/dim]")
+                sys.exit(1)
+            entry = db.get_user_story_entry_by_id(full_id)
+        case _:  # Invalid length
+            console.print(f"[red]Invalid user story entry ID format: {entry_id}[/red]")
+            console.print("[dim]Entry IDs should be UUID4 format (36 chars) or partial (< 36 chars)[/dim]")
+            sys.exit(1)
+
+    # Display entry details
+    console.print(f"[bold]User Story Entry: {entry.short_id}[/bold]")
+    console.print(f"Created: {entry.created_at.strftime('%Y-%m-%d %H:%M:%S')}")
+    console.print(f"Repository: {entry.repository_path}")
+    console.print(f"Model: {entry.model_used}")
+    console.print(f"Rating: {entry.rating}/5")
+    console.print(f"Commits: {entry.base_commit[:8]} → {entry.head_commit[:8]} (stride: {entry.stride_size})")
+
+    if entry.guidelines_for_improving:
+        console.print("\\n[bold]Guidelines for improving:[/bold]")
+        console.print(entry.guidelines_for_improving)
+
+    console.print("\\n[bold]Diff Content:[/bold]")
+    diff_preview = entry.diff_content[:1000]
+    if len(entry.diff_content) > 1000:
+        diff_preview += "\\n\\n... [truncated, showing first 1000 chars]"
+    console.print(f"[dim]{diff_preview}[/dim]")
+
+    console.print("\\n[bold]Generated User Stories:[/bold]")
+    console.print(entry.user_stories)
 
 
 @summoner.command("list-nfp")
