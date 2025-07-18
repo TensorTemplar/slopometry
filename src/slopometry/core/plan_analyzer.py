@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any
 
-from slopometry.models import PlanEvolution, PlanStep, TodoItem, ToolType
+from slopometry.core.models import PlanEvolution, PlanStep, TodoItem, ToolType
 
 
 class PlanAnalyzer:

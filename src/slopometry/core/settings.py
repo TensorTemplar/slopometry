@@ -61,6 +61,13 @@ class Settings(BaseSettings):
 
     llm_proxy_url: str = ""
     llm_proxy_api_key: str = ""
+    interactive_rating_enabled: bool = False
+
+    hf_token: str = ""
+    hf_default_repo: str = ""
+
+    # User story generation settings
+    user_story_agents: list[str] = ["o3", "claude-opus-4", "gemini-2.5-pro"]
 
     @field_validator("database_path", mode="before")
     @classmethod

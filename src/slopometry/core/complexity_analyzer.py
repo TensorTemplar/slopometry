@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from slopometry.models import ComplexityDelta, ComplexityMetrics, ExtendedComplexityMetrics
+from slopometry.core.models import ComplexityDelta, ComplexityMetrics, ExtendedComplexityMetrics
 
 
 class ComplexityAnalyzer:

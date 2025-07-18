@@ -1,6 +1,6 @@
 """CLI (Completeness Likelihood Improval) calculator for experiment tracking."""
 
-from slopometry.models import ExtendedComplexityMetrics
+from slopometry.core.models import ExtendedComplexityMetrics
 
 
 class CLICalculator:

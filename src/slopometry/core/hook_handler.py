@@ -5,9 +5,9 @@ import os
 import sys
 from pathlib import Path
 
-from slopometry.database import EventDatabase, SessionManager
-from slopometry.git_tracker import GitTracker
-from slopometry.models import (
+from slopometry.core.database import EventDatabase, SessionManager
+from slopometry.core.git_tracker import GitTracker
+from slopometry.core.models import (
     ComplexityDelta,
     ComplexityMetrics,
     HookEvent,
@@ -20,8 +20,8 @@ from slopometry.models import (
     SubagentStopInput,
     ToolType,
 )
-from slopometry.project_tracker import ProjectTracker
-from slopometry.settings import settings
+from slopometry.core.project_tracker import ProjectTracker
+from slopometry.core.settings import settings
 
 
 def get_tool_type(tool_name: str) -> ToolType:

@@ -5,8 +5,9 @@ import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from slopometry.models import (
+from slopometry.core.models import (
     ComplexityDelta,
+    DiffUserStoryDataset,
     ExperimentProgress,
     ExperimentRun,
     ExperimentStatus,
@@ -22,8 +23,8 @@ from slopometry.models import (
     ToolType,
     UserStory,
 )
-from slopometry.plan_analyzer import PlanAnalyzer
-from slopometry.settings import settings
+from slopometry.core.plan_analyzer import PlanAnalyzer
+from slopometry.core.settings import settings
 
 
 class EventDatabase:
@@ -172,6 +173,22 @@ class EventDatabase:
                 )
             """)
 
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS diff_user_story_dataset (
+                    id TEXT PRIMARY KEY,
+                    created_at TEXT NOT NULL,
+                    base_commit TEXT NOT NULL,
+                    head_commit TEXT NOT NULL,
+                    diff_content TEXT NOT NULL,
+                    user_stories TEXT NOT NULL,
+                    rating INTEGER NOT NULL CHECK(rating >= 1 AND rating <= 5),
+                    guidelines_for_improving TEXT NOT NULL,
+                    model_used TEXT NOT NULL,
+                    prompt_template TEXT NOT NULL,
+                    repository_path TEXT NOT NULL
+                )
+            """)
+
             # Update experiment_runs to include NFP reference
             try:
                 conn.execute("""
@@ -196,6 +213,10 @@ class EventDatabase:
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_user_stories_nfp ON user_stories(nfp_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_user_stories_priority ON user_stories(priority)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_dataset_commits ON diff_user_story_dataset(base_commit, head_commit)"
+            )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_dataset_rating ON diff_user_story_dataset(rating)")
 
             conn.commit()
 
@@ -341,7 +362,7 @@ class EventDatabase:
             stats.initial_git_state = git_events[0].git_state
             stats.final_git_state = git_events[-1].git_state
             if stats.initial_git_state and stats.final_git_state:
-                from slopometry.git_tracker import GitTracker
+                from slopometry.core.git_tracker import GitTracker
 
                 git_tracker = GitTracker()
                 stats.commits_made = git_tracker.calculate_commits_made(stats.initial_git_state, stats.final_git_state)
@@ -392,8 +413,8 @@ class EventDatabase:
         try:
             import shutil
 
-            from slopometry.complexity_analyzer import ComplexityAnalyzer
-            from slopometry.git_tracker import GitTracker
+            from slopometry.core.complexity_analyzer import ComplexityAnalyzer
+            from slopometry.core.git_tracker import GitTracker
 
             git_tracker = GitTracker(Path(working_directory))
             analyzer = ComplexityAnalyzer(working_directory=Path(working_directory))
@@ -401,11 +422,12 @@ class EventDatabase:
             complexity_delta = None
             current_basic = None
 
+            if git_tracker.has_previous_commit() and not git_tracker._has_uncommitted_changes():
+                return ExtendedComplexityMetrics(), None
+
             current_extended = analyzer.analyze_extended_complexity()
 
-            # For accurate session tracking: working directory vs HEAD
             if git_tracker.has_previous_commit():
-                # Extract HEAD (where session started)
                 baseline_dir = git_tracker.extract_files_from_commit("HEAD")
 
                 if baseline_dir:
@@ -631,7 +653,7 @@ class EventDatabase:
             if not row:
                 return None
 
-            from slopometry.models import ExtendedComplexityMetrics
+            from slopometry.core.models import ExtendedComplexityMetrics
 
             return ExperimentProgress(
                 experiment_id=row[1],
@@ -647,14 +669,12 @@ class EventDatabase:
     def create_commit_chain(self, repository_path: str, base_commit: str, head_commit: str, commit_count: int) -> int:
         """Create a commit complexity chain record."""
         with self._get_db_connection() as conn:
-            # Check if chain already exists
             existing = conn.execute(
                 "SELECT id FROM commit_complexity_chains WHERE repository_path = ? AND base_commit = ? AND head_commit = ?",
                 (repository_path, base_commit, head_commit),
             ).fetchone()
 
             if existing:
-                # Update existing record
                 conn.execute(
                     """
                     UPDATE commit_complexity_chains 
@@ -666,7 +686,6 @@ class EventDatabase:
                 conn.commit()
                 return int(existing[0])
             else:
-                # Create new record
                 cursor = conn.execute(
                     """
                     INSERT INTO commit_complexity_chains (
@@ -705,7 +724,6 @@ class EventDatabase:
     def save_nfp_objective(self, nfp: NextFeaturePrediction) -> None:
         """Save an NFP objective with its user stories."""
         with self._get_db_connection() as conn:
-            # Save NFP objective
             conn.execute(
                 """
                 INSERT OR REPLACE INTO nfp_objectives (
@@ -754,13 +772,11 @@ class EventDatabase:
     def get_nfp_objective(self, nfp_id: str) -> NextFeaturePrediction | None:
         """Get an NFP objective by ID."""
         with self._get_db_connection() as conn:
-            # Get NFP objective
             nfp_row = conn.execute("SELECT * FROM nfp_objectives WHERE id = ?", (nfp_id,)).fetchone()
 
             if not nfp_row:
                 return None
 
-            # Get user stories
             story_rows = conn.execute(
                 "SELECT * FROM user_stories WHERE nfp_id = ? ORDER BY priority, title",
                 (nfp_id,),
@@ -844,6 +860,135 @@ class EventDatabase:
             conn.commit()
 
             return bool(cursor.rowcount and cursor.rowcount > 0)
+
+    def save_dataset_entry(self, entry: DiffUserStoryDataset) -> None:
+        """Save a diff-user story dataset entry."""
+        with self._get_db_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO diff_user_story_dataset 
+                (id, created_at, base_commit, head_commit, diff_content, user_stories,
+                 rating, guidelines_for_improving, model_used, prompt_template, repository_path)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    entry.id,
+                    entry.created_at.isoformat(),
+                    entry.base_commit,
+                    entry.head_commit,
+                    entry.diff_content,
+                    entry.user_stories,
+                    entry.rating,
+                    entry.guidelines_for_improving,
+                    entry.model_used,
+                    entry.prompt_template,
+                    entry.repository_path,
+                ),
+            )
+
+    def get_dataset_entries(self, limit: int = 100) -> list[DiffUserStoryDataset]:
+        """Get dataset entries ordered by creation date."""
+        with self._get_db_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, created_at, base_commit, head_commit, diff_content, user_stories,
+                       rating, guidelines_for_improving, model_used, prompt_template, repository_path
+                FROM diff_user_story_dataset
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+
+            return [
+                DiffUserStoryDataset(
+                    id=row[0],
+                    created_at=datetime.fromisoformat(row[1]),
+                    base_commit=row[2],
+                    head_commit=row[3],
+                    diff_content=row[4],
+                    user_stories=row[5],
+                    rating=row[6],
+                    guidelines_for_improving=row[7],
+                    model_used=row[8],
+                    prompt_template=row[9],
+                    repository_path=row[10],
+                )
+                for row in rows
+            ]
+
+    def get_dataset_stats(self) -> dict:
+        """Get statistics about the dataset."""
+        with self._get_db_connection() as conn:
+            stats = conn.execute(
+                """
+                SELECT 
+                    COUNT(*) as total_entries,
+                    AVG(rating) as avg_rating,
+                    COUNT(DISTINCT model_used) as unique_models,
+                    COUNT(DISTINCT repository_path) as unique_repos
+                FROM diff_user_story_dataset
+                """
+            ).fetchone()
+
+            rating_distribution = conn.execute(
+                """
+                SELECT rating, COUNT(*) as count
+                FROM diff_user_story_dataset
+                GROUP BY rating
+                ORDER BY rating
+                """
+            ).fetchall()
+
+            return {
+                "total_entries": stats[0] or 0,
+                "avg_rating": round(stats[1] or 0, 2),
+                "unique_models": stats[2] or 0,
+                "unique_repos": stats[3] or 0,
+                "rating_distribution": {str(row[0]): row[1] for row in rating_distribution},
+            }
+
+    def export_dataset(self, output_path: Path) -> int:
+        """Export dataset to Parquet format.
+
+        Args:
+            output_path: Path for the output parquet file
+
+        Returns:
+            Number of records exported
+        """
+        try:
+            import pandas as pd
+        except ImportError:
+            raise ImportError("pandas is required for export. Install with: pip install pandas pyarrow")
+
+        entries = self.get_dataset_entries(limit=10000)  # Get all entries
+
+        if not entries:
+            return 0
+
+        data = []
+        for entry in entries:
+            data.append(
+                {
+                    "id": entry.id,
+                    "created_at": entry.created_at,
+                    "base_commit": entry.base_commit,
+                    "head_commit": entry.head_commit,
+                    "diff_content": entry.diff_content,
+                    "user_stories": entry.user_stories,
+                    "rating": entry.rating,
+                    "guidelines_for_improving": entry.guidelines_for_improving,
+                    "model_used": entry.model_used,
+                    "prompt_template": entry.prompt_template,
+                    "repository_path": entry.repository_path,
+                }
+            )
+
+        df = pd.DataFrame(data)
+        df.to_parquet(output_path, engine="pyarrow", compression="snappy")
+
+        return len(data)
 
 
 class SessionManager:

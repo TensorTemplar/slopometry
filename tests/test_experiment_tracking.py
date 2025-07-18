@@ -1,7 +1,7 @@
 """Tests for experiment tracking functionality."""
 
-from slopometry.cli_calculator import CLICalculator
-from slopometry.models import ExtendedComplexityMetrics
+from slopometry.core.models import ExtendedComplexityMetrics
+from slopometry.summoner.services.cli_calculator import CLICalculator
 
 
 class TestCLICalculator:

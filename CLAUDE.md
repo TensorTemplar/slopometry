@@ -16,11 +16,15 @@ uv sync --all-extras
 
 # Configure settings (optional)
 # For development: copy to project directory
-cp .env.example .env
+cp .env.solo.example .env  # For basic session tracking
+# OR
+cp .env.summoner.example .env  # For advanced experimentation
 
 # For global config: copy to user config directory
 mkdir -p ~/.config/slopometry
-cp .env.example ~/.config/slopometry/.env
+cp .env.solo.example ~/.config/slopometry/.env  # For basic session tracking
+# OR
+cp .env.summoner.example ~/.config/slopometry/.env  # For advanced experimentation
 ```
 
 ## Installation as uv Tool
@@ -35,12 +39,12 @@ The hook handler uses `uvx slopometry hook-handler` to execute within the tool's
 ## Key Architecture
 
 ### Core Components
-- **CLI** (`src/slopometry/cli.py`): Click-based interface with commands: install, uninstall, list, show, status
-- **Database** (`src/slopometry/database.py`): SQLite storage with platform-specific default locations
-- **Hook Handler** (`src/slopometry/hook_handler.py`): Script invoked by Claude Code hooks to capture events
-- **Models** (`src/slopometry/models.py`): Pydantic models for HookEvent, SessionStatistics
-- **Settings** (`src/slopometry/settings.py`): Pydantic-settings configuration with .env support
-- **LLM Wrapper** (`src/slopometry/llm_wrapper.py`): AI agents for analyzing git diffs and generating user stories
+- **CLI** (`src/slopometry/cli.py`): Hybrid CLI with flat core commands (install, uninstall, status, latest, shell-completion) and persona subcommands (solo, summoner)
+- **Database** (`src/slopometry/core/database.py`): SQLite storage with platform-specific default locations
+- **Hook Handler** (`src/slopometry/core/hook_handler.py`): Script invoked by Claude Code hooks to capture events
+- **Models** (`src/slopometry/core/models.py`): Pydantic models for HookEvent, SessionStatistics
+- **Settings** (`src/slopometry/core/settings.py`): Pydantic-settings configuration with .env support
+- **LLM Wrapper** (`src/slopometry/summoner/services/llm_wrapper.py`): AI agents for analyzing git diffs and generating user stories
 
 ### How It Works
 1. `slopometry install` configures Claude Code hooks in settings.json
@@ -55,6 +59,57 @@ The hook handler uses `uvx slopometry hook-handler` to execute within the tool's
 - Tool name mapping is done via `TOOL_TYPE_MAP` in hook_handler.py
 - Database uses sqlite-utils for schema-less flexibility
 - All timestamps are stored as ISO format strings
+
+## Dataset Protocol
+
+The dataset protocol automatically collects diff/user story pairs for AI training and analysis:
+
+### Automatic Collection
+- Every `summoner userstorify` call automatically saves to the dataset
+- Includes git diff, generated user stories, model used, and prompt template
+- Default rating of 3/5 for non-interactive mode
+
+### Interactive Rating (Optional)
+- Enable with `SLOPOMETRY_INTERACTIVE_RATING_ENABLED=true`
+- Prompts user to rate user stories (1-5) and provide improvement guidelines
+- Designed for human oversight and quality control
+
+### Dataset Management
+- `summoner dataset-stats`: View collection statistics and rating distribution
+- `summoner dataset-entries`: Browse recent entries with metadata
+- `summoner dataset-export`: Export dataset to Parquet format
+- All data stored in SQLite with proper indexing for performance
+
+### Export & Sharing
+Export dataset locally:
+```bash
+# Export to Parquet
+slopometry summoner dataset-export
+
+# Export with custom path
+slopometry summoner dataset-export --output my_dataset.parquet
+```
+
+Upload to Hugging Face:
+```bash
+# Export and upload in one command
+slopometry summoner dataset-export --upload-to-hf --hf-repo username/dataset-name
+
+# With configured settings (SLOPOMETRY_HF_TOKEN and SLOPOMETRY_HF_DEFAULT_REPO)
+slopometry summoner dataset-export --upload-to-hf
+```
+
+The dataset is automatically tagged with: `slopometry`, `userstorify`, `code-generation`, `user-stories`
+
+### Optional Dependencies
+For dataset export functionality:
+```bash
+# Basic export support
+uv pip install "slopometry[dataset]"
+
+# Full Hugging Face support
+uv pip install "slopometry[huggingface]"
+```
 
 ## Testing a Hook Handler Change
 
@@ -78,12 +133,18 @@ echo '{"session_id": "test123", "transcript_path": "/tmp/transcript.jsonl", "too
 The experiment tracking feature includes:
 
 ### CLI Commands
-- `run-experiments`: Run parallel experiments across commit history
-- `analyze-commits`: Analyze complexity evolution between commits  
-- `userstorify-commits`: Generate user stories from commit diffs using AI
-- `list-features`: Detect feature boundaries from merge commits
-- `list-experiments`: List all experiment runs
-- `show-experiment <id>`: Show detailed progress for an experiment
+- `summoner run-experiments`: Run parallel experiments across commit history
+- `summoner analyze-commits`: Analyze complexity evolution between commits  
+- `summoner userstorify`: Generate user stories from commit diffs using AI
+- `summoner list-features`: Detect feature boundaries from merge commits
+- `summoner dataset-stats`: Show statistics about collected diff/user story dataset
+- `summoner dataset-entries`: Show recent dataset entries
+- `summoner dataset-export`: Export dataset to Parquet with optional HF upload
+- `summoner list-experiments`: List all experiment runs
+- `summoner show-experiment <id>`: Show detailed progress for an experiment
+- `solo ls`: List recent sessions
+- `solo show <session-id>`: Show detailed session statistics
+- `latest`: Show latest session statistics
 
 ### Key Components
 - **CLI Calculator**: Measures "Completeness Likelihood Improval" (0-1.0 scale)

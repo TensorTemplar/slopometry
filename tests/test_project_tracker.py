@@ -4,8 +4,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from slopometry.models import ProjectSource
-from slopometry.project_tracker import ProjectTracker
+from slopometry.core.models import ProjectSource
+from slopometry.core.project_tracker import ProjectTracker
 
 
 @pytest.fixture
