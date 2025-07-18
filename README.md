@@ -27,7 +27,7 @@ A tool that lurks in the shadows, tracks and analyzes Claude Code sessions provi
 
 ## Installation
 
-### Install claude code
+### Install claude code (needs an account or api key)
 
 ```bash
 curl -fsSL http://claude.ai/install.sh | bash
@@ -47,6 +47,8 @@ uv tool install .
 
 ## Quick Start
 
+Note: tested on Ubuntu linux 24.04.1
+
 ```bash
 # Install hooks globally (recommended)
 slopometry install --global
@@ -61,6 +63,8 @@ slopometry solo show <session_id>
 # View latest session
 slopometry latest
 ```
+
+![slopometry-roles.png](assets/slopometry-roles.png)  
 
 ## Shell Completion
 
