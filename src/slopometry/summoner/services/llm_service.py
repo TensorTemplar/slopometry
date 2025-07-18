@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 from slopometry.core.database import EventDatabase
-from slopometry.core.models import DiffUserStoryDataset
+from slopometry.core.models import UserStoryEntry
 from slopometry.core.settings import settings
 from slopometry.summoner.services.llm_wrapper import (
     calculate_stride_size,
@@ -67,7 +67,7 @@ class LLMService:
                 try:
                     result = agent.run_sync(prompt)
 
-                    dataset_entry = DiffUserStoryDataset(
+                    user_story_entry = UserStoryEntry(
                         base_commit=resolved_base,
                         head_commit=resolved_head,
                         diff_content=diff,
@@ -80,7 +80,7 @@ class LLMService:
                         repository_path=str(repo_path),
                     )
 
-                    self.db.save_dataset_entry(dataset_entry)
+                    self.db.save_user_story_entry(user_story_entry)
                     successful_generations += 1
 
                 except Exception as e:
@@ -96,10 +96,19 @@ class LLMService:
 
     def get_feature_boundaries(self, repo_path: Path, limit: int = 20) -> list:
         """Get detected feature boundaries from merge commits."""
+        # Try to get from database first
+        cached_features = self.db.get_feature_boundaries(repo_path)
+        if cached_features:
+            return cached_features
+
+        # If not in database, detect and save them
         original_dir = os.getcwd()
         try:
             os.chdir(repo_path)
-            return get_feature_boundaries(limit=limit)
+            features = get_feature_boundaries(limit=limit)
+            if features:
+                self.db.save_feature_boundaries(features, repo_path)
+            return features
         except Exception:
             return []
         finally:
@@ -111,11 +120,18 @@ class LLMService:
         for feature in features:
             base_short = feature.base_commit[:8]
             head_short = feature.head_commit[:8]
+
+            # Get the best user story entry for this feature
+            best_entry_id = self.db.get_best_user_story_entry_for_feature(feature)
+            best_entry_short = best_entry_id[:8] if best_entry_id else "N/A"
+
             features_data.append(
                 {
+                    "feature_id": feature.short_id,
                     "feature_message": feature.feature_message,
                     "commits_display": f"{base_short} → {head_short}",
                     "merge_message": feature.merge_message,
+                    "best_entry_id": best_entry_short,
                 }
             )
         return features_data

@@ -75,28 +75,28 @@ The dataset protocol automatically collects diff/user story pairs for AI trainin
 - Designed for human oversight and quality control
 
 ### Dataset Management
-- `summoner dataset-stats`: View collection statistics and rating distribution
-- `summoner dataset-entries`: Browse recent entries with metadata
-- `summoner dataset-export`: Export dataset to Parquet format
+- `summoner user-story-stats`: View collection statistics and rating distribution
+- `summoner list-user-stories`: Browse recent entries with metadata
+- `summoner user-story-export`: Export user stories to Parquet format
 - All data stored in SQLite with proper indexing for performance
 
 ### Export & Sharing
 Export dataset locally:
 ```bash
 # Export to Parquet
-slopometry summoner dataset-export
+slopometry summoner user-story-export
 
 # Export with custom path
-slopometry summoner dataset-export --output my_dataset.parquet
+slopometry summoner user-story-export --output my_user_stories.parquet
 ```
 
 Upload to Hugging Face:
 ```bash
 # Export and upload in one command
-slopometry summoner dataset-export --upload-to-hf --hf-repo username/dataset-name
+slopometry summoner user-story-export --upload-to-hf --hf-repo username/dataset-name
 
 # With configured settings (SLOPOMETRY_HF_TOKEN and SLOPOMETRY_HF_DEFAULT_REPO)
-slopometry summoner dataset-export --upload-to-hf
+slopometry summoner user-story-export --upload-to-hf
 ```
 
 The dataset is automatically tagged with: `slopometry`, `userstorify`, `code-generation`, `user-stories`
@@ -137,9 +137,9 @@ The experiment tracking feature includes:
 - `summoner analyze-commits`: Analyze complexity evolution between commits  
 - `summoner userstorify`: Generate user stories from commit diffs using AI
 - `summoner list-features`: Detect feature boundaries from merge commits
-- `summoner dataset-stats`: Show statistics about collected diff/user story dataset
-- `summoner dataset-entries`: Show recent dataset entries
-- `summoner dataset-export`: Export dataset to Parquet with optional HF upload
+- `summoner user-story-stats`: Show statistics about collected diff/user story dataset
+- `summoner list-user-stories`: Show recent user story entries
+- `summoner user-story-export`: Export user stories to Parquet with optional HF upload
 - `summoner list-experiments`: List all experiment runs
 - `summoner show-experiment <id>`: Show detailed progress for an experiment
 - `solo ls`: List recent sessions

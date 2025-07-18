@@ -7,11 +7,11 @@ from pathlib import Path
 
 from slopometry.core.models import (
     ComplexityDelta,
-    DiffUserStoryDataset,
     ExperimentProgress,
     ExperimentRun,
     ExperimentStatus,
     ExtendedComplexityMetrics,
+    FeatureBoundary,
     GitState,
     HookEvent,
     HookEventType,
@@ -22,6 +22,7 @@ from slopometry.core.models import (
     SessionStatistics,
     ToolType,
     UserStory,
+    UserStoryEntry,
 )
 from slopometry.core.plan_analyzer import PlanAnalyzer
 from slopometry.core.settings import settings
@@ -189,6 +190,19 @@ class EventDatabase:
                 )
             """)
 
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS feature_boundaries (
+                    id TEXT PRIMARY KEY,
+                    base_commit TEXT NOT NULL,
+                    head_commit TEXT NOT NULL,
+                    merge_commit TEXT NOT NULL,
+                    merge_message TEXT NOT NULL,
+                    feature_message TEXT NOT NULL,
+                    repository_path TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+            """)
+
             # Update experiment_runs to include NFP reference
             try:
                 conn.execute("""
@@ -217,6 +231,12 @@ class EventDatabase:
                 "CREATE INDEX IF NOT EXISTS idx_dataset_commits ON diff_user_story_dataset(base_commit, head_commit)"
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_dataset_rating ON diff_user_story_dataset(rating)")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_feature_boundaries_repo ON feature_boundaries(repository_path)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_feature_boundaries_commits ON feature_boundaries(base_commit, head_commit)"
+            )
 
             conn.commit()
 
@@ -861,8 +881,8 @@ class EventDatabase:
 
             return bool(cursor.rowcount and cursor.rowcount > 0)
 
-    def save_dataset_entry(self, entry: DiffUserStoryDataset) -> None:
-        """Save a diff-user story dataset entry."""
+    def save_user_story_entry(self, entry: UserStoryEntry) -> None:
+        """Save a user story entry."""
         with self._get_db_connection() as conn:
             conn.execute(
                 """
@@ -886,8 +906,8 @@ class EventDatabase:
                 ),
             )
 
-    def get_dataset_entries(self, limit: int = 100) -> list[DiffUserStoryDataset]:
-        """Get dataset entries ordered by creation date."""
+    def get_user_story_entries(self, limit: int = 100) -> list[UserStoryEntry]:
+        """Get user story entries ordered by creation date."""
         with self._get_db_connection() as conn:
             rows = conn.execute(
                 """
@@ -901,7 +921,7 @@ class EventDatabase:
             ).fetchall()
 
             return [
-                DiffUserStoryDataset(
+                UserStoryEntry(
                     id=row[0],
                     created_at=datetime.fromisoformat(row[1]),
                     base_commit=row[2],
@@ -917,8 +937,8 @@ class EventDatabase:
                 for row in rows
             ]
 
-    def get_dataset_stats(self) -> dict:
-        """Get statistics about the dataset."""
+    def get_user_story_stats(self) -> dict:
+        """Get statistics about the user story entries."""
         with self._get_db_connection() as conn:
             stats = conn.execute(
                 """
@@ -948,8 +968,8 @@ class EventDatabase:
                 "rating_distribution": {str(row[0]): row[1] for row in rating_distribution},
             }
 
-    def export_dataset(self, output_path: Path) -> int:
-        """Export dataset to Parquet format.
+    def export_user_stories(self, output_path: Path) -> int:
+        """Export user story entries to Parquet format.
 
         Args:
             output_path: Path for the output parquet file
@@ -962,7 +982,7 @@ class EventDatabase:
         except ImportError:
             raise ImportError("pandas is required for export. Install with: pip install pandas pyarrow")
 
-        entries = self.get_dataset_entries(limit=10000)  # Get all entries
+        entries = self.get_user_story_entries(limit=10000)  # Get all entries
 
         if not entries:
             return 0
@@ -989,6 +1009,190 @@ class EventDatabase:
         df.to_parquet(output_path, engine="pyarrow", compression="snappy")
 
         return len(data)
+
+    def get_user_story_entry_by_id(self, entry_id: str) -> UserStoryEntry | None:
+        """Get a specific user story entry by ID."""
+        with self._get_db_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT id, created_at, base_commit, head_commit, diff_content, user_stories,
+                       rating, guidelines_for_improving, model_used, prompt_template, repository_path
+                FROM diff_user_story_dataset
+                WHERE id = ?
+                """,
+                (entry_id,),
+            ).fetchone()
+
+            if row:
+                return UserStoryEntry(
+                    id=row[0],
+                    created_at=datetime.fromisoformat(row[1]),
+                    base_commit=row[2],
+                    head_commit=row[3],
+                    diff_content=row[4],
+                    user_stories=row[5],
+                    rating=row[6],
+                    guidelines_for_improving=row[7],
+                    model_used=row[8],
+                    prompt_template=row[9],
+                    repository_path=row[10],
+                )
+            return None
+
+    def resolve_user_story_entry_id(self, short_id: str) -> str | None:
+        """Resolve a short user story entry ID (first 8 chars) to the full ID."""
+        with self._get_db_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT id FROM diff_user_story_dataset
+                WHERE id LIKE ?
+                """,
+                (f"{short_id}%",),
+            ).fetchall()
+
+            if len(rows) == 1:
+                return rows[0][0]
+            elif len(rows) > 1:
+                # Multiple matches, return None to indicate ambiguity
+                return None
+            else:
+                # No matches
+                return None
+
+    def get_user_story_entry_ids_for_completion(self) -> list[str]:
+        """Get all user story entry IDs for tab completion."""
+        with self._get_db_connection() as conn:
+            rows = conn.execute("SELECT id FROM diff_user_story_dataset").fetchall()
+            return [row[0] for row in rows]
+
+    def save_feature_boundaries(self, features: list[FeatureBoundary], repository_path: Path) -> None:
+        """Save feature boundaries to the database."""
+        with self._get_db_connection() as conn:
+            # Clear existing features for this repository
+            conn.execute("DELETE FROM feature_boundaries WHERE repository_path = ?", (repository_path.as_posix(),))
+
+            # Insert new features
+            for feature in features:
+                conn.execute(
+                    """
+                    INSERT INTO feature_boundaries (
+                        id, base_commit, head_commit, merge_commit, merge_message,
+                        feature_message, repository_path, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        feature.id,
+                        feature.base_commit,
+                        feature.head_commit,
+                        feature.merge_commit,
+                        feature.merge_message,
+                        feature.feature_message,
+                        repository_path.as_posix(),
+                        datetime.now().isoformat(),
+                    ),
+                )
+            conn.commit()
+
+    def get_feature_boundaries(self, repository_path: Path) -> list[FeatureBoundary]:
+        """Get all feature boundaries for a repository."""
+        with self._get_db_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, base_commit, head_commit, merge_commit, merge_message, feature_message
+                FROM feature_boundaries
+                WHERE repository_path = ?
+                ORDER BY created_at DESC
+                """,
+                (repository_path.as_posix(),),
+            ).fetchall()
+
+            return [
+                FeatureBoundary(
+                    id=row[0],
+                    base_commit=row[1],
+                    head_commit=row[2],
+                    merge_commit=row[3],
+                    merge_message=row[4],
+                    feature_message=row[5],
+                    repository_path=repository_path,
+                )
+                for row in rows
+            ]
+
+    def get_feature_boundary_by_id(self, feature_id: str, repository_path: Path) -> FeatureBoundary | None:
+        """Get a specific feature boundary by ID."""
+        with self._get_db_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT id, base_commit, head_commit, merge_commit, merge_message, feature_message
+                FROM feature_boundaries
+                WHERE id = ? AND repository_path = ?
+                """,
+                (feature_id, repository_path.as_posix()),
+            ).fetchone()
+
+            if row:
+                return FeatureBoundary(
+                    id=row[0],
+                    base_commit=row[1],
+                    head_commit=row[2],
+                    merge_commit=row[3],
+                    merge_message=row[4],
+                    feature_message=row[5],
+                    repository_path=repository_path,
+                )
+            return None
+
+    def resolve_feature_id(self, short_id: str, repository_path: Path) -> str | None:
+        """Resolve a short feature ID (first 8 chars) to the full ID."""
+        with self._get_db_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT id FROM feature_boundaries
+                WHERE id LIKE ? AND repository_path = ?
+                """,
+                (f"{short_id}%", repository_path.as_posix()),
+            ).fetchall()
+
+            if len(rows) == 1:
+                return rows[0][0]
+            elif len(rows) > 1:
+                # Multiple matches, return None to indicate ambiguity
+                return None
+            else:
+                # No matches
+                return None
+
+    def get_feature_ids_for_completion(self, repository_path: Path) -> list[str]:
+        """Get all feature IDs for tab completion."""
+        with self._get_db_connection() as conn:
+            rows = conn.execute(
+                "SELECT id FROM feature_boundaries WHERE repository_path = ?",
+                (repository_path.as_posix(),),
+            ).fetchall()
+
+            return [row[0] for row in rows]
+
+    def get_best_user_story_entry_for_feature(self, feature: FeatureBoundary) -> str | None:
+        """Get the best user story entry ID for a feature based on commit matching.
+
+        Returns the entry with highest rating, or if tied, the newest by created_at.
+        """
+        with self._get_db_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, rating, created_at
+                FROM diff_user_story_dataset
+                WHERE base_commit = ? AND head_commit = ?
+                ORDER BY rating DESC, created_at DESC
+                LIMIT 1
+                """,
+                (feature.base_commit, feature.head_commit),
+            ).fetchall()
+
+            if rows:
+                return rows[0][0]  # Return the entry ID
+            return None
 
 
 class SessionManager:

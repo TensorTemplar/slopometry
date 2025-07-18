@@ -426,15 +426,22 @@ class MergeCommit(BaseModel):
 class FeatureBoundary(BaseModel):
     """Represents a feature's boundary commits."""
 
+    id: str = Field(default_factory=lambda: str(uuid4()), description="Unique identifier for the feature")
     base_commit: str = Field(description="Common ancestor of the merge")
     head_commit: str = Field(description="Feature branch tip commit")
     merge_commit: str = Field(description="The merge commit hash")
     merge_message: str = Field(description="Message from the merge commit")
     feature_message: str = Field(description="Message from the feature branch tip")
+    repository_path: Path = Field(description="Path to the repository this feature belongs to")
+
+    @property
+    def short_id(self) -> str:
+        """Get the first 8 characters of the feature ID for display."""
+        return self.id[:8]
 
 
-class DiffUserStoryDataset(BaseModel):
-    """Dataset entry for diff <> user story pairs with ratings."""
+class UserStoryEntry(BaseModel):
+    """User story entry for diff <> user story pairs with ratings."""
 
     id: str = Field(default_factory=lambda: str(uuid4()))
     created_at: datetime = Field(default_factory=datetime.now)
@@ -456,3 +463,8 @@ class DiffUserStoryDataset(BaseModel):
     model_used: str = Field(default="o3", description="Model used for generation")
     prompt_template: str = Field(default="", description="Template used for prompt")
     repository_path: str = Field(default="", description="Repository path")
+
+    @property
+    def short_id(self) -> str:
+        """Get the first 8 characters of the user story entry ID for display."""
+        return self.id[:8]

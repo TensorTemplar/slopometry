@@ -327,9 +327,10 @@ def create_experiment_table(experiments_data) -> Table:
     return table
 
 
-def create_dataset_entries_table(entries_data, count: int) -> Table:
-    """Create a Rich table for displaying dataset entries."""
-    table = Table(title=f"Recent Dataset Entries (showing {count})")
+def create_user_story_entries_table(entries_data, count: int) -> Table:
+    """Create a Rich table for displaying user story entries."""
+    table = Table(title=f"Recent User Story Entries (showing {count})")
+    table.add_column("Entry ID", style="blue", no_wrap=True, width=10)
     table.add_column("Date", style="cyan")
     table.add_column("Commits", style="green")
     table.add_column("Rating", style="yellow")
@@ -338,6 +339,7 @@ def create_dataset_entries_table(entries_data, count: int) -> Table:
 
     for entry_data in entries_data:
         table.add_row(
+            entry_data["entry_id"],
             entry_data["date"],
             entry_data["commits"],
             entry_data["rating"],
@@ -374,12 +376,20 @@ def create_nfp_objectives_table(objectives_data) -> Table:
 def create_features_table(features_data) -> Table:
     """Create a Rich table for displaying detected features."""
     table = Table(title="Detected Features", show_lines=True)
+    table.add_column("Feature ID", style="blue", no_wrap=True, width=10)
     table.add_column("Feature", style="cyan", no_wrap=False)
     table.add_column("Base → Head", style="green")
+    table.add_column("Best Story", style="magenta", no_wrap=True, width=10)
     table.add_column("Merge Message", style="yellow", no_wrap=False)
 
     for feature_data in features_data:
-        table.add_row(feature_data["feature_message"], feature_data["commits_display"], feature_data["merge_message"])
+        table.add_row(
+            feature_data["feature_id"],
+            feature_data["feature_message"],
+            feature_data["commits_display"],
+            feature_data["best_entry_id"],
+            feature_data["merge_message"],
+        )
 
     return table
 

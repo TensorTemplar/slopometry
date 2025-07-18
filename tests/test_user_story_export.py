@@ -1,22 +1,22 @@
-"""Test dataset export functionality."""
+"""Test user story export functionality."""
 
 import tempfile
 from pathlib import Path
 
 from slopometry.core.database import EventDatabase
-from slopometry.core.models import DiffUserStoryDataset
+from slopometry.core.models import UserStoryEntry
 
 
-def test_dataset_export_functionality():
-    """Test exporting dataset with existing or minimal test data."""
+def test_user_story_export_functionality():
+    """Test exporting user stories with existing or minimal test data."""
     db = EventDatabase()
 
-    # Check if we have existing dataset entries
-    stats = db.get_dataset_stats()
+    # Check if we have existing user story entries
+    stats = db.get_user_story_stats()
 
     if stats["total_entries"] == 0:
         # Create a minimal test entry if none exist
-        test_entry = DiffUserStoryDataset(
+        test_entry = UserStoryEntry(
             base_commit="test-base",
             head_commit="test-head",
             diff_content="diff --git a/test.py b/test.py\n+def hello():\n+    print('world')",
@@ -27,15 +27,15 @@ def test_dataset_export_functionality():
             prompt_template="Test prompt template",
             repository_path=str(Path.cwd()),
         )
-        db.save_dataset_entry(test_entry)
+        db.save_user_story_entry(test_entry)
 
     # Test export functionality
     with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp:
         output_path = Path(tmp.name)
 
     try:
-        # Export the dataset
-        count = db.export_dataset(output_path)
+        # Export the user stories
+        count = db.export_user_stories(output_path)
 
         # Verify export worked
         assert count >= 1, f"Expected at least 1 entry, got {count}"
@@ -77,12 +77,12 @@ def test_dataset_export_functionality():
             output_path.unlink()
 
 
-def test_dataset_stats():
-    """Test dataset statistics calculation."""
+def test_user_story_stats():
+    """Test user story statistics calculation."""
     db = EventDatabase()
 
     # Get stats (should have entries from previous test or real usage)
-    stats = db.get_dataset_stats()
+    stats = db.get_user_story_stats()
 
     assert stats["total_entries"] >= 0
     assert "avg_rating" in stats
@@ -91,8 +91,8 @@ def test_dataset_stats():
     assert "rating_distribution" in stats
 
 
-def test_dataset_generation_cli_integration():
-    """Test that the CLI command for generating dataset entries works."""
+def test_user_story_generation_cli_integration():
+    """Test that the CLI command for generating user story entries works."""
     from click.testing import CliRunner
 
     from slopometry.cli import cli
