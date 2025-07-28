@@ -62,6 +62,10 @@ slopometry solo show <session_id>
 
 # View latest session
 slopometry latest
+
+# Copy the claude code transcript and git add it (saved to .slopometry/ directory in the session's project)
+slopometry solo save-transcript  # latest
+slopometry solo save-transcript <session_id>
 ```
 
 ![slopometry-roles.png](assets/slopometry-roles.png)  
@@ -227,6 +231,8 @@ uv sync --extra dev
 - `slopometry solo ls [--limit N]` - List recent sessions
 - `slopometry solo show <session-id>` - Show detailed session statistics
 - `slopometry latest` - Show latest session statistics
+- `slopometry solo save-transcript [session-id]` - Save Claude Code transcript to .slopometry/ directory and git add it (defaults to latest session)
+- `slopometry solo migrations` - Show database migration status
 
 ### Dataset Generation & Export
 - `slopometry summoner userstorify [--base-commit] [--head-commit]` - Generate user stories using multiple AI models

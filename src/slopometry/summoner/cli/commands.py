@@ -21,7 +21,7 @@ from slopometry.summoner.services.user_story_service import UserStoryService
 console = Console()
 
 
-def complete_experiment_id(ctx, param, incomplete):
+def complete_experiment_id(ctx: click.Context, param: click.Parameter, incomplete: str) -> list[str]:
     """Complete experiment IDs from the database."""
     try:
         experiment_service = ExperimentService()
@@ -31,7 +31,7 @@ def complete_experiment_id(ctx, param, incomplete):
         return []
 
 
-def complete_nfp_id(ctx, param, incomplete):
+def complete_nfp_id(ctx: click.Context, param: click.Parameter, incomplete: str) -> list[str]:
     """Complete NFP objective IDs from the database."""
     try:
         nfp_service = NFPService()
@@ -41,7 +41,7 @@ def complete_nfp_id(ctx, param, incomplete):
         return []
 
 
-def complete_feature_id(ctx, param, incomplete):
+def complete_feature_id(ctx: click.Context, param: click.Parameter, incomplete: str) -> list[str]:
     """Complete feature IDs from the database."""
     try:
         from pathlib import Path
@@ -56,7 +56,7 @@ def complete_feature_id(ctx, param, incomplete):
         return []
 
 
-def complete_user_story_entry_id(ctx, param, incomplete):
+def complete_user_story_entry_id(ctx: click.Context, param: click.Parameter, incomplete: str) -> list[str]:
     """Complete user story entry IDs from the database."""
     try:
         from slopometry.core.database import EventDatabase
@@ -69,7 +69,7 @@ def complete_user_story_entry_id(ctx, param, incomplete):
 
 
 @click.group()
-def summoner():
+def summoner() -> None:
     """Summoner commands for advanced experimentation and AI integration."""
     pass
 
@@ -83,7 +83,7 @@ def summoner():
     type=click.Path(exists=True, path_type=Path),
     help="Repository path (default: current directory)",
 )
-def run_experiments(commits: int, max_workers: int, repo_path: Path | None):
+def run_experiments(commits: int, max_workers: int, repo_path: Path | None) -> None:
     """Run parallel experiments across git commits to track and analyze code complexity evolution patterns."""
     if repo_path is None:
         repo_path = Path.cwd()
@@ -96,7 +96,7 @@ def run_experiments(commits: int, max_workers: int, repo_path: Path | None):
     try:
         experiments = experiment_service.run_parallel_experiments(repo_path, commits, max_workers)
 
-        console.print(f"\\n[green]✓ Completed {len(experiments)} experiments[/green]")
+        console.print(f"\n[green]✓ Completed {len(experiments)} experiments[/green]")
 
         for experiment in experiments.values():
             status_color = "green" if experiment.status.value == "completed" else "red"
@@ -118,7 +118,7 @@ def run_experiments(commits: int, max_workers: int, repo_path: Path | None):
     type=click.Path(exists=True, path_type=Path),
     help="Repository path (default: current directory)",
 )
-def analyze_commits(base_commit: str, head_commit: str, repo_path: Path | None):
+def analyze_commits(base_commit: str, head_commit: str, repo_path: Path | None) -> None:
     """Analyze complexity evolution across a chain of commits."""
     if repo_path is None:
         repo_path = Path.cwd()
@@ -130,7 +130,7 @@ def analyze_commits(base_commit: str, head_commit: str, repo_path: Path | None):
 
     try:
         experiment_service.analyze_commit_chain(repo_path, base_commit, head_commit)
-        console.print("\\n[green]✓ Analysis complete[/green]")
+        console.print("\n[green]✓ Analysis complete[/green]")
 
     except Exception as e:
         console.print(f"[red]Failed to analyze commits: {e}[/red]")
@@ -138,7 +138,7 @@ def analyze_commits(base_commit: str, head_commit: str, repo_path: Path | None):
 
 
 @summoner.command("list-experiments")
-def list_experiments():
+def list_experiments() -> None:
     """List all experiment runs."""
     experiment_service = ExperimentService()
     experiments_data = experiment_service.list_experiments()
@@ -153,7 +153,7 @@ def list_experiments():
 
 @summoner.command("show-experiment")
 @click.argument("experiment_id", shell_complete=complete_experiment_id)
-def show_experiment(experiment_id: str):
+def show_experiment(experiment_id: str) -> None:
     """Show detailed progress for an experiment."""
     experiment_service = ExperimentService()
 
@@ -177,7 +177,7 @@ def show_experiment(experiment_id: str):
         # Show final score
         final_row = progress_rows[-1]
         final_cli = final_row[1]
-        console.print(f"\\n[bold]Final CLI Score: {final_cli:.3f}[/bold]")
+        console.print(f"\n[bold]Final CLI Score: {final_cli:.3f}[/bold]")
     else:
         console.print("[yellow]No progress data found[/yellow]")
 
@@ -197,7 +197,9 @@ def show_experiment(experiment_id: str):
     type=click.Path(exists=True, path_type=Path),
     help="Repository path (default: current directory)",
 )
-def userstorify(base_commit: str | None, head_commit: str | None, feature_id: str | None, repo_path: Path | None):
+def userstorify(
+    base_commit: str | None, head_commit: str | None, feature_id: str | None, repo_path: Path | None
+) -> None:
     """Generate user stories from commits using configured AI agents and save permanently to user story collection."""
     if repo_path is None:
         repo_path = Path.cwd()
@@ -253,12 +255,12 @@ def userstorify(base_commit: str | None, head_commit: str | None, feature_id: st
     # Get commit info for display
     commit_info = llm_service.get_commit_info_for_display(base_commit, head_commit)
 
-    console.print("\\n[yellow]Resolving commit references...[/yellow]")
+    console.print("\n[yellow]Resolving commit references...[/yellow]")
     console.print(f"Base: {commit_info['base_display']}")
     console.print(f"Head: {commit_info['head_display']}")
     console.print(f"Stride size: {commit_info['stride_size']} commits")
 
-    console.print("\\n[yellow]Fetching commit diff...[/yellow]")
+    console.print("\n[yellow]Fetching commit diff...[/yellow]")
 
     try:
         successful_generations, error_messages = llm_service.generate_user_stories_from_commits(
@@ -270,11 +272,11 @@ def userstorify(base_commit: str | None, head_commit: str | None, feature_id: st
 
         if successful_generations > 0:
             console.print(
-                f"\\n[bold green]Successfully generated {successful_generations} user story entries[/bold green]"
+                f"\n[bold green]Successfully generated {successful_generations} user story entries[/bold green]"
             )
             console.print("[dim]View with: slopometry summoner list-user-stories[/dim]")
         else:
-            console.print("\\n[red]Failed to generate any user stories[/red]")
+            console.print("\n[red]Failed to generate any user stories[/red]")
 
     except Exception as e:
         console.print(f"[red]Failed to generate user stories: {e}[/red]")
@@ -285,7 +287,7 @@ def userstorify(base_commit: str | None, head_commit: str | None, feature_id: st
 @click.option("--limit", "-l", default=10, help="Number of entries to show for rating (default: 10)")
 @click.option("--filter-model", help="Filter by specific model")
 @click.option("--unrated-only", is_flag=True, help="Show only unrated entries (rating = 3)")
-def rate_user_stories(limit: int, filter_model: str | None, unrated_only: bool):
+def rate_user_stories(limit: int, filter_model: str | None, unrated_only: bool) -> None:
     """Rate existing user stories in the user story collection."""
     user_story_service = UserStoryService()
 
@@ -305,7 +307,7 @@ def rate_user_stories(limit: int, filter_model: str | None, unrated_only: bool):
         updated_count = 0
 
         for i, entry in enumerate(filtered_entries, 1):
-            console.print(f"\\n[bold cyan]Entry {i}/{len(filtered_entries)}[/bold cyan]")
+            console.print(f"\n[bold cyan]Entry {i}/{len(filtered_entries)}[/bold cyan]")
             console.print(f"[dim]ID: {entry.id}[/dim]")
             console.print(f"[dim]Created: {entry.created_at.strftime('%Y-%m-%d %H:%M')}[/dim]")
             console.print(f"[dim]Model: {entry.model_used}[/dim]")
@@ -314,13 +316,13 @@ def rate_user_stories(limit: int, filter_model: str | None, unrated_only: bool):
             )
             console.print(f"[dim]Current rating: {entry.rating}/5[/dim]")
 
-            console.print("\\n[bold]Diff Preview:[/bold]")
+            console.print("\n[bold]Diff Preview:[/bold]")
             diff_preview = entry.diff_content[:500]
             if len(entry.diff_content) > 500:
                 diff_preview += "... [truncated]"
             console.print(f"[dim]{diff_preview}[/dim]")
 
-            console.print("\\n[bold]Generated User Stories:[/bold]")
+            console.print("\n[bold]Generated User Stories:[/bold]")
             stories_preview = entry.user_stories[:1000]
             if len(entry.user_stories) > 1000:
                 stories_preview += "... [truncated]"
@@ -328,7 +330,7 @@ def rate_user_stories(limit: int, filter_model: str | None, unrated_only: bool):
 
             try:
                 new_rating = click.prompt(
-                    f"\\nRate this user story generation (1-5, current: {entry.rating}, 's' to skip, 'q' to quit)",
+                    f"\nRate this user story generation (1-5, current: {entry.rating}, 's' to skip, 'q' to quit)",
                     type=str,
                 )
 
@@ -356,7 +358,7 @@ def rate_user_stories(limit: int, filter_model: str | None, unrated_only: bool):
                 console.print("[yellow]Invalid input, skipping[/yellow]")
                 continue
 
-        console.print(f"\\n[bold green]Updated {updated_count} entries[/bold green]")
+        console.print(f"\n[bold green]Updated {updated_count} entries[/bold green]")
 
     except Exception as e:
         console.print(f"[red]Failed to rate user stories: {e}[/red]")
@@ -375,7 +377,7 @@ def rate_user_stories(limit: int, filter_model: str | None, unrated_only: bool):
     type=click.Path(exists=True, path_type=Path),
     help="Repository path (default: current directory)",
 )
-def list_features(limit: int, repo_path: Path | None):
+def list_features(limit: int, repo_path: Path | None) -> None:
     """List detected feature boundaries from merge commits."""
     if repo_path is None:
         repo_path = Path.cwd()
@@ -395,7 +397,7 @@ def list_features(limit: int, repo_path: Path | None):
         table = create_features_table(features_data)
         console.print(table)
 
-        console.print("\\n[dim]To analyze a feature, use:[/dim]")
+        console.print("\n[dim]To analyze a feature, use:[/dim]")
         console.print("[cyan]slopometry summoner userstorify --feature-id <feature-id>[/cyan]")
         console.print("[dim]Or with specific commits:[/dim]")
         console.print("[cyan]slopometry summoner userstorify --base-commit <base> --head-commit <head>[/cyan]")
@@ -406,26 +408,26 @@ def list_features(limit: int, repo_path: Path | None):
 
 
 @summoner.command("user-story-stats")
-def user_story_stats():
+def user_story_stats() -> None:
     """Show statistics about the collected user stories."""
     user_story_service = UserStoryService()
 
     try:
         stats = user_story_service.get_user_story_statistics()
 
-        console.print("[bold]User Story Statistics[/bold]\\n")
+        console.print("[bold]User Story Statistics[/bold]\n")
         console.print(f"Total entries: {stats.total_entries}")
         console.print(f"Average rating: {stats.avg_rating}/5")
         console.print(f"Unique models used: {stats.unique_models}")
         console.print(f"Unique repositories: {stats.unique_repos}")
 
         if stats.rating_distribution:
-            console.print("\\n[bold]Rating Distribution:[/bold]")
+            console.print("\n[bold]Rating Distribution:[/bold]")
             for rating, count in stats.rating_distribution.items():
                 console.print(f"  {rating}/5: {count} entries")
 
         if stats.total_entries > 0:
-            console.print("\\n[dim]Use 'slopometry summoner list-user-stories' to view individual entries[/dim]")
+            console.print("\n[dim]Use 'slopometry summoner list-user-stories' to view individual entries[/dim]")
 
     except Exception as e:
         console.print(f"[red]Failed to get user story statistics: {e}[/red]")
@@ -433,7 +435,7 @@ def user_story_stats():
 
 @summoner.command("list-user-stories")
 @click.option("--limit", "-l", default=10, help="Number of entries to show (default: 10)")
-def list_user_stories(limit: int):
+def list_user_stories(limit: int) -> None:
     """Show recent user story entries."""
     user_story_service = UserStoryService()
 
@@ -456,7 +458,7 @@ def list_user_stories(limit: int):
 @click.option("--output", "-o", type=click.Path(), help="Output file path (default: slopometry_user_stories.parquet)")
 @click.option("--upload-to-hf", is_flag=True, help="Upload to Hugging Face after export")
 @click.option("--hf-repo", help="Hugging Face user story repository (e.g., username/repository-name)")
-def user_story_export(output: str | None, upload_to_hf: bool, hf_repo: str | None):
+def user_story_export(output: str | None, upload_to_hf: bool, hf_repo: str | None) -> None:
     """Export user stories to Parquet format."""
     user_story_service = UserStoryService()
 
@@ -483,7 +485,7 @@ def user_story_export(output: str | None, upload_to_hf: bool, hf_repo: str | Non
         if upload_to_hf:
             try:
                 hf_repo_name = user_story_service.upload_to_huggingface(output_path, hf_repo)
-                console.print(f"\\n[yellow]Uploading to Hugging Face: {hf_repo_name}...[/yellow]")
+                console.print(f"\n[yellow]Uploading to Hugging Face: {hf_repo_name}...[/yellow]")
                 console.print(
                     f"[green]✓ Successfully uploaded to https://huggingface.co/datasets/{hf_repo_name}[/green]"
                 )
@@ -498,7 +500,7 @@ def user_story_export(output: str | None, upload_to_hf: bool, hf_repo: str | Non
 
 @summoner.command("show-user-story")
 @click.argument("entry_id", shell_complete=complete_user_story_entry_id)
-def show_user_story(entry_id: str):
+def show_user_story(entry_id: str) -> None:
     """Show detailed information for a user story entry."""
     from slopometry.core.database import EventDatabase
 
@@ -533,13 +535,13 @@ def show_user_story(entry_id: str):
     console.print(f"Commits: {entry.base_commit[:8]} → {entry.head_commit[:8]} (stride: {entry.stride_size})")
 
     if entry.guidelines_for_improving:
-        console.print("\\n[bold]Guidelines for improving:[/bold]")
+        console.print("\n[bold]Guidelines for improving:[/bold]")
         console.print(entry.guidelines_for_improving)
 
-    console.print("\\n[bold]Diff Content:[/bold]")
+    console.print("\n[bold]Diff Content:[/bold]")
     diff_preview = entry.diff_content[:1000]
     if len(entry.diff_content) > 1000:
-        diff_preview += "\\n\\n... [truncated, showing first 1000 chars]"
+        diff_preview += "\n\n... [truncated, showing first 1000 chars]"
     console.print(f"[dim]{diff_preview}[/dim]")
 
     console.print("\\n[bold]Generated User Stories:[/bold]")
@@ -548,7 +550,7 @@ def show_user_story(entry_id: str):
 
 @summoner.command("list-nfp")
 @click.option("--repo-path", "-r", type=click.Path(exists=True, path_type=Path), help="Repository path filter")
-def list_nfp(repo_path: Path | None):
+def list_nfp(repo_path: Path | None) -> None:
     """List all NFP objectives."""
     nfp_service = NFPService()
 
@@ -570,7 +572,7 @@ def list_nfp(repo_path: Path | None):
 
 @summoner.command("show-nfp")
 @click.argument("nfp_id", shell_complete=complete_nfp_id)
-def show_nfp(nfp_id: str):
+def show_nfp(nfp_id: str) -> None:
     """Show detailed information for an NFP objective."""
     nfp_service = NFPService()
 
@@ -590,13 +592,13 @@ def show_nfp(nfp_id: str):
         console.print(f"Updated: {summary['updated_at']}")
 
         if nfp.user_stories:
-            console.print(f"\\n[bold]User Stories ({len(nfp.user_stories)})[/bold]")
+            console.print(f"\n[bold]User Stories ({len(nfp.user_stories)})[/bold]")
 
             for priority in range(1, 6):
                 stories = nfp_service.get_stories_by_priority(nfp, priority)
                 if stories:
                     priority_name = nfp_service.get_priority_name(priority)
-                    console.print(f"\\n[bold]Priority {priority} ({priority_name})[/bold]")
+                    console.print(f"\n[bold]Priority {priority} ({priority_name})[/bold]")
 
                     for story in stories:
                         console.print(f"  • [cyan]{story.title}[/cyan]")
@@ -608,9 +610,9 @@ def show_nfp(nfp_id: str):
                         console.print(f"    Complexity: {story.estimated_complexity}")
                         console.print("")
         else:
-            console.print("\\n[yellow]No user stories defined[/yellow]")
+            console.print("\n[yellow]No user stories defined[/yellow]")
 
-        console.print("\\n[bold]Summary[/bold]")
+        console.print("\n[bold]Summary[/bold]")
         console.print(f"Total Stories: {summary['story_count']}")
         console.print(f"Total Estimated Complexity: {summary['total_estimated_complexity']}")
         console.print(f"High Priority Stories: {summary['high_priority_stories_count']}")
@@ -622,7 +624,7 @@ def show_nfp(nfp_id: str):
 @summoner.command("delete-nfp")
 @click.argument("nfp_id", shell_complete=complete_nfp_id)
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt")
-def delete_nfp(nfp_id: str, yes: bool):
+def delete_nfp(nfp_id: str, yes: bool) -> None:
     """Delete an NFP objective and all its user stories."""
     nfp_service = NFPService()
 

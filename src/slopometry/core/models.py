@@ -104,6 +104,7 @@ class HookEvent(BaseModel):
     git_state: GitState | None = None
     working_directory: str
     project: Project | None = None
+    transcript_path: str | None = None
 
 
 class ComplexityMetrics(BaseModel):
@@ -203,6 +204,7 @@ class SessionStatistics(BaseModel):
     complexity_delta: ComplexityDelta | None = None
     plan_evolution: PlanEvolution | None = None
     project: Project | None = None
+    transcript_path: str | None = None
 
 
 class PreToolUseInput(BaseModel):

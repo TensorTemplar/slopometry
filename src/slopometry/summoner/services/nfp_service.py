@@ -1,6 +1,7 @@
 """NFP (Next Feature Prediction) service for summoner features."""
 
 from slopometry.core.database import EventDatabase
+from slopometry.core.models import NextFeaturePrediction
 
 
 class NFPService:
@@ -9,14 +10,14 @@ class NFPService:
     def __init__(self, db: EventDatabase | None = None):
         self.db = db or EventDatabase()
 
-    def list_nfp_objectives(self, repo_filter: str | None = None) -> list:
+    def list_nfp_objectives(self, repo_filter: str | None = None) -> list[NextFeaturePrediction]:
         """List all NFP objectives, optionally filtered by repository."""
         try:
             return self.db.list_nfp_objectives(repo_filter)
         except Exception:
             return []
 
-    def get_nfp_objective(self, nfp_id: str):
+    def get_nfp_objective(self, nfp_id: str) -> NextFeaturePrediction | None:
         """Get detailed information for an NFP objective."""
         try:
             return self.db.get_nfp_objective(nfp_id)
@@ -30,7 +31,7 @@ class NFPService:
         except Exception:
             return False
 
-    def prepare_objectives_data_for_display(self, objectives: list) -> list[dict]:
+    def prepare_objectives_data_for_display(self, objectives: list[NextFeaturePrediction]) -> list[dict]:
         """Prepare NFP objectives data for display formatting."""
         objectives_data = []
         for nfp in objectives:
@@ -46,7 +47,7 @@ class NFPService:
             )
         return objectives_data
 
-    def get_objective_summary(self, nfp) -> dict:
+    def get_objective_summary(self, nfp: NextFeaturePrediction | None) -> dict:
         """Get summary information for an NFP objective."""
         if not nfp:
             return {}
@@ -61,14 +62,12 @@ class NFPService:
             "updated_at": nfp.updated_at.strftime("%Y-%m-%d %H:%M:%S"),
             "story_count": nfp.story_count,
             "total_estimated_complexity": nfp.total_estimated_complexity,
-            "high_priority_stories_count": len(nfp.get_high_priority_stories())
-            if hasattr(nfp, "get_high_priority_stories")
-            else 0,
+            "high_priority_stories_count": len(nfp.get_high_priority_stories()),
         }
 
-    def get_stories_by_priority(self, nfp, priority: int) -> list:
+    def get_stories_by_priority(self, nfp: NextFeaturePrediction | None, priority: int) -> list:
         """Get user stories for a specific priority level."""
-        if not nfp or not hasattr(nfp, "get_stories_by_priority"):
+        if not nfp:
             return []
 
         try:

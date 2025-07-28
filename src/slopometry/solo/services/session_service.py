@@ -12,8 +12,7 @@ class SessionService:
 
     def list_sessions(self, limit: int | None = None) -> list[str]:
         """List recent sessions, optionally limited."""
-        all_sessions = self.db.list_sessions()
-        return all_sessions[:limit] if limit else all_sessions
+        return self.db.list_sessions(limit=limit)
 
     def get_session_statistics(self, session_id: str) -> SessionStatistics | None:
         """Get detailed statistics for a session."""
@@ -32,20 +31,29 @@ class SessionService:
         """Clean up all session data."""
         return self.db.cleanup_all_sessions()
 
-    def prepare_sessions_data_for_display(self, sessions: list[str]) -> list[dict]:
-        """Prepare session data for display formatting."""
+    def get_sessions_for_display(self, limit: int | None = None) -> list[dict]:
+        """Get session summaries formatted for display."""
+        summaries = self.db.get_sessions_summary(limit=limit)
+
         sessions_data = []
-        for session_id in sessions:
-            stats = self.get_session_statistics(session_id)
-            if stats:
-                sessions_data.append(
-                    {
-                        "session_id": session_id,
-                        "project_name": stats.project.name if stats.project else None,
-                        "project_source": stats.project.source.value if stats.project else None,
-                        "start_time": stats.start_time.strftime("%Y-%m-%d %H:%M:%S"),
-                        "total_events": stats.total_events,
-                        "tools_used": len(stats.tool_usage),
-                    }
-                )
+        for summary in summaries:
+            from datetime import datetime
+
+            try:
+                start_time = datetime.fromisoformat(summary["start_time"])
+                formatted_time = start_time.strftime("%Y-%m-%d %H:%M:%S")
+            except (ValueError, TypeError):
+                formatted_time = summary["start_time"] or "Unknown"
+
+            sessions_data.append(
+                {
+                    "session_id": summary["session_id"],
+                    "project_name": summary["project_name"],
+                    "project_source": summary["project_source"],
+                    "start_time": formatted_time,
+                    "total_events": summary["total_events"],
+                    "tools_used": summary["tools_used"],
+                }
+            )
+
         return sessions_data

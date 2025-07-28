@@ -71,7 +71,7 @@ class Settings(BaseSettings):
 
     @field_validator("database_path", mode="before")
     @classmethod
-    def validate_database_path(cls, v):
+    def validate_database_path(cls, v: str | Path | None) -> Path | None:
         """Convert string paths to Path objects."""
         if v is None:
             return None
