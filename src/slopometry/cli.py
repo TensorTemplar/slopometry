@@ -9,7 +9,7 @@ console = Console()
 
 
 @click.group()
-def cli():
+def cli() -> None:
     """Slopometry - Claude Code session tracker.
 
     Solo-leveler features: Basic session tracking and analysis
@@ -19,7 +19,7 @@ def cli():
 
 
 @cli.command("hook-handler", hidden=True)
-def hook_handler():
+def hook_handler() -> None:
     """Internal command for processing hook events."""
     from slopometry.core.hook_handler import handle_hook
 
@@ -27,7 +27,7 @@ def hook_handler():
 
 
 @cli.command("hook-pre-tool-use", hidden=True)
-def hook_pre_tool_use():
+def hook_pre_tool_use() -> None:
     """Internal command for processing PreToolUse hook events."""
     from slopometry.core.hook_handler import handle_hook
     from slopometry.core.models import HookEventType
@@ -36,7 +36,7 @@ def hook_pre_tool_use():
 
 
 @cli.command("hook-post-tool-use", hidden=True)
-def hook_post_tool_use():
+def hook_post_tool_use() -> None:
     """Internal command for processing PostToolUse hook events."""
     from slopometry.core.hook_handler import handle_hook
     from slopometry.core.models import HookEventType
@@ -45,7 +45,7 @@ def hook_post_tool_use():
 
 
 @cli.command("hook-notification", hidden=True)
-def hook_notification():
+def hook_notification() -> None:
     """Internal command for processing Notification hook events."""
     from slopometry.core.hook_handler import handle_hook
     from slopometry.core.models import HookEventType
@@ -54,7 +54,7 @@ def hook_notification():
 
 
 @cli.command("hook-stop", hidden=True)
-def hook_stop():
+def hook_stop() -> None:
     """Internal command for processing Stop hook events."""
     from slopometry.core.hook_handler import handle_hook
     from slopometry.core.models import HookEventType
@@ -63,7 +63,7 @@ def hook_stop():
 
 
 @cli.command("hook-subagent-stop", hidden=True)
-def hook_subagent_stop():
+def hook_subagent_stop() -> None:
     """Internal command for processing SubagentStop hook events."""
     from slopometry.core.hook_handler import handle_hook
     from slopometry.core.models import HookEventType
@@ -73,27 +73,27 @@ def hook_subagent_stop():
 
 @cli.command("shell-completion")
 @click.argument("shell", type=click.Choice(["bash", "zsh", "fish"]))
-def shell_completion(shell):
+def shell_completion(shell: str) -> None:
     """Generate shell completion script."""
     if shell == "bash":
         console.print("[bold]Add this to your ~/.bashrc:[/bold]")
         console.print('eval "$(_SLOPOMETRY_COMPLETE=bash_source slopometry)"')
-        console.print("\\n[bold]Or install directly:[/bold]")
+        console.print("\n[bold]Or install directly:[/bold]")
         console.print("_SLOPOMETRY_COMPLETE=bash_source slopometry > ~/.slopometry-complete.sh")
         console.print("echo 'source ~/.slopometry-complete.sh' >> ~/.bashrc")
     elif shell == "zsh":
         console.print("[bold]Add this to your ~/.zshrc:[/bold]")
         console.print('eval "$(_SLOPOMETRY_COMPLETE=zsh_source slopometry)"')
-        console.print("\\n[bold]Or install directly:[/bold]")
+        console.print("\n[bold]Or install directly:[/bold]")
         console.print("_SLOPOMETRY_COMPLETE=zsh_source slopometry > ~/.slopometry-complete.zsh")
         console.print("echo 'source ~/.slopometry-complete.zsh' >> ~/.zshrc")
     elif shell == "fish":
         console.print("[bold]Add this to your fish config:[/bold]")
         console.print("_SLOPOMETRY_COMPLETE=fish_source slopometry | source")
-        console.print("\\n[bold]Or install directly:[/bold]")
+        console.print("\n[bold]Or install directly:[/bold]")
         console.print("_SLOPOMETRY_COMPLETE=fish_source slopometry > ~/.config/fish/completions/slopometry.fish")
 
-    console.print("\\n[yellow]Note: Restart your shell or source your config file after installation.[/yellow]")
+    console.print("\n[yellow]Note: Restart your shell or source your config file after installation.[/yellow]")
 
 
 # Flat commands: Generic setup and core functionality

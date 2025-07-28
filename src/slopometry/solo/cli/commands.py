@@ -13,7 +13,7 @@ from slopometry.solo.services.session_service import SessionService
 console = Console()
 
 
-def complete_session_id(ctx, param, incomplete):
+def complete_session_id(ctx: click.Context, param: click.Parameter, incomplete: str) -> list[str]:
     """Complete session IDs from the database."""
     try:
         session_service = SessionService()
@@ -24,7 +24,7 @@ def complete_session_id(ctx, param, incomplete):
 
 
 @click.group()
-def solo():
+def solo() -> None:
     """Solo-leveler commands for basic session tracking."""
     pass
 
@@ -36,7 +36,7 @@ def solo():
     default=False,
     help="Install hooks globally (~/.claude) or locally (./.claude)",
 )
-def install(global_):
+def install(global_: bool) -> None:
     """Install slopometry hooks into Claude Code settings to automatically track all sessions and tool usage."""
     hook_service = HookService()
     success, message = hook_service.install_hooks(global_)
@@ -55,7 +55,7 @@ def install(global_):
     default=False,
     help="Remove hooks globally (~/.claude) or locally (./.claude)",
 )
-def uninstall(global_):
+def uninstall(global_: bool) -> None:
     """Remove slopometry hooks from Claude Code settings to completely stop automatic session tracking."""
     hook_service = HookService()
     success, message = hook_service.uninstall_hooks(global_)
@@ -67,26 +67,24 @@ def uninstall(global_):
 
 
 @solo.command("ls")
-@click.option("--limit", default=None, help="Number of recent sessions to show")
-def list_sessions(limit):
+@click.option("--limit", default=None, type=int, help="Number of recent sessions to show")
+def list_sessions(limit: int) -> None:
     """List recent Claude Code sessions."""
     session_service = SessionService()
-    all_sessions = session_service.list_sessions()
-    sessions = all_sessions[: int(limit)] if limit else all_sessions
+    sessions_data = session_service.get_sessions_for_display(limit=limit)
 
-    if not sessions:
+    if not sessions_data:
         console.print("[yellow]No sessions found[/yellow]")
         console.print("[dim]Run 'slopometry install' to start tracking Claude Code sessions[/dim]")
         return
 
-    sessions_data = session_service.prepare_sessions_data_for_display(sessions)
     table = create_sessions_table(sessions_data)
     console.print(table)
 
 
 @solo.command()
 @click.argument("session_id", shell_complete=complete_session_id)
-def show(session_id):
+def show(session_id: str) -> None:
     """Show detailed statistics for a session."""
     session_service = SessionService()
     stats = session_service.get_session_statistics(session_id)
@@ -99,7 +97,7 @@ def show(session_id):
 
 
 @click.command()
-def latest():
+def latest() -> None:
     """Show detailed statistics for the most recent session."""
     session_service = SessionService()
     most_recent = session_service.get_most_recent_session()
@@ -108,7 +106,7 @@ def latest():
         console.print("[red]No sessions found[/red]")
         return
 
-    console.print(f"[bold]Showing most recent session: {most_recent}[/bold]\\n")
+    console.print(f"[bold]Showing most recent session: {most_recent}[/bold]\n")
     stats = session_service.get_session_statistics(most_recent)
     if stats:
         display_session_summary(stats, most_recent)
@@ -118,7 +116,7 @@ def latest():
 @click.argument("session_id", required=False, shell_complete=complete_session_id)
 @click.option("--all", "all_sessions", is_flag=True, help="Delete all sessions")
 @click.option("--yes", is_flag=True, help="Skip confirmation prompt")
-def cleanup(session_id, all_sessions, yes):
+def cleanup(session_id: str | None, all_sessions: bool, yes: bool) -> None:
     """Clean up session data.
 
     If SESSION_ID is provided, delete that specific session.
@@ -143,12 +141,12 @@ def cleanup(session_id, all_sessions, yes):
             console.print(f"[red]Session {session_id} not found[/red]")
             return
 
-        console.print(f"\\n[bold]Session to delete: {session_id}[/bold]")
+        console.print(f"\n[bold]Session to delete: {session_id}[/bold]")
         console.print(f"Start time: {stats.start_time.strftime('%Y-%m-%d %H:%M:%S')}")
         console.print(f"Total events: {stats.total_events}")
 
         if not yes:
-            confirm = click.confirm("\\nAre you sure you want to delete this session?", default=False)
+            confirm = click.confirm("\nAre you sure you want to delete this session?", default=False)
             if not confirm:
                 console.print("[yellow]Cancelled[/yellow]")
                 return
@@ -162,11 +160,11 @@ def cleanup(session_id, all_sessions, yes):
             console.print("[yellow]No sessions to delete[/yellow]")
             return
 
-        console.print(f"\\n[bold red]WARNING: This will delete ALL {len(sessions)} sessions![/bold red]")
+        console.print(f"\n[bold red]WARNING: This will delete ALL {len(sessions)} sessions![/bold red]")
         console.print("This action cannot be undone.")
 
         if not yes:
-            confirm = click.confirm("\\nAre you sure you want to delete all sessions?", default=False)
+            confirm = click.confirm("\nAre you sure you want to delete all sessions?", default=False)
             if not confirm:
                 console.print("[yellow]Cancelled[/yellow]")
                 return
@@ -178,15 +176,15 @@ def cleanup(session_id, all_sessions, yes):
 
 
 @click.command()
-def status():
+def status() -> None:
     """Show installation status and hook configuration."""
     hook_service = HookService()
     status_info = hook_service.get_installation_status()
 
-    console.print("[bold]Slopometry Installation Status[/bold]\\n")
+    console.print("[bold]Slopometry Installation Status[/bold]\n")
 
     console.print(f"[cyan]Data directory:[/cyan] {settings.resolved_database_path.parent}")
-    console.print(f"[cyan]Database:[/cyan] {settings.resolved_database_path}\\n")
+    console.print(f"[cyan]Database:[/cyan] {settings.resolved_database_path}\n")
 
     global_icon = "[green]✓[/green]" if status_info["global"] else "[red]✗[/red]"
     console.print(f"{global_icon} Global hooks: {status_info['global_path']}")
@@ -195,14 +193,14 @@ def status():
     console.print(f"{local_icon} Local hooks: {status_info['local_path']}")
 
     if not status_info["global"] and not status_info["local"]:
-        console.print("\\n[yellow]No slopometry hooks found. Run 'slopometry install' to start tracking.[/yellow]")
+        console.print("\n[yellow]No slopometry hooks found. Run 'slopometry install' to start tracking.[/yellow]")
     else:
-        console.print("\\n[green]Hooks are installed. Claude Code sessions are being tracked automatically.[/green]")
+        console.print("\n[green]Hooks are installed. Claude Code sessions are being tracked automatically.[/green]")
 
         session_service = SessionService()
         sessions = session_service.list_sessions(limit=3)
         if sessions:
-            console.print("\\n[bold]Recent Sessions:[/bold]")
+            console.print("\n[bold]Recent Sessions:[/bold]")
             for session_id in sessions:
                 stats = session_service.get_session_statistics(session_id)
                 if stats:
@@ -211,7 +209,7 @@ def status():
 
 @solo.command()
 @click.option("--enable/--disable", default=None, help="Enable or disable stop event feedback")
-def feedback(enable):
+def feedback(enable: bool | None) -> None:
     """Configure complexity feedback on stop events."""
     if enable is None:
         current_status = "enabled" if settings.enable_complexity_feedback else "disabled"
@@ -238,19 +236,19 @@ def feedback(enable):
         if env_file.exists():
             content = env_file.read_text()
             if env_var in content:
-                lines = content.split("\\n")
+                lines = content.split("\n")
                 new_lines = []
                 for line in lines:
                     if line.startswith(f"{env_var}="):
                         new_lines.append(f"{env_var}=true")
                     else:
                         new_lines.append(line)
-                env_file.write_text("\\n".join(new_lines))
+                env_file.write_text("\n".join(new_lines))
             else:
                 with env_file.open("a") as f:
-                    f.write(f"\\n{env_var}=true\\n")
+                    f.write(f"\n{env_var}=true\n")
         else:
-            env_file.write_text(f"{env_var}=true\\n")
+            env_file.write_text(f"{env_var}=true\n")
 
         console.print(f"[green]Added {env_var}=true to .env file[/green]")
 
@@ -263,21 +261,150 @@ def feedback(enable):
         if env_file.exists():
             content = env_file.read_text()
             if env_var in content:
-                lines = content.split("\\n")
+                lines = content.split("\n")
                 new_lines = []
                 for line in lines:
                     if line.startswith(f"{env_var}="):
                         new_lines.append(f"{env_var}=false")
                     else:
                         new_lines.append(line)
-                env_file.write_text("\\n".join(new_lines))
+                env_file.write_text("\n".join(new_lines))
             else:
                 with env_file.open("a") as f:
-                    f.write(f"\\n{env_var}=false\\n")
+                    f.write(f"\n{env_var}=false\n")
         else:
-            env_file.write_text(f"{env_var}=false\\n")
+            env_file.write_text(f"{env_var}=false\n")
 
         console.print(f"[green]Added {env_var}=false to .env file[/green]")
 
     console.print("")
     console.print("[bold]Note:[/bold] You may need to restart Claude Code for changes to take effect.")
+
+
+@solo.command()
+def migrations() -> None:
+    """Show database migration status."""
+    from slopometry.core.migrations import MigrationRunner
+
+    session_service = SessionService()
+    migration_runner = MigrationRunner(session_service.db.db_path)
+    status = migration_runner.get_migration_status()
+
+    console.print("[bold]Database Migration Status[/bold]\n")
+
+    if status["applied"]:
+        console.print("[green]Applied Migrations:[/green]")
+        for migration in status["applied"]:
+            console.print(f"  ✓ {migration['version']}: {migration['description']}")
+            console.print(f"    Applied: {migration['applied_at']}")
+        console.print()
+
+    if status["pending"]:
+        console.print("[red]Pending Migrations:[/red]")
+        for migration in status["pending"]:
+            console.print(f"  • {migration['version']}: {migration['description']}")
+        console.print()
+    else:
+        console.print("[green]All migrations are up to date![/green]")
+
+    console.print(f"Total migrations: {status['total']}")
+    console.print(f"Applied: {len(status['applied'])}")
+    console.print(f"Pending: {len(status['pending'])}")
+
+
+@solo.command()
+@click.argument("session_id", required=False, shell_complete=complete_session_id)
+@click.option("--output-dir", "-o", default=".", help="Directory to save the transcript to (default: current)")
+@click.option("--no-git-add", is_flag=True, help="Skip adding the transcript to git")
+@click.option("--yes", is_flag=True, help="Skip confirmation prompt when using latest session")
+def save_transcript(session_id: str | None, output_dir: str, no_git_add: bool, yes: bool) -> None:
+    """Save the Claude Code transcript for a session and add it to git.
+
+    If no SESSION_ID is provided, saves the transcript from the latest session.
+    The transcript will be copied from ~/.claude/projects/<project>/session.jsonl
+    to a .slopometry/ directory within the specified output directory.
+    """
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    session_service = SessionService()
+
+    # If no session_id provided, use the latest session
+    if not session_id:
+        session_id = session_service.get_most_recent_session()
+        if not session_id:
+            console.print("[red]No sessions found[/red]")
+            return
+
+        stats = session_service.get_session_statistics(session_id)
+        if not stats:
+            console.print(f"[red]No data found for latest session {session_id}[/red]")
+            return
+
+        # Show session info and ask for confirmation
+        console.print(f"[bold]Latest session: {session_id}[/bold]")
+        console.print(f"Start time: {stats.start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        console.print(f"Total events: {stats.total_events}")
+
+        if not yes:
+            confirm = click.confirm("\nSave transcript for this session?", default=True)
+            if not confirm:
+                console.print("[yellow]Cancelled[/yellow]")
+                return
+    else:
+        stats = session_service.get_session_statistics(session_id)
+        if not stats:
+            console.print(f"[red]No data found for session {session_id}[/red]")
+            return
+
+    if not stats.transcript_path:
+        console.print(f"[red]No transcript path found for session {session_id}[/red]")
+        console.print("[yellow]This may be an older session before transcript tracking was added[/yellow]")
+        return
+
+    transcript_path = Path(stats.transcript_path)
+    if not transcript_path.exists():
+        console.print(f"[red]Transcript file not found: {transcript_path}[/red]")
+        return
+
+    # Create output directory if needed
+    output_dir = Path(output_dir)
+    slopometry_dir = output_dir / ".slopometry"
+    slopometry_dir.mkdir(parents=True, exist_ok=True)
+
+    # Generate output filename
+    output_filename = f"claude-transcript-{session_id}.jsonl"
+    output_path = slopometry_dir / output_filename
+
+    # Copy the transcript
+    try:
+        shutil.copy2(transcript_path, output_path)
+        console.print(f"[green]✓[/green] Saved transcript to: {output_path}")
+    except Exception as e:
+        console.print(f"[red]Failed to copy transcript: {e}[/red]")
+        return
+
+    # Git add if requested
+    if not no_git_add:
+        try:
+            # Check if we're in a git repository
+            result = subprocess.run(
+                ["git", "rev-parse", "--git-dir"],
+                capture_output=True,
+                text=True,
+                cwd=output_dir,
+            )
+
+            if result.returncode == 0:
+                # Add file to git
+                subprocess.run(
+                    ["git", "add", str(output_path)],
+                    check=True,
+                    cwd=output_dir,
+                )
+                console.print(f"[green]✓[/green] Added to git: .slopometry/{output_filename}")
+            else:
+                console.print("[yellow]Not in a git repository, skipping git add[/yellow]")
+        except subprocess.CalledProcessError as e:
+            console.print(f"[red]Failed to add to git: {e}[/red]")

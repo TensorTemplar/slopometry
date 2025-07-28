@@ -110,14 +110,14 @@ class UserStoryService:
 
     def collect_user_rating_and_feedback(self) -> tuple[int, str]:
         """Collect rating and feedback from user for user story entry."""
-        console.print("\\n[bold yellow]User Story Collection[/bold yellow]")
+        console.print("\n[bold yellow]User Story Collection[/bold yellow]")
         console.print("Please rate the generated user stories and provide feedback for improvement.")
 
         # Get rating
         while True:
             try:
                 rating = click.prompt(
-                    "\\nRate the quality of generated user stories (1-5, where 5 is excellent)", type=int
+                    "\nRate the quality of generated user stories (1-5, where 5 is excellent)", type=int
                 )
                 if 1 <= rating <= 5:
                     break
@@ -128,7 +128,7 @@ class UserStoryService:
 
         # Get feedback
         guidelines = click.prompt(
-            "\\nProvide guidelines for improving user story generation (optional)", default="", show_default=False
+            "\nProvide guidelines for improving user story generation (optional)", default="", show_default=False
         )
 
         return rating, guidelines

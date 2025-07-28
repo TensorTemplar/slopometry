@@ -96,7 +96,7 @@ def parse_hook_input(raw_data: dict) -> HookInputUnion:
         raise ValueError(f"Unknown hook input schema with fields: {fields}")
 
 
-def handle_hook(event_type_override: HookEventType | None = None):
+def handle_hook(event_type_override: HookEventType | None = None) -> int:
     """Main hook handler function.
 
     Args:
@@ -137,6 +137,7 @@ def handle_hook(event_type_override: HookEventType | None = None):
         git_state=git_state,
         working_directory=working_directory,
         project=project,
+        transcript_path=parsed_input.transcript_path,
     )
 
     if isinstance(parsed_input, PreToolUseInput | PostToolUseInput):
@@ -298,7 +299,7 @@ def detect_event_type_from_parsed(parsed_input: HookInputUnion) -> HookEventType
             return HookEventType.SUBAGENT_STOP
 
 
-def main():
+def main() -> None:
     """Entry point for hook handler."""
     exit_code = handle_hook()
     sys.exit(exit_code)

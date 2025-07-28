@@ -5,6 +5,7 @@ import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from slopometry.core.migrations import MigrationRunner
 from slopometry.core.models import (
     ComplexityDelta,
     ExperimentProgress,
@@ -41,11 +42,22 @@ class EventDatabase:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._plan_analyzers: dict[str, PlanAnalyzer] = {}
         self._create_tables()
+        self._run_migrations()
 
-    def _get_db_connection(self):
+    def _get_db_connection(self) -> sqlite3.Connection:
         return sqlite3.connect(self.db_path)
 
-    def _create_tables(self):
+    def _run_migrations(self) -> None:
+        """Run any pending database migrations."""
+        migration_runner = MigrationRunner(self.db_path)
+        applied_migrations = migration_runner.run_migrations()
+
+        if applied_migrations and settings.debug_mode:
+            import sys
+
+            print(f"Slopometry applied migrations: {applied_migrations}", file=sys.stderr)
+
+    def _create_tables(self) -> None:
         """Create database tables."""
         with self._get_db_connection() as conn:
             conn.execute("PRAGMA journal_mode=WAL")
@@ -66,7 +78,8 @@ class EventDatabase:
                     git_state TEXT,
                     working_directory TEXT,
                     project_name TEXT,
-                    project_source TEXT
+                    project_source TEXT,
+                    transcript_path TEXT
                 )
             """)
             conn.execute("""
@@ -76,6 +89,10 @@ class EventDatabase:
             conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_hook_events_timestamp 
                 ON hook_events(timestamp)
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_hook_events_session_timestamp 
+                ON hook_events(session_id, timestamp)
             """)
 
             conn.execute("""
@@ -251,8 +268,8 @@ class EventDatabase:
                     session_id, event_type, timestamp, sequence_number,
                     tool_name, tool_type, metadata, duration_ms,
                     exit_code, error_message, git_state, working_directory,
-                    project_name, project_source
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    project_name, project_source, transcript_path
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     event.session_id,
@@ -269,6 +286,7 @@ class EventDatabase:
                     event.working_directory,
                     event.project.name if event.project else None,
                     event.project.source.value if event.project else None,
+                    event.transcript_path,
                 ),
             )
             return cursor.lastrowid or 0
@@ -335,6 +353,7 @@ class EventDatabase:
                         git_state=git_state,
                         working_directory=working_directory,
                         project=project,
+                        transcript_path=row["transcript_path"],
                     )
                 )
             return events
@@ -347,12 +366,15 @@ class EventDatabase:
 
         working_directory = "Unknown"
         project = None
+        transcript_path = None
         for event in events:
             if event.working_directory and event.working_directory != "Unknown":
                 working_directory = event.working_directory
             if event.project:
                 project = event.project
-            if working_directory != "Unknown" and project:
+            if event.transcript_path and not transcript_path:
+                transcript_path = event.transcript_path
+            if working_directory != "Unknown" and project and transcript_path:
                 break
 
         stats = SessionStatistics(
@@ -362,6 +384,7 @@ class EventDatabase:
             total_events=len(events),
             working_directory=working_directory,
             project=project,
+            transcript_path=transcript_path,
         )
 
         for event in events:
@@ -495,13 +518,50 @@ class EventDatabase:
         except Exception:
             return None, None
 
-    def list_sessions(self) -> list[str]:
-        """List all unique session IDs."""
+    def list_sessions(self, limit: int | None = None) -> list[str]:
+        """List unique session IDs, optionally limited to recent sessions."""
         with self._get_db_connection() as conn:
-            rows = conn.execute(
-                "SELECT session_id, MIN(timestamp) as first_event FROM hook_events GROUP BY session_id ORDER BY first_event DESC"
-            ).fetchall()
+            query = "SELECT session_id, MIN(timestamp) as first_event FROM hook_events GROUP BY session_id ORDER BY first_event DESC"
+            if limit:
+                query += f" LIMIT {limit}"
+            rows = conn.execute(query).fetchall()
             return [row[0] for row in rows]
+
+    def get_sessions_summary(self, limit: int | None = None) -> list[dict]:
+        """Get lightweight session summaries for list display."""
+        with self._get_db_connection() as conn:
+            query = """
+                SELECT 
+                    session_id,
+                    MIN(timestamp) as start_time,
+                    COUNT(*) as total_events,
+                    COUNT(DISTINCT tool_type) as tools_used,
+                    project_name,
+                    project_source
+                FROM hook_events 
+                WHERE session_id IS NOT NULL
+                GROUP BY session_id, project_name, project_source
+                ORDER BY MIN(timestamp) DESC
+            """
+            if limit:
+                query += f" LIMIT {limit}"
+
+            rows = conn.execute(query).fetchall()
+
+            summaries = []
+            for row in rows:
+                summaries.append(
+                    {
+                        "session_id": row[0],
+                        "start_time": row[1],
+                        "total_events": row[2],
+                        "tools_used": row[3] if row[3] is not None else 0,
+                        "project_name": row[4],
+                        "project_source": row[5],
+                    }
+                )
+
+            return summaries
 
     def cleanup_old_data(self, days: int, dry_run: bool = False) -> tuple[int, int]:
         """Clean up old session data and associated files."""

@@ -58,7 +58,7 @@ def display_session_summary(stats: SessionStatistics, session_id: str) -> None:
         _display_plan_evolution(stats)
 
 
-def _display_events_by_type_table(events_by_type) -> None:
+def _display_events_by_type_table(events_by_type: dict) -> None:
     """Display events by type table."""
     table = Table(title="Events by Type")
     table.add_column("Event Type", style="cyan")
@@ -70,7 +70,7 @@ def _display_events_by_type_table(events_by_type) -> None:
     console.print(table)
 
 
-def _display_tool_usage_table(tool_usage) -> None:
+def _display_tool_usage_table(tool_usage: dict) -> None:
     """Display tool usage table."""
     table = Table(title="Tool Usage")
     table.add_column("Tool", style="green")
@@ -274,7 +274,7 @@ def _display_plan_evolution(stats: SessionStatistics) -> None:
         console.print(table)
 
 
-def create_sessions_table(sessions_data) -> Table:
+def create_sessions_table(sessions_data: list[dict]) -> Table:
     """Create a Rich table for displaying session list."""
     table = Table(title="Recent Sessions")
     table.add_column("Session ID", style="cyan")
@@ -300,7 +300,7 @@ def create_sessions_table(sessions_data) -> Table:
     return table
 
 
-def create_experiment_table(experiments_data) -> Table:
+def create_experiment_table(experiments_data: list[dict]) -> Table:
     """Create a Rich table for displaying experiment runs."""
     table = Table(title="Experiment Runs")
     table.add_column("ID", style="cyan", no_wrap=True)
@@ -327,7 +327,7 @@ def create_experiment_table(experiments_data) -> Table:
     return table
 
 
-def create_user_story_entries_table(entries_data, count: int) -> Table:
+def create_user_story_entries_table(entries_data: list, count: int) -> Table:
     """Create a Rich table for displaying user story entries."""
     table = Table(title=f"Recent User Story Entries (showing {count})")
     table.add_column("Entry ID", style="blue", no_wrap=True, width=10)
@@ -350,7 +350,7 @@ def create_user_story_entries_table(entries_data, count: int) -> Table:
     return table
 
 
-def create_nfp_objectives_table(objectives_data) -> Table:
+def create_nfp_objectives_table(objectives_data: list[dict]) -> Table:
     """Create a Rich table for displaying NFP objectives."""
     table = Table(title="NFP Objectives")
     table.add_column("ID", style="cyan", no_wrap=True)
@@ -373,7 +373,7 @@ def create_nfp_objectives_table(objectives_data) -> Table:
     return table
 
 
-def create_features_table(features_data) -> Table:
+def create_features_table(features_data: list[dict]) -> Table:
     """Create a Rich table for displaying detected features."""
     table = Table(title="Detected Features", show_lines=True)
     table.add_column("Feature ID", style="blue", no_wrap=True, width=10)
@@ -394,7 +394,7 @@ def create_features_table(features_data) -> Table:
     return table
 
 
-def create_progress_history_table(progress_data) -> Table:
+def create_progress_history_table(progress_data: list[dict]) -> Table:
     """Create a Rich table for displaying experiment progress history."""
     table = Table(title="Progress History")
     table.add_column("Timestamp", style="cyan")
