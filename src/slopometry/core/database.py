@@ -255,6 +255,24 @@ class EventDatabase:
                 "CREATE INDEX IF NOT EXISTS idx_feature_boundaries_commits ON feature_boundaries(base_commit, head_commit)"
             )
 
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS code_quality_cache (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL,
+                    repository_path TEXT NOT NULL,
+                    commit_sha TEXT NOT NULL,
+                    calculated_at TEXT NOT NULL,
+                    complexity_metrics_json TEXT NOT NULL,
+                    complexity_delta_json TEXT,
+                    working_tree_hash TEXT,
+                    UNIQUE(session_id, repository_path, commit_sha, working_tree_hash)
+                )
+            """)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_code_quality_cache_repo_commit ON code_quality_cache(repository_path, commit_sha)"
+            )
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_code_quality_cache_session ON code_quality_cache(session_id)")
+
             conn.commit()
 
     def save_event(self, event: HookEvent) -> int:
@@ -424,14 +442,61 @@ class EventDatabase:
     def _get_session_complexity_metrics(
         self, session_id: str, working_directory: str | None
     ) -> tuple[ExtendedComplexityMetrics | None, ComplexityDelta | None]:
-        """Retrieve extended complexity metrics for a session."""
+        """Retrieve extended complexity metrics for a session with intelligent caching."""
         if not working_directory:
             return None, None
 
         try:
-            return self.calculate_extended_complexity_metrics(working_directory)
+            from slopometry.core.code_quality_cache import CodeQualityCacheManager
+            from slopometry.core.working_tree_state import WorkingTreeStateCalculator
+
+            # Initialize working tree state calculator
+            wt_calculator = WorkingTreeStateCalculator(working_directory)
+            repository_path = str(Path(working_directory).resolve())
+
+            # Get current git state
+            commit_sha = wt_calculator.get_current_commit_sha()
+            has_uncommitted_changes = wt_calculator.has_uncommitted_changes()
+
+            # For non-git repos, fall back to direct calculation (no caching)
+            if commit_sha is None:
+                return self.calculate_extended_complexity_metrics(working_directory)
+
+            # Determine cache key based on repository state
+            working_tree_hash = None
+            if has_uncommitted_changes:
+                # Calculate working tree hash for dirty repos
+                working_tree_hash = wt_calculator.calculate_working_tree_hash(commit_sha)
+
+            # Check cache for existing metrics
+            with self._get_db_connection() as conn:
+                cache_manager = CodeQualityCacheManager(conn)
+
+                # Try to get cached metrics
+                cached_metrics, cached_delta = cache_manager.get_cached_metrics(
+                    session_id, repository_path, commit_sha, working_tree_hash
+                )
+
+                if cached_metrics is not None:
+                    # Cache hit - return cached results
+                    return cached_metrics, cached_delta
+
+                # Cache miss - calculate fresh metrics
+                fresh_metrics, fresh_delta = self.calculate_extended_complexity_metrics(working_directory)
+
+                # Save to cache if we got valid results
+                if fresh_metrics is not None:
+                    cache_manager.save_metrics_to_cache(
+                        session_id, repository_path, commit_sha, fresh_metrics, fresh_delta, working_tree_hash
+                    )
+
+                return fresh_metrics, fresh_delta
+
         except Exception:
-            return None, None
+            try:
+                return self.calculate_extended_complexity_metrics(working_directory)
+            except Exception:
+                return None, None
 
     def _calculate_plan_evolution(self, events: list[HookEvent]) -> PlanEvolution:
         """Calculate plan evolution from session events."""
@@ -465,9 +530,7 @@ class EventDatabase:
             complexity_delta = None
             current_basic = None
 
-            if git_tracker.has_previous_commit() and not git_tracker._has_uncommitted_changes():
-                return ExtendedComplexityMetrics(), None
-
+            # Always calculate current extended metrics
             current_extended = analyzer.analyze_extended_complexity()
 
             if git_tracker.has_previous_commit():
