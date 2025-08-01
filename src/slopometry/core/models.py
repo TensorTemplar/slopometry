@@ -225,7 +225,10 @@ class PostToolUseInput(BaseModel):
     transcript_path: str
     tool_name: str
     tool_input: dict[str, Any] = Field(default_factory=dict)
-    tool_response: dict[str, Any] | str = Field(default_factory=dict)
+    tool_response: dict[str, Any] | str | list[Any] = Field(
+        default_factory=dict,
+        description="Tool response data. Can be dict (most tools), str (Bash output), or list (NotebookRead cells). Uses Any for list items since different tools return different cell structures.",
+    )
 
     model_config = {"extra": "allow"}
 
@@ -491,3 +494,20 @@ class UserStoryDisplayData(BaseModel):
     rating: str = Field(description="Formatted rating display")
     model: str = Field(description="Model used for generation")
     repository: str = Field(description="Repository name")
+
+
+class CodeQualityCache(BaseModel):
+    """Cached code quality metrics for a specific session/repository/commit combination."""
+
+    id: int | None = None
+    session_id: str = Field(description="Session ID this cache entry belongs to")
+    repository_path: str = Field(description="Absolute path to the repository")
+    commit_sha: str = Field(description="Git commit SHA when metrics were calculated")
+    calculated_at: datetime = Field(default_factory=datetime.now, description="When metrics were calculated")
+    complexity_metrics: ExtendedComplexityMetrics = Field(description="Cached complexity metrics")
+    complexity_delta: ComplexityDelta | None = Field(
+        default=None, description="Cached complexity delta from previous commit"
+    )
+    working_tree_hash: str | None = Field(
+        default=None, description="Hash of working tree state for uncommitted changes. NULL for clean repos."
+    )

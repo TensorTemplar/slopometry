@@ -27,9 +27,9 @@ class TestMigrations:
 
             applied = runner.run_migrations()
 
-            assert len(applied) == 1
-            assert "001" in applied[0]
-            assert "transcript_path" in applied[0]
+            assert len(applied) == 2  # Both migration 001 and 002 should run
+            assert any("001" in migration and "transcript_path" in migration for migration in applied)
+            assert any("002" in migration and "code quality cache" in migration for migration in applied)
 
             with runner._get_db_connection() as conn:
                 cursor = conn.execute("PRAGMA table_info(hook_events)")
@@ -59,12 +59,12 @@ class TestMigrations:
             applied_first = runner.run_migrations()
             applied_second = runner.run_migrations()
 
-            assert len(applied_first) == 1
+            assert len(applied_first) == 2  # Both migrations run first time
             assert len(applied_second) == 0  # No migrations applied second time
 
             status = runner.get_migration_status()
-            assert status["total"] == 1
-            assert len(status["applied"]) == 1
+            assert status["total"] == 2  # Total migrations now 2
+            assert len(status["applied"]) == 2  # Both applied
             assert len(status["pending"]) == 0
 
     def test_migration_runner__tracks_migration_status(self):
@@ -89,17 +89,18 @@ class TestMigrations:
 
             status_after = runner.get_migration_status()
 
-            assert status_before["total"] == 1
+            assert status_before["total"] == 2  # Now 2 total migrations
             assert len(status_before["applied"]) == 0
-            assert len(status_before["pending"]) == 1
+            assert len(status_before["pending"]) == 2  # 2 pending migrations
 
-            assert status_after["total"] == 1
-            assert len(status_after["applied"]) == 1
+            assert status_after["total"] == 2  # 2 total migrations
+            assert len(status_after["applied"]) == 2  # Both applied
             assert len(status_after["pending"]) == 0
 
-            applied_migration = status_after["applied"][0]
-            assert applied_migration["version"] == "001"
-            assert "applied_at" in applied_migration
+            # Check that migration 001 was applied
+            migration_001 = next((m for m in status_after["applied"] if m["version"] == "001"), None)
+            assert migration_001 is not None
+            assert "applied_at" in migration_001
 
     def test_migration_001__handles_existing_column_gracefully(self):
         """Test that migration 001 handles existing transcript_path column."""
@@ -120,7 +121,7 @@ class TestMigrations:
 
             applied = runner.run_migrations()
 
-            assert len(applied) == 1  # Migration still runs and is marked as applied
+            assert len(applied) == 2  # Both migrations run and are marked as applied
 
             with runner._get_db_connection() as conn:
                 cursor = conn.execute("PRAGMA table_info(hook_events)")
