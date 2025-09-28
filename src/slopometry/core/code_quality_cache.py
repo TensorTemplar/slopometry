@@ -120,9 +120,7 @@ class CodeQualityCacheManager:
         except (sqlite3.Error, Exception):
             return False
 
-    def is_cache_valid(
-        self, repository_path: str, commit_sha: str, working_tree_hash: str | None = None
-    ) -> bool:
+    def is_cache_valid(self, repository_path: str, commit_sha: str, working_tree_hash: str | None = None) -> bool:
         """Check if cached metrics are valid for current repository state.
 
         Args:

@@ -109,13 +109,13 @@ class Migration003AddWorkingTreeHash(Migration):
             # Column already exists
             if "duplicate column name" not in str(e).lower():
                 raise
-        
+
         # Drop the old unique constraint and create a new one
         # SQLite doesn't support DROP CONSTRAINT, so we need to recreate the table
         # But first, let's check if this is a fresh table or has data
         cursor = conn.execute("SELECT COUNT(*) FROM code_quality_cache")
         row_count = cursor.fetchone()[0]
-        
+
         if row_count == 0:
             # Empty table - can drop and recreate safely
             conn.execute("DROP TABLE code_quality_cache")
@@ -132,7 +132,7 @@ class Migration003AddWorkingTreeHash(Migration):
                     UNIQUE(session_id, repository_path, commit_sha, working_tree_hash)
                 )
             """)
-            
+
             # Recreate indexes
             conn.execute("""
                 CREATE INDEX idx_code_quality_cache_repo_commit 

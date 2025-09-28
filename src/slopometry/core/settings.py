@@ -43,6 +43,17 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    def __init__(self, **kwargs):
+        """Initialize settings and ensure global config directory exists."""
+        self._ensure_global_config_dir()
+        super().__init__(**kwargs)
+
+    @staticmethod
+    def _ensure_global_config_dir() -> None:
+        """Ensure the global config directory exists."""
+        global_config_dir = Path.home() / ".config/slopometry"
+        global_config_dir.mkdir(parents=True, exist_ok=True)
+
     database_path: Path | None = None
 
     python_executable: str | None = None
