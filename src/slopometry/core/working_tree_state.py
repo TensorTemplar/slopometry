@@ -3,7 +3,6 @@
 import hashlib
 import subprocess
 from pathlib import Path
-from typing import Optional
 
 
 class WorkingTreeStateCalculator:
@@ -11,7 +10,7 @@ class WorkingTreeStateCalculator:
 
     def __init__(self, working_directory: Path | str):
         """Initialize calculator for a specific directory.
-        
+
         Args:
             working_directory: Directory to analyze for working tree state
         """
@@ -19,19 +18,19 @@ class WorkingTreeStateCalculator:
 
     def calculate_working_tree_hash(self, commit_sha: str) -> str:
         """Calculate a hash representing the current working tree state.
-        
+
         Args:
             commit_sha: Current git commit SHA as base
-            
+
         Returns:
             Unique hash representing current working tree state
         """
         # Collect all Python files that would be analyzed by radon
         python_files = self._get_python_files()
-        
+
         # Build hash components
         hash_components = [commit_sha]
-        
+
         # Add file modification times (sorted for consistency)
         for py_file in sorted(python_files):
             try:
@@ -42,22 +41,22 @@ class WorkingTreeStateCalculator:
             except (OSError, ValueError):
                 # If file is deleted/inaccessible, skip it
                 continue
-        
+
         # Add total file count to detect additions/deletions
         hash_components.append(f"file_count:{len(python_files)}")
-        
+
         # Create deterministic hash
         combined = "|".join(hash_components)
-        return hashlib.sha256(combined.encode('utf-8')).hexdigest()[:16]
+        return hashlib.sha256(combined.encode("utf-8")).hexdigest()[:16]
 
     def _get_python_files(self) -> list[Path]:
         """Get all Python files in the working directory that radon would analyze.
-        
+
         Returns:
             List of Python file paths
         """
         python_files = []
-        
+
         try:
             # Use pathlib.glob to find all .py files recursively
             for py_file in self.working_directory.rglob("*.py"):
@@ -67,44 +66,44 @@ class WorkingTreeStateCalculator:
         except (OSError, PermissionError):
             # If we can't scan the directory, return empty list
             pass
-            
+
         return python_files
 
     def _should_include_file(self, file_path: Path) -> bool:
         """Check if a Python file should be included in analysis.
-        
+
         Args:
             file_path: Path to the Python file
-            
+
         Returns:
             True if file should be included in complexity analysis
         """
         # Skip common directories that are typically not analyzed
         exclude_patterns = {
-            '__pycache__',
-            '.git',
-            '.pytest_cache', 
-            '.mypy_cache',
-            '.tox',
-            'node_modules',
-            '.venv',
-            'venv',
-            'env',
-            'build',
-            'dist',
-            '.eggs'
+            "__pycache__",
+            ".git",
+            ".pytest_cache",
+            ".mypy_cache",
+            ".tox",
+            "node_modules",
+            ".venv",
+            "venv",
+            "env",
+            "build",
+            "dist",
+            ".eggs",
         }
-        
+
         # Check if any part of the path matches exclude patterns
         for part in file_path.parts:
             if part in exclude_patterns:
                 return False
-                
+
         return True
 
-    def get_current_commit_sha(self) -> Optional[str]:
+    def get_current_commit_sha(self) -> str | None:
         """Get current git commit SHA for the working directory.
-        
+
         Returns:
             Current commit SHA or None if not a git repository
         """
@@ -124,7 +123,7 @@ class WorkingTreeStateCalculator:
 
     def has_uncommitted_changes(self) -> bool:
         """Check if the working directory has uncommitted changes.
-        
+
         Returns:
             True if there are uncommitted changes
         """

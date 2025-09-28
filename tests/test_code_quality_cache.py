@@ -122,7 +122,7 @@ class TestCodeQualityCache:
                 # Dirty repo should still not be valid
                 assert not cache_manager.is_cache_valid(
                     repository_path="/test/repo",
-                    commit_sha="abc123", 
+                    commit_sha="abc123",
                     working_tree_hash="some_working_tree_hash",
                 )
 
