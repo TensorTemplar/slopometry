@@ -105,9 +105,7 @@ class Settings(BaseSettings):
         if self.python_executable:
             return f"{self.python_executable} -m slopometry.hook_handler"
 
-        # Use uvx to run slopometry's hook-handler subcommand
-        # This works when slopometry is installed as a uv tool
-        return "uvx slopometry hook-handler"
+        return "slopometry hook-handler"
 
 
 settings = Settings()

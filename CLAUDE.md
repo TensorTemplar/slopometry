@@ -34,7 +34,6 @@ When installing slopometry as a global uv tool:
 uv tool install .
 ```
 
-The hook handler uses `uvx slopometry hook-handler` to execute within the tool's isolated environment, ensuring it works from any directory without requiring a local `pyproject.toml` or package registry access.
 
 ## Key Architecture
 
@@ -116,10 +115,10 @@ uv pip install "slopometry[huggingface]"
 When modifying the hook handler, test it manually using the actual Claude Code hook schema:
 ```bash
 # Test PreToolUse hook
-echo '{"session_id": "test123", "transcript_path": "/tmp/transcript.jsonl", "tool_name": "Bash", "tool_input": {"command": "ls"}}' | uvx slopometry hook-handler
+echo '{"session_id": "test123", "transcript_path": "/tmp/transcript.jsonl", "tool_name": "Bash", "tool_input": {"command": "ls"}}' | slopometry hook-handler
 
-# Test PostToolUse hook  
-echo '{"session_id": "test123", "transcript_path": "/tmp/transcript.jsonl", "tool_name": "Bash", "tool_input": {"command": "ls"}, "tool_response": {"success": true}}' | uvx slopometry hook-handler
+# Test PostToolUse hook
+echo '{"session_id": "test123", "transcript_path": "/tmp/transcript.jsonl", "tool_name": "Bash", "tool_input": {"command": "ls"}, "tool_response": {"success": true}}' | slopometry hook-handler
 ```
 
 ## Adding New Tool Types
