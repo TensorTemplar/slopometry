@@ -102,85 +102,93 @@ def handle_hook(event_type_override: HookEventType | None = None) -> int:
     Args:
         event_type_override: Optional override for the event type, used when called via specific hook entrypoints
     """
-    stdin_input = sys.stdin.read().strip()
-    if not stdin_input:
+    try:
+        stdin_input = sys.stdin.read().strip()
+        if not stdin_input:
+            return 0
+
+        raw_data = json.loads(stdin_input)
+
+        parsed_input = parse_hook_input(raw_data)
+
+        event_type = event_type_override if event_type_override else detect_event_type_from_parsed(parsed_input)
+
+        session_id = parsed_input.session_id
+
+        session_manager = SessionManager()
+        sequence_number = session_manager.get_next_sequence_number(session_id)
+
+        git_tracker = GitTracker()
+        git_state = None
+        match (event_type, sequence_number):
+            case (HookEventType.PRE_TOOL_USE, 1) | (HookEventType.STOP, 1):
+                git_state = git_tracker.get_git_state()
+            case (HookEventType.STOP, _):
+                git_state = git_tracker.get_git_state()
+
+        working_directory = os.getcwd()
+        project_tracker = ProjectTracker(working_dir=Path(working_directory))
+        project = project_tracker.get_project()
+
+        event = HookEvent(
+            session_id=session_id,
+            event_type=event_type,
+            sequence_number=sequence_number,
+            metadata=raw_data,
+            git_state=git_state,
+            working_directory=working_directory,
+            project=project,
+            transcript_path=parsed_input.transcript_path,
+        )
+
+        if isinstance(parsed_input, PreToolUseInput | PostToolUseInput):
+            event.tool_name = parsed_input.tool_name
+            event.tool_type = get_tool_type(parsed_input.tool_name)
+
+            if isinstance(parsed_input, PostToolUseInput):
+                if isinstance(parsed_input.tool_response, dict):
+                    event.duration_ms = parsed_input.tool_response.get("duration_ms")
+                    event.exit_code = parsed_input.tool_response.get("exit_code")
+                    event.error_message = parsed_input.tool_response.get("error")
+                else:
+                    event.duration_ms = None
+                    event.exit_code = None
+                    event.error_message = None
+
+        try:
+            db = EventDatabase()
+            db.save_event(event)
+        except KeyError:
+            pass
+
+        if event_type in (HookEventType.STOP, HookEventType.SUBAGENT_STOP) and settings.enable_complexity_analysis:
+            return handle_stop_event(session_id, parsed_input)  # type: ignore[arg-type]
+
+        if settings.debug_mode:
+            debug_info = {
+                "slopometry_event": {
+                    "session_id": session_id,
+                    "event_type": event_type.value,
+                    "sequence_number": sequence_number,
+                    "tool_name": event.tool_name,
+                    "tool_type": event.tool_type.value if event.tool_type else None,
+                    "timestamp": event.timestamp.isoformat(),
+                    "parsed_input_type": type(parsed_input).__name__,
+                }
+            }
+            print(f"Slopometry captured: {json.dumps(debug_info, indent=2)}", file=sys.stderr)
+
         return 0
 
-    raw_data = json.loads(stdin_input)
+    except Exception as e:
+        import traceback
 
-    parsed_input = parse_hook_input(raw_data)
+        error_msg = f"Slopometry hook error: {e}\n{traceback.format_exc()}"
 
-    event_type = event_type_override if event_type_override else detect_event_type_from_parsed(parsed_input)
+        if settings.debug_mode:
+            print(error_msg, file=sys.stderr)
 
-    session_id = parsed_input.session_id
-
-    session_manager = SessionManager()
-    sequence_number = session_manager.get_next_sequence_number(session_id)
-
-    git_tracker = GitTracker()
-    git_state = None
-    match (event_type, sequence_number):
-        case (HookEventType.PRE_TOOL_USE, 1) | (HookEventType.STOP, 1):
-            git_state = git_tracker.get_git_state()
-        case (HookEventType.STOP, _):
-            git_state = git_tracker.get_git_state()
-
-    working_directory = os.getcwd()
-    project_tracker = ProjectTracker(working_dir=Path(working_directory))
-    project = project_tracker.get_project()
-
-    event = HookEvent(
-        session_id=session_id,
-        event_type=event_type,
-        sequence_number=sequence_number,
-        metadata=raw_data,
-        git_state=git_state,
-        working_directory=working_directory,
-        project=project,
-        transcript_path=parsed_input.transcript_path,
-    )
-
-    if isinstance(parsed_input, PreToolUseInput | PostToolUseInput):
-        event.tool_name = parsed_input.tool_name
-        event.tool_type = get_tool_type(parsed_input.tool_name)
-
-        if isinstance(parsed_input, PostToolUseInput):
-            if isinstance(parsed_input.tool_response, dict):
-                event.duration_ms = parsed_input.tool_response.get("duration_ms")
-                event.exit_code = parsed_input.tool_response.get("exit_code")
-                event.error_message = parsed_input.tool_response.get("error")
-            else:
-                event.duration_ms = None
-                event.exit_code = None
-                event.error_message = None
-
-    try:
-        db = EventDatabase()
-        db.save_event(event)
-    except KeyError:
-        # This can happen if the project table is not found in the pyproject.toml
-        # In this case, we just ignore the event and don't block the user.
-        pass
-
-    if event_type in (HookEventType.STOP, HookEventType.SUBAGENT_STOP) and settings.enable_complexity_analysis:
-        # mypy: parsed_input is StopInput or SubagentStopInput based on event_type check above
-        return handle_stop_event(session_id, parsed_input)  # type: ignore[arg-type]
-
-    if settings.debug_mode:
-        debug_info = {
-            "slopometry_event": {
-                "session_id": session_id,
-                "event_type": event_type.value,
-                "sequence_number": sequence_number,
-                "tool_name": event.tool_name,
-                "tool_type": event.tool_type.value if event.tool_type else None,
-                "timestamp": event.timestamp.isoformat(),
-                "parsed_input_type": type(parsed_input).__name__,
-            }
-        }
-        print(f"Slopometry captured: {json.dumps(debug_info, indent=2)}", file=sys.stderr)
-
-    return 0
+        return 0
 
 
 def handle_stop_event(session_id: str, parsed_input: "StopInput | SubagentStopInput") -> int:

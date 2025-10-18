@@ -111,7 +111,7 @@ slopometry install
 
 Slopometry can be configured using environment variables or a `.env` file:
 
-1. **Global configuration**: `~/.config/slopometry/.env`
+1. **Global configuration**: `~/.config/slopometry/.env` (Linux respects `$XDG_CONFIG_HOME`)
 2. **Project-specific**: `.env` in your project directory
 
 ```bash
@@ -257,8 +257,8 @@ Customize via `.env` file or environment variables:
 
 - `SLOPOMETRY_DATABASE_PATH`: Custom database location (optional)
   - Default locations:
-    - Linux: `~/.local/share/slopometry/slopometry.db`
-    - macOS: `~/Library/Application Support/slopometry/slopometry.db`  
+    - Linux: `~/.local/share/slopometry/slopometry.db` (or `$XDG_DATA_HOME/slopometry/slopometry.db` if set)
+    - macOS: `~/Library/Application Support/slopometry/slopometry.db`
     - Windows: `%LOCALAPPDATA%\slopometry\slopometry.db`
 - `SLOPOMETRY_PYTHON_EXECUTABLE`: Python command for hooks (default: uses uv tool's python)
 - `SLOPOMETRY_SESSION_ID_PREFIX`: Custom session ID prefix
