@@ -20,7 +20,6 @@ cp .env.solo.example .env  # For basic session tracking
 # OR
 cp .env.summoner.example .env  # For advanced experimentation
 
-# For global config: copy to user config directory
 mkdir -p ~/.config/slopometry
 cp .env.solo.example ~/.config/slopometry/.env  # For basic session tracking
 # OR

@@ -109,11 +109,12 @@ class TestSettingsOverridePriority:
             global_config_dir = mock_home / ".config/slopometry"
             assert not global_config_dir.exists()
 
-            with patch("pathlib.Path.home", return_value=mock_home):
-                Settings()
+            with patch.dict(os.environ, {"XDG_CONFIG_HOME": "", "XDG_DATA_HOME": ""}, clear=False):
+                with patch("pathlib.Path.home", return_value=mock_home):
+                    Settings()
 
-                assert global_config_dir.exists()
-                assert global_config_dir.is_dir()
+                    assert global_config_dir.exists()
+                    assert global_config_dir.is_dir()
 
     def test_defaults_when_no_config_files(self):
         """Test that default values are used when no config files exist."""

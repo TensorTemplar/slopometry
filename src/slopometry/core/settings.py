@@ -29,12 +29,27 @@ def get_default_data_dir() -> Path:
         return Path.home() / ".local" / "share" / app_name
 
 
+def get_default_config_dir() -> Path:
+    """Get platform-specific default config directory."""
+    app_name = "slopometry"
+
+    if sys.platform == "win32":
+        return get_default_data_dir()
+    elif sys.platform == "darwin":
+        return get_default_data_dir()
+    else:
+        xdg_config_home = os.environ.get("XDG_CONFIG_HOME")
+        if xdg_config_home:
+            return Path(xdg_config_home) / app_name
+        return Path.home() / ".config" / app_name
+
+
 class Settings(BaseSettings):
     """Application settings with support for .env files."""
 
     model_config = SettingsConfigDict(
         env_file=[
-            Path.home() / ".config/slopometry/.env",
+            get_default_config_dir() / ".env",
             ".env",
         ],
         env_file_encoding="utf-8",
@@ -51,7 +66,7 @@ class Settings(BaseSettings):
     @staticmethod
     def _ensure_global_config_dir() -> None:
         """Ensure the global config directory exists."""
-        global_config_dir = Path.home() / ".config/slopometry"
+        global_config_dir = get_default_config_dir()
         global_config_dir.mkdir(parents=True, exist_ok=True)
 
     database_path: Path | None = None
