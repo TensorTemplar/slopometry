@@ -2,6 +2,8 @@
 
 import json
 import sqlite3
+from collections.abc import Generator
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -44,8 +46,18 @@ class EventDatabase:
         self._create_tables()
         self._run_migrations()
 
-    def _get_db_connection(self) -> sqlite3.Connection:
-        return sqlite3.connect(self.db_path)
+    @contextmanager
+    def _get_db_connection(self) -> Generator[sqlite3.Connection]:
+        """Context manager that ensures database connections are properly closed."""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def _run_migrations(self) -> None:
         """Run any pending database migrations."""
@@ -377,63 +389,142 @@ class EventDatabase:
             return events
 
     def get_session_statistics(self, session_id: str) -> SessionStatistics | None:
-        """Calculate statistics for a session."""
-        events = self.get_session_events(session_id)
-        if not events:
-            return None
+        """Calculate statistics for a session using optimized SQL aggregations.
 
-        working_directory = "Unknown"
-        project = None
-        transcript_path = None
-        for event in events:
-            if event.working_directory and event.working_directory != "Unknown":
-                working_directory = event.working_directory
-            if event.project:
-                project = event.project
-            if event.transcript_path and not transcript_path:
-                transcript_path = event.transcript_path
-            if working_directory != "Unknown" and project and transcript_path:
-                break
+        This method avoids loading all events into memory by using SQL aggregations
+        and only loading specific events when needed (e.g., for plan evolution).
+        """
+        with self._get_db_connection() as conn:
+            conn.row_factory = sqlite3.Row
 
-        stats = SessionStatistics(
-            session_id=session_id,
-            start_time=events[0].timestamp,
-            end_time=events[-1].timestamp if events else None,
-            total_events=len(events),
-            working_directory=working_directory,
-            project=project,
-            transcript_path=transcript_path,
-        )
+            stats_row = conn.execute(
+                """
+                SELECT
+                    COUNT(*) as total_events,
+                    MIN(timestamp) as start_time,
+                    MAX(timestamp) as end_time,
+                    SUM(CASE WHEN error_message IS NOT NULL AND error_message != '' THEN 1 ELSE 0 END) as error_count,
+                    COALESCE(SUM(duration_ms), 0) as total_duration_ms,
+                    COUNT(CASE WHEN duration_ms IS NOT NULL THEN 1 ELSE 0 END) as events_with_duration
+                FROM hook_events
+                WHERE session_id = ?
+                """,
+                (session_id,),
+            ).fetchone()
 
-        for event in events:
-            stats.events_by_type[event.event_type] = stats.events_by_type.get(event.event_type, 0) + 1
-            if event.tool_type:
-                stats.tool_usage[event.tool_type] = stats.tool_usage.get(event.tool_type, 0) + 1
-            if event.error_message:
-                stats.error_count += 1
-            if event.duration_ms:
-                stats.total_duration_ms += event.duration_ms
+            if not stats_row or stats_row["total_events"] == 0:
+                return None
 
-        tool_events_with_duration = [e for e in events if e.duration_ms]
-        if tool_events_with_duration:
-            stats.average_tool_duration_ms = stats.total_duration_ms / len(tool_events_with_duration)
+            first_event_row = conn.execute(
+                """
+                SELECT working_directory, project_name, project_source, transcript_path
+                FROM hook_events
+                WHERE session_id = ?
+                ORDER BY sequence_number ASC
+                LIMIT 1
+                """,
+                (session_id,),
+            ).fetchone()
 
-        git_events = [e for e in events if e.git_state]
-        if git_events:
-            stats.initial_git_state = git_events[0].git_state
-            stats.final_git_state = git_events[-1].git_state
-            if stats.initial_git_state and stats.final_git_state:
+            working_directory = first_event_row["working_directory"] or "Unknown"
+            project = None
+            if first_event_row["project_name"]:
+                project = Project(
+                    name=first_event_row["project_name"],
+                    source=ProjectSource(first_event_row["project_source"]),
+                )
+            transcript_path = first_event_row["transcript_path"]
+
+            event_type_rows = conn.execute(
+                """
+                SELECT event_type, COUNT(*) as count
+                FROM hook_events
+                WHERE session_id = ?
+                GROUP BY event_type
+                """,
+                (session_id,),
+            ).fetchall()
+
+            events_by_type = {HookEventType(row["event_type"]): row["count"] for row in event_type_rows}
+
+            tool_usage_rows = conn.execute(
+                """
+                SELECT tool_type, COUNT(*) as count
+                FROM hook_events
+                WHERE session_id = ? AND tool_type IS NOT NULL
+                GROUP BY tool_type
+                """,
+                (session_id,),
+            ).fetchall()
+
+            tool_usage = {ToolType(row["tool_type"]): row["count"] for row in tool_usage_rows}
+
+            first_git_row = conn.execute(
+                """
+                SELECT git_state
+                FROM hook_events
+                WHERE session_id = ? AND git_state IS NOT NULL
+                ORDER BY sequence_number ASC
+                LIMIT 1
+                """,
+                (session_id,),
+            ).fetchone()
+
+            last_git_row = conn.execute(
+                """
+                SELECT git_state
+                FROM hook_events
+                WHERE session_id = ? AND git_state IS NOT NULL
+                ORDER BY sequence_number DESC
+                LIMIT 1
+                """,
+                (session_id,),
+            ).fetchone()
+
+            initial_git_state = None
+            final_git_state = None
+
+            if first_git_row and first_git_row["git_state"]:
+                git_state_data = json.loads(first_git_row["git_state"])
+                initial_git_state = GitState.model_validate(git_state_data)
+
+            if last_git_row and last_git_row["git_state"]:
+                git_state_data = json.loads(last_git_row["git_state"])
+                final_git_state = GitState.model_validate(git_state_data)
+
+            commits_made = 0
+            if initial_git_state and final_git_state:
                 from slopometry.core.git_tracker import GitTracker
 
                 git_tracker = GitTracker()
-                stats.commits_made = git_tracker.calculate_commits_made(stats.initial_git_state, stats.final_git_state)
+                commits_made = git_tracker.calculate_commits_made(initial_git_state, final_git_state)
+
+            stats = SessionStatistics(
+                session_id=session_id,
+                start_time=datetime.fromisoformat(stats_row["start_time"]),
+                end_time=datetime.fromisoformat(stats_row["end_time"]) if stats_row["end_time"] else None,
+                total_events=stats_row["total_events"],
+                working_directory=working_directory,
+                project=project,
+                transcript_path=transcript_path,
+                events_by_type=events_by_type,
+                tool_usage=tool_usage,
+                error_count=stats_row["error_count"],
+                total_duration_ms=stats_row["total_duration_ms"],
+                initial_git_state=initial_git_state,
+                final_git_state=final_git_state,
+                commits_made=commits_made,
+            )
+
+            if stats_row["events_with_duration"] > 0:
+                stats.average_tool_duration_ms = stats_row["total_duration_ms"] / stats_row["events_with_duration"]
 
         stats.complexity_metrics, stats.complexity_delta = self._get_session_complexity_metrics(
             session_id, stats.working_directory
         )
 
         try:
-            stats.plan_evolution = self._calculate_plan_evolution(events)
+            stats.plan_evolution = self._calculate_plan_evolution(session_id)
         except Exception:
             stats.plan_evolution = None
 
@@ -498,16 +589,43 @@ class EventDatabase:
             except Exception:
                 return None, None
 
-    def _calculate_plan_evolution(self, events: list[HookEvent]) -> PlanEvolution:
-        """Calculate plan evolution from session events."""
+    def _calculate_plan_evolution(self, session_id: str) -> PlanEvolution:
+        """Calculate plan evolution using optimized SQL queries.
+
+        Only loads POST_TOOL_USE events needed for plan analysis, avoiding
+        loading all events into memory.
+        """
         analyzer = PlanAnalyzer()
-        for event in events:
-            if event.tool_name == "TodoWrite" and event.event_type == HookEventType.POST_TOOL_USE:
-                tool_input = event.metadata.get("tool_input", {})
-                if tool_input:
-                    analyzer.analyze_todo_write_event(tool_input, event.timestamp)
-            elif event.event_type == HookEventType.POST_TOOL_USE:
-                analyzer.increment_event_count(event.tool_type)
+
+        with self._get_db_connection() as conn:
+            conn.row_factory = sqlite3.Row
+
+            # Only load POST_TOOL_USE events (these are what we need for plan evolution)
+            rows = conn.execute(
+                """
+                SELECT timestamp, tool_name, tool_type, metadata
+                FROM hook_events
+                WHERE session_id = ? AND event_type = ?
+                ORDER BY sequence_number
+                """,
+                (session_id, HookEventType.POST_TOOL_USE.value),
+            ).fetchall()
+
+            for row in rows:
+                timestamp = datetime.fromisoformat(row["timestamp"])
+                tool_name = row["tool_name"]
+                tool_type = ToolType(row["tool_type"]) if row["tool_type"] else None
+
+                # Handle TodoWrite events specially
+                if tool_name == "TodoWrite":
+                    metadata = json.loads(row["metadata"]) if row["metadata"] else {}
+                    tool_input = metadata.get("tool_input", {})
+                    if tool_input:
+                        analyzer.analyze_todo_write_event(tool_input, timestamp)
+                else:
+                    # For all other POST_TOOL_USE events, just count them
+                    analyzer.increment_event_count(tool_type)
+
         return analyzer.get_plan_evolution()
 
     def calculate_extended_complexity_metrics(
