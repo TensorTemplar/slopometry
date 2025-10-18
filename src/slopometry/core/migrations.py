@@ -2,6 +2,8 @@
 
 import sqlite3
 from abc import ABC, abstractmethod
+from collections.abc import Generator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -161,8 +163,18 @@ class MigrationRunner:
             Migration003AddWorkingTreeHash(),
         ]
 
-    def _get_db_connection(self) -> sqlite3.Connection:
-        return sqlite3.connect(self.db_path)
+    @contextmanager
+    def _get_db_connection(self) -> Generator[sqlite3.Connection]:
+        """Context manager that ensures database connections are properly closed."""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
 
     def _ensure_migrations_table(self, conn: sqlite3.Connection) -> None:
         """Create migrations table if it doesn't exist."""
