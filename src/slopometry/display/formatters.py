@@ -125,7 +125,6 @@ def _display_complexity_metrics(stats: SessionStatistics) -> None:
 
     console.print(overview_table)
 
-    # Files by complexity table
     if metrics.files_by_complexity:
         files_table = Table(title="Files by Complexity")
         files_table.add_column("File", style="cyan")
@@ -138,18 +137,26 @@ def _display_complexity_metrics(stats: SessionStatistics) -> None:
 
         console.print(files_table)
 
+    if metrics.files_with_parse_errors:
+        errors_table = Table(title="[yellow]Files with Parse Errors[/yellow]")
+        errors_table.add_column("File", style="yellow")
+        errors_table.add_column("Error", style="dim")
+
+        for file_path, error_msg in metrics.files_with_parse_errors.items():
+            errors_table.add_row(file_path, error_msg)
+
+        console.print(errors_table)
+
 
 def _display_complexity_delta(stats: SessionStatistics) -> None:
     """Display complexity delta section."""
     delta = stats.complexity_delta
     console.print("\n[bold]Complexity Delta (vs Session Start)[/bold]")
 
-    # Overall changes table
     changes_table = Table(title="Overall Changes")
     changes_table.add_column("Metric", style="cyan")
     changes_table.add_column("Change", justify="right")
 
-    # Cyclomatic complexity changes
     cc_color = (
         "green" if delta.total_complexity_change < 0 else "red" if delta.total_complexity_change > 0 else "yellow"
     )
@@ -157,7 +164,6 @@ def _display_complexity_delta(stats: SessionStatistics) -> None:
     changes_table.add_row("  Total complexity", f"[{cc_color}]{delta.total_complexity_change:+d}[/{cc_color}]")
     changes_table.add_row("  Average complexity", f"[{cc_color}]{delta.avg_complexity_change:+.1f}[/{cc_color}]")
 
-    # Halstead changes
     changes_table.add_row("[bold]Halstead Metrics[/bold]", "")
     vol_color = "green" if delta.total_volume_change < 0 else "red" if delta.total_volume_change > 0 else "yellow"
     changes_table.add_row("  Total volume", f"[{vol_color}]{delta.total_volume_change:+.1f}[/{vol_color}]")
@@ -178,7 +184,6 @@ def _display_complexity_delta(stats: SessionStatistics) -> None:
     changes_table.add_row("  Total MI", f"[{mi_color}]{delta.total_mi_change:+.1f}[/{mi_color}]")
     changes_table.add_row("  Average MI", f"[{mi_color}]{delta.avg_mi_change:+.1f}[/{mi_color}]")
 
-    # File changes
     changes_table.add_row("[bold]File Changes[/bold]", "")
     file_color = "green" if delta.net_files_change < 0 else "red" if delta.net_files_change > 0 else "yellow"
     changes_table.add_row("  Net files change", f"[{file_color}]{delta.net_files_change:+d}[/{file_color}]")
@@ -187,7 +192,6 @@ def _display_complexity_delta(stats: SessionStatistics) -> None:
 
     console.print(changes_table)
 
-    # Files added table
     if delta.files_added:
         files_added_table = Table(title="Files Added")
         files_added_table.add_column("File", style="green")
@@ -197,7 +201,6 @@ def _display_complexity_delta(stats: SessionStatistics) -> None:
             files_added_table.add_row(f"... and {len(delta.files_added) - 10} more")
         console.print(files_added_table)
 
-    # Files removed table
     if delta.files_removed:
         files_removed_table = Table(title="Files Removed")
         files_removed_table.add_column("File", style="red")
@@ -207,7 +210,6 @@ def _display_complexity_delta(stats: SessionStatistics) -> None:
             files_removed_table.add_row(f"... and {len(delta.files_removed) - 10} more")
         console.print(files_removed_table)
 
-    # File complexity changes table
     if delta.files_changed:
         sorted_changes = sorted(delta.files_changed.items(), key=lambda x: abs(x[1]), reverse=True)[:10]
 
