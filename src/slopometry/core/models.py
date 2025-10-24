@@ -351,6 +351,9 @@ class ExtendedComplexityMetrics(BaseModel):
 
     total_files_analyzed: int = 0
     files_by_complexity: dict[str, int] = Field(default_factory=dict)
+    files_with_parse_errors: dict[str, str] = Field(
+        default_factory=dict, description="Files that radon couldn't parse: {filepath: error_message}"
+    )
 
 
 class ExperimentRun(BaseModel):

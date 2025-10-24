@@ -7,6 +7,8 @@ from typing import Any
 
 from slopometry.core.models import ComplexityDelta, ComplexityMetrics, ExtendedComplexityMetrics
 
+RADON_CMD_PREFIX = ["uvx", "--python", "3.13", "radon"]
+
 
 class ComplexityAnalyzer:
     """Analyzes cognitive complexity of Python files using radon."""
@@ -59,8 +61,10 @@ class ComplexityAnalyzer:
             ComplexityMetrics with aggregated complexity data.
         """
         try:
+            # FIXME: python version hardcode is spurious, while we require the latest AST parsing
+            # the version we choose should be informed by either config var or repo python
             result = subprocess.run(
-                ["uvx", "radon", "cc", "--json", "--show-complexity", str(directory)],
+                [*RADON_CMD_PREFIX, "cc", "--json", "--show-complexity", str(directory)],
                 capture_output=True,
                 text=True,
                 timeout=30,
@@ -93,6 +97,11 @@ class ComplexityAnalyzer:
 
         for file_path, functions in radon_data.items():
             if not functions:
+                continue
+
+            # FIXME: parse errors due to python version mismatch should be handled
+            # as explicit negative case instead of implicit ok
+            if isinstance(functions, dict) and "error" in functions:
                 continue
 
             file_complexity = sum(func.get("complexity", 0) for func in functions)
@@ -202,25 +211,22 @@ class ComplexityAnalyzer:
         target_dir = directory or self.working_directory
 
         try:
-            # Cyclomatic Complexity
             cc_result = subprocess.run(
-                ["uvx", "radon", "cc", "--json", "--show-complexity", str(target_dir)],
+                [*RADON_CMD_PREFIX, "cc", "--json", "--show-complexity", str(target_dir)],
                 capture_output=True,
                 text=True,
                 timeout=30,
             )
 
-            # Halstead Metrics
             hal_result = subprocess.run(
-                ["uvx", "radon", "hal", "--json", str(target_dir)],
+                [*RADON_CMD_PREFIX, "hal", "--json", str(target_dir)],
                 capture_output=True,
                 text=True,
                 timeout=30,
             )
 
-            # Maintainability Index
             mi_result = subprocess.run(
-                ["uvx", "radon", "mi", "--json", str(target_dir)],
+                [*RADON_CMD_PREFIX, "mi", "--json", str(target_dir)],
                 capture_output=True,
                 text=True,
                 timeout=30,
@@ -257,12 +263,17 @@ class ComplexityAnalyzer:
         Returns:
             Merged ExtendedComplexityMetrics
         """
-        # Process cyclomatic complexity
         files_by_complexity = {}
         all_complexities = []
+        files_with_parse_errors = {}
 
         for file_path, functions in cc_data.items():
             if not functions:
+                continue
+
+            if isinstance(functions, dict) and "error" in functions:
+                relative_path = self._get_relative_path(file_path, reference_dir)
+                files_with_parse_errors[relative_path] = functions["error"]
                 continue
 
             file_complexity = sum(func.get("complexity", 0) for func in functions)
@@ -276,7 +287,6 @@ class ComplexityAnalyzer:
         max_complexity = max(all_complexities) if all_complexities else 0
         min_complexity = min(all_complexities) if all_complexities else 0
 
-        # Process Halstead metrics
         total_volume = 0.0
         total_difficulty = 0.0
         total_effort = 0.0
@@ -294,7 +304,6 @@ class ComplexityAnalyzer:
         average_volume = total_volume / hal_file_count if hal_file_count > 0 else 0.0
         average_difficulty = total_difficulty / hal_file_count if hal_file_count > 0 else 0.0
 
-        # Process Maintainability Index
         total_mi = 0.0
         mi_file_count = 0
 
@@ -325,4 +334,5 @@ class ComplexityAnalyzer:
             average_mi=average_mi,
             total_files_analyzed=total_files,
             files_by_complexity=files_by_complexity,
+            files_with_parse_errors=files_with_parse_errors,
         )
