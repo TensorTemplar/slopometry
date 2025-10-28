@@ -520,7 +520,7 @@ class EventDatabase:
                 stats.average_tool_duration_ms = stats_row["total_duration_ms"] / stats_row["events_with_duration"]
 
         stats.complexity_metrics, stats.complexity_delta = self._get_session_complexity_metrics(
-            session_id, stats.working_directory
+            session_id, stats.working_directory, stats.initial_git_state
         )
 
         try:
@@ -531,7 +531,7 @@ class EventDatabase:
         return stats
 
     def _get_session_complexity_metrics(
-        self, session_id: str, working_directory: str | None
+        self, session_id: str, working_directory: str | None, initial_git_state: GitState | None
     ) -> tuple[ExtendedComplexityMetrics | None, ComplexityDelta | None]:
         """Retrieve extended complexity metrics for a session with intelligent caching."""
         if not working_directory:
@@ -541,41 +541,36 @@ class EventDatabase:
             from slopometry.core.code_quality_cache import CodeQualityCacheManager
             from slopometry.core.working_tree_state import WorkingTreeStateCalculator
 
-            # Initialize working tree state calculator
             wt_calculator = WorkingTreeStateCalculator(working_directory)
             repository_path = str(Path(working_directory).resolve())
 
-            # Get current git state
             commit_sha = wt_calculator.get_current_commit_sha()
             has_uncommitted_changes = wt_calculator.has_uncommitted_changes()
 
+            baseline_commit_sha = initial_git_state.commit_sha if initial_git_state else None
+
             # For non-git repos, fall back to direct calculation (no caching)
             if commit_sha is None:
-                return self.calculate_extended_complexity_metrics(working_directory)
+                return self.calculate_extended_complexity_metrics(working_directory, baseline_commit_sha)
 
-            # Determine cache key based on repository state
             working_tree_hash = None
             if has_uncommitted_changes:
-                # Calculate working tree hash for dirty repos
                 working_tree_hash = wt_calculator.calculate_working_tree_hash(commit_sha)
 
-            # Check cache for existing metrics
             with self._get_db_connection() as conn:
                 cache_manager = CodeQualityCacheManager(conn)
 
-                # Try to get cached metrics
                 cached_metrics, cached_delta = cache_manager.get_cached_metrics(
                     session_id, repository_path, commit_sha, working_tree_hash
                 )
 
                 if cached_metrics is not None:
-                    # Cache hit - return cached results
                     return cached_metrics, cached_delta
 
-                # Cache miss - calculate fresh metrics
-                fresh_metrics, fresh_delta = self.calculate_extended_complexity_metrics(working_directory)
+                fresh_metrics, fresh_delta = self.calculate_extended_complexity_metrics(
+                    working_directory, baseline_commit_sha
+                )
 
-                # Save to cache if we got valid results
                 if fresh_metrics is not None:
                     cache_manager.save_metrics_to_cache(
                         session_id, repository_path, commit_sha, fresh_metrics, fresh_delta, working_tree_hash
@@ -585,7 +580,8 @@ class EventDatabase:
 
         except Exception:
             try:
-                return self.calculate_extended_complexity_metrics(working_directory)
+                baseline_commit_sha = initial_git_state.commit_sha if initial_git_state else None
+                return self.calculate_extended_complexity_metrics(working_directory, baseline_commit_sha)
             except Exception:
                 return None, None
 
@@ -629,12 +625,21 @@ class EventDatabase:
         return analyzer.get_plan_evolution()
 
     def calculate_extended_complexity_metrics(
-        self, working_directory: str
+        self, working_directory: str, baseline_commit_sha: str | None = None
     ) -> tuple[ExtendedComplexityMetrics | None, ComplexityDelta | None]:
         """Calculate extended complexity metrics including Halstead and MI.
 
         This provides CC, Halstead metrics, and Maintainability Index.
-        Calculates delta between HEAD and HEAD~1 commits for accuracy.
+        Calculates delta between current state and the baseline commit SHA.
+
+        Args:
+            working_directory: Directory to analyze
+            baseline_commit_sha: Commit SHA to use as baseline. If None, uses fallback logic:
+                - Try merge-base with main/master
+                - Fall back to HEAD
+
+        Returns:
+            Tuple of (current_metrics, complexity_delta)
         """
         try:
             import shutil
@@ -648,18 +653,27 @@ class EventDatabase:
             complexity_delta = None
             current_basic = None
 
-            # Always calculate current extended metrics
             current_extended = analyzer.analyze_extended_complexity()
 
             if git_tracker.has_previous_commit():
-                baseline_dir = git_tracker.extract_files_from_commit("HEAD")
+                if baseline_commit_sha:
+                    # Use provided baseline from session start
+                    baseline_ref = baseline_commit_sha
+                else:
+                    # Fall back to merge-base with main/master for feature branches
+                    baseline_ref = git_tracker.get_merge_base_with_main()
+                    if baseline_ref is None:
+                        # Fall back to HEAD if no main branch found or on main itself
+                        baseline_ref = "HEAD"
+
+                baseline_dir = git_tracker.extract_files_from_commit(baseline_ref)
 
                 if baseline_dir:
                     try:
-                        baseline_extended = analyzer.analyze_extended_complexity(baseline_dir)  # HEAD
+                        baseline_extended = analyzer.analyze_extended_complexity(baseline_dir)
 
-                        current_basic = analyzer.analyze_complexity()  # Working directory
-                        baseline_basic = analyzer._analyze_directory(baseline_dir)  # HEAD
+                        current_basic = analyzer.analyze_complexity()
+                        baseline_basic = analyzer._analyze_directory(baseline_dir)
                         complexity_delta = analyzer._calculate_delta(baseline_basic, current_basic)
 
                         complexity_delta.total_volume_change = (

@@ -320,14 +320,14 @@ class TestWorkingTreeCachingIntegration:
                 mock_calc.return_value = (expected_metrics, expected_delta)
 
                 # First call - should calculate and cache
-                metrics1, delta1 = db._get_session_complexity_metrics("test_session", temp_dir)
+                metrics1, delta1 = db._get_session_complexity_metrics("test_session", temp_dir, None)
 
                 assert metrics1.total_complexity == 75
                 assert delta1.total_complexity_change == 25
                 mock_calc.assert_called_once()
 
                 # Second call with same working tree state - should hit cache
-                metrics2, delta2 = db._get_session_complexity_metrics("test_session", temp_dir)
+                metrics2, delta2 = db._get_session_complexity_metrics("test_session", temp_dir, None)
 
                 assert metrics2.total_complexity == 75
                 assert delta2.total_complexity_change == 25
@@ -353,14 +353,14 @@ class TestWorkingTreeCachingIntegration:
                 mock_calc.return_value = (expected_metrics, expected_delta)
 
                 # First call - should calculate and cache
-                metrics1, delta1 = db._get_session_complexity_metrics("test_session", temp_dir)
+                metrics1, delta1 = db._get_session_complexity_metrics("test_session", temp_dir, None)
 
                 assert metrics1.total_complexity == 50
                 assert delta1.total_complexity_change == 0
                 mock_calc.assert_called_once()
 
                 # Second call - should hit cache
-                metrics2, delta2 = db._get_session_complexity_metrics("test_session", temp_dir)
+                metrics2, delta2 = db._get_session_complexity_metrics("test_session", temp_dir, None)
 
                 assert metrics2.total_complexity == 50
                 assert delta2.total_complexity_change == 0

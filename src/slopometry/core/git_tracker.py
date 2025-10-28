@@ -33,11 +33,14 @@ class GitTracker:
 
             has_uncommitted_changes = self._has_uncommitted_changes()
 
+            commit_sha = self._get_current_commit_sha()
+
             return GitState(
                 is_git_repo=True,
                 commit_count=commit_count,
                 current_branch=current_branch,
                 has_uncommitted_changes=has_uncommitted_changes,
+                commit_sha=commit_sha,
             )
 
         except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError):
@@ -101,6 +104,29 @@ class GitTracker:
 
         return False
 
+    def _get_current_commit_sha(self) -> str | None:
+        """Get current git commit SHA.
+
+        Returns:
+            Current commit SHA or None if failed
+        """
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=self.working_dir,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+
+            if result.returncode == 0:
+                return result.stdout.strip()
+
+        except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError):
+            pass
+
+        return None
+
     def calculate_commits_made(self, initial_state: GitState, final_state: GitState) -> int:
         """Calculate commits made between two git states."""
         if not initial_state.is_git_repo or not final_state.is_git_repo:
@@ -139,6 +165,8 @@ class GitTracker:
     def extract_files_from_commit(self, commit_ref: str = "HEAD~1") -> Path | None:
         """Extract Python files from a specific commit to a temporary directory.
 
+        Uses git archive for efficient extraction of entire tree.
+
         Args:
             commit_ref: Git commit reference (default: HEAD~1 for previous commit)
 
@@ -146,34 +174,33 @@ class GitTracker:
             Path to temporary directory containing extracted files, or None if failed
         """
         try:
-            python_files = self.get_python_files_from_commit(commit_ref)
-            if not python_files:
-                return None
-
             temp_dir = Path(tempfile.mkdtemp(prefix="slopometry_baseline_"))
 
-            for file_path in python_files:
-                try:
-                    result = subprocess.run(
-                        ["git", "show", f"{commit_ref}:{file_path}"],
-                        cwd=self.working_dir,
-                        capture_output=True,
-                        text=True,
-                        timeout=5,
-                    )
+            # Use git archive to extract entire tree at once
+            result = subprocess.run(
+                ["git", "archive", "--format=tar", commit_ref],
+                cwd=self.working_dir,
+                capture_output=True,
+                timeout=60,
+            )
 
-                    if result.returncode == 0:
-                        target_file = temp_dir / file_path
-                        target_file.parent.mkdir(parents=True, exist_ok=True)
+            if result.returncode != 0:
+                return None
 
-                        target_file.write_text(result.stdout)
+            import tarfile
+            from io import BytesIO
 
-                except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError):
-                    continue
+            tar_data = BytesIO(result.stdout)
+            with tarfile.open(fileobj=tar_data, mode="r") as tar:
+                python_members = [m for m in tar.getmembers() if m.name.endswith(".py")]
+                if not python_members:
+                    return None
+
+                tar.extractall(path=temp_dir, members=python_members)
 
             return temp_dir
 
-        except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError):
+        except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError, tarfile.TarError):
             return None
 
     def has_previous_commit(self) -> bool:
@@ -189,3 +216,42 @@ class GitTracker:
             return result.returncode == 0
         except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError):
             return False
+
+    def get_merge_base_with_main(self) -> str | None:
+        """Get the merge-base commit where current branch diverged from main/master.
+
+        Returns:
+            Commit SHA of the merge-base, or None if not found
+        """
+        try:
+            main_branch = None
+            for branch_name in ["main", "master", "origin/main", "origin/master"]:
+                result = subprocess.run(
+                    ["git", "rev-parse", "--verify", branch_name],
+                    cwd=self.working_dir,
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                if result.returncode == 0:
+                    main_branch = branch_name
+                    break
+
+            if not main_branch:
+                return None
+
+            result = subprocess.run(
+                ["git", "merge-base", "HEAD", main_branch],
+                cwd=self.working_dir,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+
+            if result.returncode == 0:
+                return result.stdout.strip()
+
+        except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError):
+            pass
+
+        return None
