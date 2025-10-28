@@ -158,6 +158,7 @@ class TestCodeQualityCache:
             metrics, delta = db._get_session_complexity_metrics(
                 session_id="test_session",
                 working_directory=temp_dir,
+                initial_git_state=None,
             )
 
             assert metrics is not None
@@ -188,13 +189,14 @@ class TestCodeQualityCache:
                 metrics, delta = db._get_session_complexity_metrics(
                     session_id="test_session",
                     working_directory=temp_dir,
+                    initial_git_state=None,
                 )
 
                 assert metrics is not None
                 assert delta is not None
                 assert metrics.total_complexity == 99
                 assert delta.total_complexity_change == 5
-                mock_calc.assert_called_once_with(temp_dir)
+                mock_calc.assert_called_once_with(temp_dir, None)
 
     def test_cache_statistics(self):
         """Test that cache statistics are calculated correctly."""

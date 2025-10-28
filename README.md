@@ -56,11 +56,11 @@ slopometry install --global
 # Use Claude normally
 claude
 
-# View tracked sessions
+# View tracked sessions and code delta vs. the previous commit or branch parent
 slopometry solo ls
 slopometry solo show <session_id>
 
-# View latest session
+# Alias for latest session, same as solo show <session_id>
 slopometry latest
 
 # Copy the claude code transcript and git add it (saved to .slopometry/ directory in the session's project)

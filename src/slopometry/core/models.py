@@ -85,6 +85,7 @@ class GitState(BaseModel):
     current_branch: str | None = None
     has_uncommitted_changes: bool = False
     is_git_repo: bool = False
+    commit_sha: str | None = None
 
 
 class HookEvent(BaseModel):

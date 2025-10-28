@@ -67,7 +67,7 @@ class ComplexityAnalyzer:
                 [*RADON_CMD_PREFIX, "cc", "--json", "--show-complexity", str(directory)],
                 capture_output=True,
                 text=True,
-                timeout=30,
+                timeout=90,
             )
 
             if result.returncode != 0:
@@ -215,21 +215,21 @@ class ComplexityAnalyzer:
                 [*RADON_CMD_PREFIX, "cc", "--json", "--show-complexity", str(target_dir)],
                 capture_output=True,
                 text=True,
-                timeout=30,
+                timeout=90,
             )
 
             hal_result = subprocess.run(
                 [*RADON_CMD_PREFIX, "hal", "--json", str(target_dir)],
                 capture_output=True,
                 text=True,
-                timeout=30,
+                timeout=90,
             )
 
             mi_result = subprocess.run(
                 [*RADON_CMD_PREFIX, "mi", "--json", str(target_dir)],
                 capture_output=True,
                 text=True,
-                timeout=30,
+                timeout=90,
             )
 
             if cc_result.returncode != 0 or hal_result.returncode != 0 or mi_result.returncode != 0:
