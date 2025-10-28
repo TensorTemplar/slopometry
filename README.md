@@ -27,6 +27,9 @@ A tool that lurks in the shadows, tracks and analyzes Claude Code sessions provi
 
 ## Installation
 
+Both Anthropic models and MiniMax-M2 are fully supported as the `claude code` drivers.  
+To setup MiniMax-M2 instead of Sonnet, check out [this guide](https://platform.minimax.io/docs/guides/text-ai-coding-tools)
+
 ### Install claude code (needs an account or api key)
 
 ```bash
