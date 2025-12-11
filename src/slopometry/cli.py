@@ -1,11 +1,24 @@
 """Main CLI dispatcher for slopometry."""
 
+import shutil
 import sys
 
 import click
 from rich.console import Console
 
 console = Console()
+
+
+def check_slopometry_in_path() -> bool:
+    """Check if slopometry is available in PATH."""
+    return shutil.which("slopometry") is not None
+
+
+def warn_if_not_in_path() -> None:
+    """Print a warning if slopometry is not in PATH."""
+    if not check_slopometry_in_path():
+        console.print("\n[yellow]Warning: 'slopometry' is not in your PATH.[/yellow]")
+        console.print("[yellow]Run 'uv tool update-shell' and restart your terminal to fix this.[/yellow]")
 
 
 @click.group()
@@ -75,6 +88,8 @@ def hook_subagent_stop() -> None:
 @click.argument("shell", type=click.Choice(["bash", "zsh", "fish"]))
 def shell_completion(shell: str) -> None:
     """Generate shell completion script."""
+    warn_if_not_in_path()
+
     if shell == "bash":
         console.print("[bold]Add this to your ~/.bashrc:[/bold]")
         console.print('eval "$(_SLOPOMETRY_COMPLETE=bash_source slopometry)"')
