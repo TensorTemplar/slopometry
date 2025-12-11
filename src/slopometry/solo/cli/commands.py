@@ -103,7 +103,9 @@ def show(session_id: str) -> None:
         console.print(f"[red]No data found for session {session_id}[/red]")
         return
 
-    display_session_summary(stats, session_id)
+    # Compute baseline if we have complexity delta
+    baseline, assessment = _compute_session_baseline(stats)
+    display_session_summary(stats, session_id, baseline, assessment)
 
 
 @click.command()
@@ -119,7 +121,37 @@ def latest() -> None:
     console.print(f"[bold]Showing most recent session: {most_recent}[/bold]\n")
     stats = session_service.get_session_statistics(most_recent)
     if stats:
-        display_session_summary(stats, most_recent)
+        # Compute baseline if we have complexity delta
+        baseline, assessment = _compute_session_baseline(stats)
+        display_session_summary(stats, most_recent, baseline, assessment)
+
+
+def _compute_session_baseline(stats):
+    """Compute baseline and assessment for a session's complexity delta.
+
+    Returns:
+        Tuple of (baseline, assessment) or (None, None) if unavailable
+    """
+    if not stats.complexity_delta:
+        return None, None
+
+    from slopometry.summoner.services.baseline_service import BaselineService
+    from slopometry.summoner.services.impact_calculator import ImpactCalculator
+
+    working_dir = Path(stats.working_directory) if stats.working_directory else None
+    if not working_dir or not working_dir.exists():
+        return None, None
+
+    baseline_service = BaselineService()
+    baseline = baseline_service.get_or_compute_baseline(working_dir)
+
+    if not baseline:
+        return None, None
+
+    impact_calculator = ImpactCalculator()
+    assessment = impact_calculator.calculate_impact(stats.complexity_delta, baseline)
+
+    return baseline, assessment
 
 
 @solo.command()
@@ -247,7 +279,7 @@ def feedback(enable: bool | None) -> None:
             content = env_file.read_text()
             if env_var in content:
                 lines = content.split("\n")
-                new_lines = []
+                new_lines: list[str] = []
                 for line in lines:
                     if line.startswith(f"{env_var}="):
                         new_lines.append(f"{env_var}=true")
@@ -272,7 +304,7 @@ def feedback(enable: bool | None) -> None:
             content = env_file.read_text()
             if env_var in content:
                 lines = content.split("\n")
-                new_lines = []
+                new_lines: list[str] = []
                 for line in lines:
                     if line.startswith(f"{env_var}="):
                         new_lines.append(f"{env_var}=false")
@@ -379,8 +411,8 @@ def save_transcript(session_id: str | None, output_dir: str, no_git_add: bool, y
         return
 
     # Create output directory if needed
-    output_dir = Path(output_dir)
-    slopometry_dir = output_dir / ".slopometry"
+    output_path_dir = Path(output_dir)
+    slopometry_dir = output_path_dir / ".slopometry"
     slopometry_dir.mkdir(parents=True, exist_ok=True)
 
     # Generate output filename

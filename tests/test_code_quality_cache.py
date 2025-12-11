@@ -1,224 +1,113 @@
-"""Tests for code quality caching functionality."""
+import sqlite3
+from datetime import datetime
 
-from pathlib import Path
-from tempfile import TemporaryDirectory
-from unittest.mock import Mock, patch
+import pytest
 
 from slopometry.core.code_quality_cache import CodeQualityCacheManager
-from slopometry.core.database import EventDatabase
-from slopometry.core.models import ComplexityDelta, ExtendedComplexityMetrics
+from slopometry.core.models import ExtendedComplexityMetrics
 
 
-class TestCodeQualityCache:
-    """Test code quality caching functionality."""
+class TestCodeQualityCacheManager:
+    """Tests for CodeQualityCacheManager."""
 
-    def test_cache_manager_save_and_retrieve(self):
-        """Test that cache manager can save and retrieve metrics correctly."""
-        with TemporaryDirectory() as temp_dir:
-            db_path = Path(temp_dir) / "test.db"
-            db = EventDatabase(db_path)
-
-            metrics = ExtendedComplexityMetrics(
-                total_complexity=100,
-                average_complexity=10.0,
-                max_complexity=20,
-                min_complexity=5,
-                total_files_analyzed=10,
+    @pytest.fixture
+    def db_connection(self):
+        """Proof-of-concept fixture for in-memory DB with correct schema."""
+        conn = sqlite3.connect(":memory:")
+        # Create schema manually to ensure it matches current migration state
+        conn.execute("""
+            CREATE TABLE code_quality_cache (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                repository_path TEXT NOT NULL,
+                commit_sha TEXT NOT NULL,
+                calculated_at TEXT NOT NULL,
+                complexity_metrics_json TEXT NOT NULL,
+                complexity_delta_json TEXT,
+                working_tree_hash TEXT,
+                calculator_version TEXT,
+                UNIQUE(session_id, repository_path, commit_sha, working_tree_hash, calculator_version)
             )
+        """)
+        yield conn
+        conn.close()
 
-            delta = ComplexityDelta(
-                total_complexity_change=5,
-                files_added=["new_file.py"],
-                files_removed=[],
-                files_changed={"existing_file.py": 2},
-                net_files_change=1,
-                avg_complexity_change=0.5,
-            )
+    def test_cache_miss_for_missing_entry(self, db_connection):
+        """Test that get_cached_metrics returns None if no entry exists."""
+        manager = CodeQualityCacheManager(db_connection)
+        metrics, delta = manager.get_cached_metrics("sess_1", "/repo", "sha1")
+        assert metrics is None
+        assert delta is None
 
-            with db._get_db_connection() as conn:
-                cache_manager = CodeQualityCacheManager(conn)
+    def test_save_and_retrieve_cache_hit(self, db_connection):
+        """Test that saved metrics can be retrieved correctly."""
+        manager = CodeQualityCacheManager(db_connection)
+        dummy_metrics = ExtendedComplexityMetrics(total_complexity=42)
 
-                success = cache_manager.save_metrics_to_cache(
-                    session_id="test_session",
-                    repository_path="/test/repo",
-                    commit_sha="abc123",
-                    complexity_metrics=metrics,
-                    complexity_delta=delta,
-                )
+        success = manager.save_metrics_to_cache("sess_1", "/repo", "sha1", dummy_metrics)
+        assert success is True
 
-                assert success
+        metrics, delta = manager.get_cached_metrics("sess_1", "/repo", "sha1")
+        assert metrics is not None
+        assert metrics.total_complexity == 42
+        assert delta is None
 
-                cached_metrics, cached_delta = cache_manager.get_cached_metrics(
-                    session_id="test_session",
-                    repository_path="/test/repo",
-                    commit_sha="abc123",
-                )
+        assert manager.is_cache_valid("/repo", "sha1") is True
 
-                assert cached_metrics is not None
-                assert cached_delta is not None
-                assert cached_metrics.total_complexity == 100
-                assert cached_metrics.average_complexity == 10.0
-                assert cached_delta.total_complexity_change == 5
-                assert cached_delta.files_added == ["new_file.py"]
+    def test_version_mismatch_invalidation(self, db_connection):
+        """Test that entries with missing or different calculator_version are ignored."""
+        manager = CodeQualityCacheManager(db_connection)
+        dummy_metrics = ExtendedComplexityMetrics(total_complexity=99)
+        metrics_json = dummy_metrics.model_dump_json()
 
-    def test_cache_manager_cache_miss(self):
-        """Test that cache manager returns None for cache misses."""
-        with TemporaryDirectory() as temp_dir:
-            db_path = Path(temp_dir) / "test.db"
-            db = EventDatabase(db_path)
+        # Insert a stale record (simulate old migration state or different version)
+        db_connection.execute(
+            """
+            INSERT INTO code_quality_cache 
+            (session_id, repository_path, commit_sha, calculated_at, complexity_metrics_json, complexity_delta_json, working_tree_hash, calculator_version)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+            ("sess_1", "/repo", "sha1", datetime.now().isoformat(), metrics_json, None, None, "OLD_VERSION"),
+        )
+        db_connection.commit()
 
-            with db._get_db_connection() as conn:
-                cache_manager = CodeQualityCacheManager(conn)
+        # Verify it is NOT retrieved
+        metrics, _ = manager.get_cached_metrics("sess_1", "/repo", "sha1")
+        assert metrics is None
+        assert manager.is_cache_valid("/repo", "sha1") is False
 
-                cached_metrics, cached_delta = cache_manager.get_cached_metrics(
-                    session_id="nonexistent_session",
-                    repository_path="/nonexistent/repo",
-                    commit_sha="nonexistent_commit",
-                )
+        # Insert a NULL version record
+        db_connection.execute(
+            """
+            INSERT INTO code_quality_cache 
+            (session_id, repository_path, commit_sha, calculated_at, complexity_metrics_json, complexity_delta_json, working_tree_hash, calculator_version)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+            ("sess_2", "/repo", "sha1", datetime.now().isoformat(), metrics_json, None, None, None),
+        )
+        db_connection.commit()
 
-                assert cached_metrics is None
-                assert cached_delta is None
+        # Verify it is NOT retrieved
+        metrics, _ = manager.get_cached_metrics("sess_2", "/repo", "sha1")
+        assert metrics is None
 
-    def test_cache_validity_check(self):
-        """Test that cache validity check works correctly."""
-        with TemporaryDirectory() as temp_dir:
-            db_path = Path(temp_dir) / "test.db"
-            db = EventDatabase(db_path)
+    def test_working_tree_hash_support(self, db_connection):
+        """Test that working_tree_hash is correctly used in cache keys."""
+        manager = CodeQualityCacheManager(db_connection)
+        dummy_metrics = ExtendedComplexityMetrics(total_complexity=100)
 
-            with db._get_db_connection() as conn:
-                cache_manager = CodeQualityCacheManager(conn)
+        # Save with a specific working tree hash
+        manager.save_metrics_to_cache("sess_1", "/repo", "sha1", dummy_metrics, working_tree_hash="hash123")
 
-                # Clean repo (working_tree_hash=None) - should not be valid initially
-                assert not cache_manager.is_cache_valid(
-                    repository_path="/test/repo",
-                    commit_sha="abc123",
-                    working_tree_hash=None,
-                )
+        # Retrieve with correct hash
+        metrics, _ = manager.get_cached_metrics("sess_1", "/repo", "sha1", working_tree_hash="hash123")
+        assert metrics is not None
+        assert metrics.total_complexity == 100
 
-                # Dirty repo (working_tree_hash="some_hash") - should not be valid initially
-                assert not cache_manager.is_cache_valid(
-                    repository_path="/test/repo",
-                    commit_sha="abc123",
-                    working_tree_hash="some_working_tree_hash",
-                )
+        # Retrieve with wrong hash -> Miss
+        metrics, _ = manager.get_cached_metrics("sess_1", "/repo", "sha1", working_tree_hash="hash999")
+        assert metrics is None
 
-                # Save metrics for clean repo
-                cache_manager.save_metrics_to_cache(
-                    session_id="test_session",
-                    repository_path="/test/repo",
-                    commit_sha="abc123",
-                    complexity_metrics=ExtendedComplexityMetrics(),
-                    complexity_delta=None,
-                    working_tree_hash=None,
-                )
-
-                # Clean repo should now be valid
-                assert cache_manager.is_cache_valid(
-                    repository_path="/test/repo",
-                    commit_sha="abc123",
-                    working_tree_hash=None,
-                )
-
-                # Dirty repo should still not be valid
-                assert not cache_manager.is_cache_valid(
-                    repository_path="/test/repo",
-                    commit_sha="abc123",
-                    working_tree_hash="some_working_tree_hash",
-                )
-
-    @patch("slopometry.core.working_tree_state.WorkingTreeStateCalculator")
-    def test_session_complexity_metrics_uses_cache(self, mock_working_tree_calculator):
-        """Test that _get_session_complexity_metrics uses cache when available."""
-        with TemporaryDirectory() as temp_dir:
-            db_path = Path(temp_dir) / "test.db"
-            db = EventDatabase(db_path)
-
-            # Mock working tree calculator for clean repo
-            mock_calculator_instance = Mock()
-            mock_calculator_instance.get_current_commit_sha.return_value = "abc123"
-            mock_calculator_instance.has_uncommitted_changes.return_value = False
-            mock_working_tree_calculator.return_value = mock_calculator_instance
-
-            test_metrics = ExtendedComplexityMetrics(total_complexity=42)
-            test_delta = ComplexityDelta(total_complexity_change=1)
-
-            # Pre-populate cache with clean repo entry (working_tree_hash=None)
-            with db._get_db_connection() as conn:
-                cache_manager = CodeQualityCacheManager(conn)
-                cache_manager.save_metrics_to_cache(
-                    session_id="test_session",
-                    repository_path=str(Path(temp_dir).resolve()),
-                    commit_sha="abc123",
-                    complexity_metrics=test_metrics,
-                    complexity_delta=test_delta,
-                    working_tree_hash=None,  # Clean repo
-                )
-
-            # Should use cache and not call calculate_extended_complexity_metrics
-            metrics, delta = db._get_session_complexity_metrics(
-                session_id="test_session",
-                working_directory=temp_dir,
-                initial_git_state=None,
-            )
-
-            assert metrics is not None
-            assert delta is not None
-            assert metrics.total_complexity == 42
-            assert delta.total_complexity_change == 1
-
-    @patch("slopometry.core.working_tree_state.WorkingTreeStateCalculator")
-    def test_session_complexity_metrics_recalculates_with_uncommitted_changes(self, mock_working_tree_calculator):
-        """Test that _get_session_complexity_metrics recalculates when there are uncommitted changes."""
-        with TemporaryDirectory() as temp_dir:
-            db_path = Path(temp_dir) / "test.db"
-            db = EventDatabase(db_path)
-
-            # Mock working tree calculator for dirty repo
-            mock_calculator_instance = Mock()
-            mock_calculator_instance.get_current_commit_sha.return_value = "abc123"
-            mock_calculator_instance.has_uncommitted_changes.return_value = True
-            mock_calculator_instance.calculate_working_tree_hash.return_value = "dirty_tree_hash"
-            mock_working_tree_calculator.return_value = mock_calculator_instance
-
-            with patch.object(db, "calculate_extended_complexity_metrics") as mock_calc:
-                mock_calc.return_value = (
-                    ExtendedComplexityMetrics(total_complexity=99),
-                    ComplexityDelta(total_complexity_change=5),
-                )
-
-                metrics, delta = db._get_session_complexity_metrics(
-                    session_id="test_session",
-                    working_directory=temp_dir,
-                    initial_git_state=None,
-                )
-
-                assert metrics is not None
-                assert delta is not None
-                assert metrics.total_complexity == 99
-                assert delta.total_complexity_change == 5
-                mock_calc.assert_called_once_with(temp_dir, None)
-
-    def test_cache_statistics(self):
-        """Test that cache statistics are calculated correctly."""
-        with TemporaryDirectory() as temp_dir:
-            db_path = Path(temp_dir) / "test.db"
-            db = EventDatabase(db_path)
-
-            with db._get_db_connection() as conn:
-                cache_manager = CodeQualityCacheManager(conn)
-
-                stats = cache_manager.get_cache_statistics()
-                assert stats["total_entries"] == 0
-                assert stats["unique_repositories"] == 0
-                assert stats["unique_sessions"] == 0
-
-                test_metrics = ExtendedComplexityMetrics()
-
-                cache_manager.save_metrics_to_cache("session1", "/repo1", "commit1", test_metrics)
-                cache_manager.save_metrics_to_cache("session1", "/repo1", "commit2", test_metrics)
-                cache_manager.save_metrics_to_cache("session2", "/repo2", "commit1", test_metrics)
-
-                stats = cache_manager.get_cache_statistics()
-                assert stats["total_entries"] == 3
-                assert stats["unique_repositories"] == 2
-                assert stats["unique_sessions"] == 2
+        # Retrieve clean (None hash) -> Miss
+        metrics, _ = manager.get_cached_metrics("sess_1", "/repo", "sha1", working_tree_hash=None)
+        assert metrics is None

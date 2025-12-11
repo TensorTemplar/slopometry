@@ -160,6 +160,57 @@ class GitTracker:
 
         return []
 
+    def get_tracked_python_files(self) -> list[Path]:
+        """Get list of Python files tracked by git or not ignored (if untracked).
+
+        Uses git ls-files if available, otherwise falls back to rglob with exclusion.
+
+        Returns:
+            List of Path objects for Python files
+        """
+
+        try:
+            cmd = ["git", "ls-files", "--cached", "--others", "--exclude-standard"]
+            result = subprocess.run(
+                cmd,
+                cwd=self.working_dir,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            files = []
+            for line in result.stdout.splitlines():
+                if line.endswith(".py"):
+                    files.append(self.working_dir / line)
+            return files
+
+        except (subprocess.SubprocessError, FileNotFoundError):
+            pass
+
+        files = []
+        ignored_dirs = {
+            ".venv",
+            "venv",
+            "env",
+            ".env",
+            ".git",
+            ".idea",
+            ".vscode",
+            "__pycache__",
+            "node_modules",
+            "site-packages",
+            "dist",
+            "build",
+        }
+
+        for file_path in self.working_dir.rglob("*.py"):
+            parts = file_path.relative_to(self.working_dir).parts
+            if any(part in ignored_dirs for part in parts):
+                continue
+            files.append(file_path)
+
+        return files
+
     def extract_files_from_commit(self, commit_ref: str = "HEAD~1") -> Path | None:
         """Extract Python files from a specific commit to a temporary directory.
 

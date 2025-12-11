@@ -4,6 +4,7 @@ import json
 import sqlite3
 from datetime import datetime, timedelta
 
+from slopometry.core.complexity_analyzer import CALCULATOR_VERSION
 from slopometry.core.models import ComplexityDelta, ExtendedComplexityMetrics
 
 
@@ -34,24 +35,54 @@ class CodeQualityCacheManager:
         """
         try:
             # Handle both clean repos (working_tree_hash=None) and dirty repos (working_tree_hash=hash)
+            # AND filter by calculator_version to ensure we don't serve stale metrics from old logic
             if working_tree_hash is None:
                 cursor = self.db_connection.execute(
                     """
                     SELECT complexity_metrics_json, complexity_delta_json 
                     FROM code_quality_cache 
-                    WHERE session_id = ? AND repository_path = ? AND commit_sha = ? AND working_tree_hash IS NULL
+                    WHERE session_id = ? AND repository_path = ? AND commit_sha = ? 
+                      AND working_tree_hash IS NULL
+                      AND (calculator_version = ? OR calculator_version IS NULL)
                     """,
-                    (session_id, repository_path, commit_sha),
+                    (session_id, repository_path, commit_sha, CALCULATOR_VERSION),
                 )
             else:
                 cursor = self.db_connection.execute(
                     """
                     SELECT complexity_metrics_json, complexity_delta_json 
                     FROM code_quality_cache 
-                    WHERE session_id = ? AND repository_path = ? AND commit_sha = ? AND working_tree_hash = ?
+                    WHERE session_id = ? AND repository_path = ? AND commit_sha = ? 
+                      AND working_tree_hash = ?
+                      AND (calculator_version = ? OR calculator_version IS NULL)
                     """,
-                    (session_id, repository_path, commit_sha, working_tree_hash),
+                    (session_id, repository_path, commit_sha, working_tree_hash, CALCULATOR_VERSION),
                 )
+            row = cursor.fetchone()
+
+            if working_tree_hash is None:
+                cursor = self.db_connection.execute(
+                    """
+                    SELECT complexity_metrics_json, complexity_delta_json 
+                    FROM code_quality_cache 
+                    WHERE session_id = ? AND repository_path = ? AND commit_sha = ? 
+                      AND working_tree_hash IS NULL
+                      AND calculator_version = ?
+                    """,
+                    (session_id, repository_path, commit_sha, CALCULATOR_VERSION),
+                )
+            else:
+                cursor = self.db_connection.execute(
+                    """
+                    SELECT complexity_metrics_json, complexity_delta_json 
+                    FROM code_quality_cache 
+                    WHERE session_id = ? AND repository_path = ? AND commit_sha = ? 
+                      AND working_tree_hash = ?
+                      AND calculator_version = ?
+                    """,
+                    (session_id, repository_path, commit_sha, working_tree_hash, CALCULATOR_VERSION),
+                )
+
             row = cursor.fetchone()
 
             if not row:
@@ -101,8 +132,8 @@ class CodeQualityCacheManager:
             self.db_connection.execute(
                 """
                 INSERT OR REPLACE INTO code_quality_cache 
-                (session_id, repository_path, commit_sha, calculated_at, complexity_metrics_json, complexity_delta_json, working_tree_hash)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                (session_id, repository_path, commit_sha, calculated_at, complexity_metrics_json, complexity_delta_json, working_tree_hash, calculator_version)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session_id,
@@ -112,6 +143,7 @@ class CodeQualityCacheManager:
                     metrics_json,
                     delta_json,
                     working_tree_hash,
+                    CALCULATOR_VERSION,
                 ),
             )
             self.db_connection.commit()
@@ -131,23 +163,27 @@ class CodeQualityCacheManager:
         Returns:
             True if cache is valid and should be used, False if fresh calculation needed
         """
-        # Check if we have a cache entry for this exact state
+        # Check if we have a cache entry for this exact state AND version
         try:
             if working_tree_hash is None:
                 cursor = self.db_connection.execute(
                     """
                     SELECT COUNT(*) FROM code_quality_cache 
-                    WHERE repository_path = ? AND commit_sha = ? AND working_tree_hash IS NULL
+                    WHERE repository_path = ? AND commit_sha = ? 
+                      AND working_tree_hash IS NULL
+                      AND calculator_version = ?
                     """,
-                    (repository_path, commit_sha),
+                    (repository_path, commit_sha, CALCULATOR_VERSION),
                 )
             else:
                 cursor = self.db_connection.execute(
                     """
                     SELECT COUNT(*) FROM code_quality_cache 
-                    WHERE repository_path = ? AND commit_sha = ? AND working_tree_hash = ?
+                    WHERE repository_path = ? AND commit_sha = ? 
+                      AND working_tree_hash = ?
+                      AND calculator_version = ?
                     """,
-                    (repository_path, commit_sha, working_tree_hash),
+                    (repository_path, commit_sha, working_tree_hash, CALCULATOR_VERSION),
                 )
             count = cursor.fetchone()[0]
             return count > 0

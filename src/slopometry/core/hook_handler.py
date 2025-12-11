@@ -208,7 +208,7 @@ def handle_stop_event(session_id: str, parsed_input: "StopInput | SubagentStopIn
         if not stats:
             return 0
 
-        current_metrics, delta = db.calculate_complexity_metrics(stats.working_directory)
+        current_metrics, delta = db.calculate_extended_complexity_metrics(stats.working_directory)
 
         # TODO: Store complexity metrics in database for analytics
 
@@ -221,7 +221,11 @@ def handle_stop_event(session_id: str, parsed_input: "StopInput | SubagentStopIn
         if abs(delta.total_complexity_change) < 5 and not delta.files_added and not delta.files_removed:
             return 0
 
-        feedback = format_complexity_feedback(current_metrics, delta)
+        baseline_feedback = ""
+        if settings.show_baseline_in_feedback:
+            baseline_feedback = _get_baseline_feedback(stats.working_directory, delta)
+
+        feedback = format_complexity_feedback(current_metrics, delta, baseline_feedback)
 
         hook_output = {"decision": "block", "reason": feedback}
 
@@ -232,12 +236,73 @@ def handle_stop_event(session_id: str, parsed_input: "StopInput | SubagentStopIn
         return 0
 
 
-def format_complexity_feedback(current_metrics: "ComplexityMetrics", delta: "ComplexityDelta") -> str:
+def _get_baseline_feedback(working_directory: str, delta: ComplexityDelta) -> str:
+    """Get baseline comparison feedback if available.
+
+    Uses cached baseline only to avoid blocking. If not cached,
+    triggers background computation for next session.
+
+    Args:
+        working_directory: Path to the repository
+        delta: Complexity delta from the session
+
+    Returns:
+        Formatted baseline feedback string, or empty if unavailable
+    """
+    import threading
+    from pathlib import Path
+
+    from slopometry.display.formatters import display_baseline_comparison_compact
+    from slopometry.summoner.services.baseline_service import BaselineService
+    from slopometry.summoner.services.impact_calculator import ImpactCalculator
+
+    working_path = Path(working_directory)
+    if not working_path.exists():
+        return ""
+
+    baseline_service = BaselineService()
+
+    from slopometry.core.git_tracker import GitTracker
+
+    git_tracker = GitTracker(working_path)
+    head_sha = git_tracker._get_current_commit_sha()
+
+    if not head_sha:
+        return ""
+
+    # Try to get cached baseline
+    baseline = baseline_service.db.get_cached_baseline(str(working_path), head_sha)
+
+    if not baseline:
+        # No cached baseline - trigger background computation for next time
+        def compute_baseline_background():
+            try:
+                baseline_service.compute_full_baseline(working_path, max_workers=2)
+            except Exception:
+                pass  # Silently fail - this is background work
+
+        thread = threading.Thread(target=compute_baseline_background, daemon=True)
+        thread.start()
+
+        return "\n**Baseline**: Computing repository baseline for future sessions..."
+
+    impact_calculator = ImpactCalculator()
+    assessment = impact_calculator.calculate_impact(delta, baseline)
+
+    return "\n" + display_baseline_comparison_compact(baseline, assessment)
+
+
+def format_complexity_feedback(
+    current_metrics: "ComplexityMetrics",
+    delta: "ComplexityDelta",
+    baseline_feedback: str = "",
+) -> str:
     """Format complexity delta information for Claude consumption.
 
     Args:
         current_metrics: Current complexity metrics
         delta: Complexity changes from previous commit
+        baseline_feedback: Optional baseline comparison feedback
 
     Returns:
         Formatted feedback string for Claude
@@ -278,6 +343,10 @@ def format_complexity_feedback(current_metrics: "ComplexityMetrics", delta: "Com
             else:
                 lines.append(f"   • {file_path}: {change}")
 
+    # Add baseline comparison feedback if available
+    if baseline_feedback:
+        lines.append(baseline_feedback)
+
     lines.append("")
     if delta.total_complexity_change > 20:
         lines.append("**Consider**: Breaking down complex functions or refactoring to reduce cognitive load.")
@@ -302,6 +371,8 @@ def detect_event_type_from_parsed(parsed_input: HookInputUnion) -> HookEventType
             return HookEventType.STOP
         case SubagentStopInput():
             return HookEventType.SUBAGENT_STOP
+        case _:
+            raise ValueError(f"Unknown input type: {type(parsed_input)}")
 
 
 def main() -> None:

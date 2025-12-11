@@ -133,8 +133,9 @@ class ComplexityDelta(BaseModel):
 
     total_volume_change: float = 0.0
     avg_volume_change: float = 0.0
-    total_difficulty_change: float = 0.0
+    avg_effort_change: float = 0.0
     avg_difficulty_change: float = 0.0
+    total_difficulty_change: float = 0.0
     total_effort_change: float = 0.0
     total_mi_change: float = 0.0
     avg_mi_change: float = 0.0
@@ -333,25 +334,26 @@ class NextFeaturePrediction(BaseModel):
         return [story for story in self.user_stories if story.priority <= 2]
 
 
-class ExtendedComplexityMetrics(BaseModel):
+class ExtendedComplexityMetrics(ComplexityMetrics):
     """Extended metrics including Halstead and Maintainability Index."""
 
-    total_complexity: int = 0
-    average_complexity: float = 0.0
-    max_complexity: int = 0
-    min_complexity: int = 0
-
     total_volume: float = 0.0
-    total_difficulty: float = 0.0
     total_effort: float = 0.0
     average_volume: float = 0.0
+    average_effort: float = 0.0
+    total_difficulty: float = 0.0
     average_difficulty: float = 0.0
 
     total_mi: float = 0.0
     average_mi: float = Field(default=0.0, description="Higher is better (0-100 scale)")
 
-    total_files_analyzed: int = 0
-    files_by_complexity: dict[str, int] = Field(default_factory=dict)
+    # Python-specific quality indicators
+    type_hint_coverage: float = Field(default=0.0, description="Percentage of functions/args with type hints (0-100)")
+    docstring_coverage: float = Field(
+        default=0.0, description="Percentage of functions/classes with docstrings (0-100)"
+    )
+    deprecation_count: int = Field(default=0, description="Number of deprecation warnings/markers found")
+
     files_with_parse_errors: dict[str, str] = Field(
         default_factory=dict, description="Files that radon couldn't parse: {filepath: error_message}"
     )
@@ -515,3 +517,91 @@ class CodeQualityCache(BaseModel):
     working_tree_hash: str | None = Field(
         default=None, description="Hash of working tree state for uncommitted changes. NULL for clean repos."
     )
+
+
+class ImpactCategory(str, Enum):
+    """Categories for staged changes impact assessment."""
+
+    SIGNIFICANT_IMPROVEMENT = "significant_improvement"
+    MINOR_IMPROVEMENT = "minor_improvement"
+    NEUTRAL = "neutral"
+    MINOR_DEGRADATION = "minor_degradation"
+    SIGNIFICANT_DEGRADATION = "significant_degradation"
+
+
+class HistoricalMetricStats(BaseModel):
+    """Statistical summary of a metric across repository history."""
+
+    metric_name: str = Field(description="Name of the metric (e.g., 'cc_delta', 'effort_delta')")
+    mean: float = Field(description="Mean value across all commits")
+    std_dev: float = Field(description="Standard deviation")
+    median: float = Field(description="Median value")
+    min_value: float = Field(description="Minimum observed value")
+    max_value: float = Field(description="Maximum observed value")
+    sample_count: int = Field(description="Number of commits analyzed")
+    trend_coefficient: float = Field(
+        default=0.0, description="Linear regression slope indicating improvement/degradation trend"
+    )
+
+
+class RepoBaseline(BaseModel):
+    """Baseline statistics computed from entire repository history."""
+
+    repository_path: str = Field(description="Absolute path to the repository")
+    computed_at: datetime = Field(default_factory=datetime.now)
+    head_commit_sha: str = Field(description="HEAD commit when baseline was computed")
+    total_commits_analyzed: int = Field(description="Number of commits in baseline calculation")
+
+    cc_delta_stats: HistoricalMetricStats = Field(description="Cyclomatic complexity delta statistics")
+    effort_delta_stats: HistoricalMetricStats = Field(description="Halstead effort delta statistics")
+    mi_delta_stats: HistoricalMetricStats = Field(description="Maintainability index delta statistics")
+
+    current_metrics: ExtendedComplexityMetrics = Field(description="Metrics at HEAD commit")
+
+
+class ImpactAssessment(BaseModel):
+    """Assessment of staged changes impact against repo baseline."""
+
+    cc_z_score: float = Field(description="Z-score for CC change (positive = above avg increase)")
+    effort_z_score: float = Field(description="Z-score for Effort change (positive = above avg increase)")
+    mi_z_score: float = Field(description="Z-score for MI change (positive = above avg increase, which is good)")
+
+    impact_score: float = Field(
+        description="Composite score: positive = above-average quality improvement, negative = below-average"
+    )
+    impact_category: ImpactCategory = Field(description="Categorical assessment of impact")
+
+    cc_delta: float = Field(description="Raw CC change from staged files")
+    effort_delta: float = Field(description="Raw Effort change from staged files")
+    mi_delta: float = Field(description="Raw MI change from staged files")
+
+
+class StagedChangesAnalysis(BaseModel):
+    """Complete analysis of staged changes against repository baseline.
+
+    Deprecated: Use CurrentChangesAnalysis instead for analyzing uncommitted changes.
+    """
+
+    repository_path: str
+    analysis_timestamp: datetime = Field(default_factory=datetime.now)
+
+    staged_files: list[str] = Field(description="List of staged Python files")
+    staged_metrics: ExtendedComplexityMetrics = Field(description="Metrics if staged changes were applied")
+    baseline_metrics: ExtendedComplexityMetrics = Field(description="Metrics at current HEAD")
+
+    assessment: ImpactAssessment
+    baseline: RepoBaseline
+
+
+class CurrentChangesAnalysis(BaseModel):
+    """Complete analysis of uncommitted changes against repository baseline."""
+
+    repository_path: str
+    analysis_timestamp: datetime = Field(default_factory=datetime.now)
+
+    changed_files: list[str] = Field(description="List of changed Python files (staged and unstaged)")
+    current_metrics: ExtendedComplexityMetrics = Field(description="Metrics with uncommitted changes applied")
+    baseline_metrics: ExtendedComplexityMetrics = Field(description="Metrics at current HEAD")
+
+    assessment: ImpactAssessment
+    baseline: RepoBaseline

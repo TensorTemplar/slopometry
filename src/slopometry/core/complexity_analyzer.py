@@ -1,13 +1,12 @@
 """Cognitive complexity analysis using radon."""
 
-import json
-import subprocess
 from pathlib import Path
 from typing import Any
 
 from slopometry.core.models import ComplexityDelta, ComplexityMetrics, ExtendedComplexityMetrics
+from slopometry.core.python_feature_analyzer import PythonFeatureAnalyzer
 
-RADON_CMD_PREFIX = ["uv", "run", "--no-sync", "radon"]
+CALCULATOR_VERSION = "2024.1.4"
 
 
 class ComplexityAnalyzer:
@@ -60,25 +59,54 @@ class ComplexityAnalyzer:
         Returns:
             ComplexityMetrics with aggregated complexity data.
         """
-        try:
-            # FIXME: python version hardcode is spurious, while we require the latest AST parsing
-            # the version we choose should be informed by either config var or repo python
-            result = subprocess.run(
-                [*RADON_CMD_PREFIX, "cc", "--json", "--show-complexity", str(directory)],
-                capture_output=True,
-                text=True,
-                timeout=90,
-            )
+        import radon.complexity as cc_lib
 
-            if result.returncode != 0:
-                return ComplexityMetrics()
+        from slopometry.core.git_tracker import GitTracker
 
-            radon_data = json.loads(result.stdout)
+        tracker = GitTracker(directory)
+        python_files = tracker.get_tracked_python_files()
 
-            return self._process_radon_output(radon_data, directory)
+        files_by_complexity = {}
+        all_complexities = []
 
-        except (subprocess.TimeoutExpired, subprocess.CalledProcessError, json.JSONDecodeError):
-            return ComplexityMetrics()
+        for file_path in python_files:
+            try:
+                content = file_path.read_text(encoding="utf-8")
+
+                blocks = cc_lib.cc_visit(content)
+                file_complexity = sum(block.complexity for block in blocks)
+
+                relative_path = self._get_relative_path(file_path, directory)
+                files_by_complexity[relative_path] = file_complexity
+                all_complexities.append(file_complexity)
+
+            except (SyntaxError, UnicodeDecodeError, OSError):
+                # Note: radon cc_visit can raise SyntaxError on invalid python code
+                # We track these as errors just like the CLI parser did
+                # But ComplexityMetrics does not expose parse_errors dict in this method's return type currently
+                # So we just skip or log
+                continue
+
+        total_files = len(all_complexities)
+        total_complexity = sum(all_complexities)
+
+        if total_files > 0:
+            average_complexity = total_complexity / total_files
+            max_complexity = max(all_complexities)
+            min_complexity = min(all_complexities)
+        else:
+            average_complexity = 0.0
+            max_complexity = 0
+            min_complexity = 0
+
+        return ComplexityMetrics(
+            total_files_analyzed=total_files,
+            total_complexity=total_complexity,
+            average_complexity=average_complexity,
+            max_complexity=max_complexity,
+            min_complexity=min_complexity,
+            files_by_complexity=files_by_complexity,
+        )
 
     def _process_radon_output(self, radon_data: dict[str, Any], reference_dir: Path | None = None) -> ComplexityMetrics:
         """Process radon JSON output into ComplexityMetrics.
@@ -162,14 +190,11 @@ class ComplexityAnalyzer:
 
         total_complexity_change = current_metrics.total_complexity - baseline_metrics.total_complexity
 
-        if common_files:
-            baseline_avg = sum(baseline_metrics.files_by_complexity[f] for f in common_files) / len(common_files)
-            current_avg = sum(current_metrics.files_by_complexity[f] for f in common_files) / len(common_files)
-            avg_complexity_change = current_avg - baseline_avg
-        else:
-            avg_complexity_change = 0.0
+        # Calculate global average complexity change (not just common files)
+        # This prevents penalizing adding many simple files (which increases total but decreases average)
+        avg_complexity_change = current_metrics.average_complexity - baseline_metrics.average_complexity
 
-        return ComplexityDelta(
+        delta = ComplexityDelta(
             total_complexity_change=total_complexity_change,
             files_added=files_added,
             files_removed=files_removed,
@@ -178,7 +203,27 @@ class ComplexityAnalyzer:
             avg_complexity_change=avg_complexity_change,
         )
 
-    def _get_relative_path(self, file_path: str, reference_dir: Path | None = None) -> str:
+        # Handle Extended Metrics if available (duck typing)
+        if hasattr(current_metrics, "average_effort") and hasattr(baseline_metrics, "average_effort"):
+            # We use getattr to safely access extended attributes that might not be on the base class type hint
+            delta.avg_effort_change = getattr(current_metrics, "average_effort", 0.0) - getattr(
+                baseline_metrics, "average_effort", 0.0
+            )
+            delta.total_effort_change = getattr(current_metrics, "total_effort", 0.0) - getattr(
+                baseline_metrics, "total_effort", 0.0
+            )
+
+        if hasattr(current_metrics, "average_mi") and hasattr(baseline_metrics, "average_mi"):
+            delta.avg_mi_change = getattr(current_metrics, "average_mi", 0.0) - getattr(
+                baseline_metrics, "average_mi", 0.0
+            )
+            delta.total_mi_change = getattr(current_metrics, "total_mi", 0.0) - getattr(
+                baseline_metrics, "total_mi", 0.0
+            )
+
+        return delta
+
+    def _get_relative_path(self, file_path: str | Path, reference_dir: Path | None = None) -> str:
         """Convert absolute path to relative path from reference directory.
 
         Args:
@@ -197,7 +242,7 @@ class ComplexityAnalyzer:
             else:
                 return str(abs_path)
         except (ValueError, OSError):
-            return file_path
+            return str(file_path)
 
     def analyze_extended_complexity(self, directory: Path | None = None) -> ExtendedComplexityMetrics:
         """Analyze with CC, Halstead, and MI metrics.
@@ -209,77 +254,56 @@ class ComplexityAnalyzer:
             ExtendedComplexityMetrics with all radon metrics.
         """
         target_dir = directory or self.working_directory
+        import radon.complexity as cc_lib
+        import radon.metrics as metrics_lib
 
-        try:
-            cc_result = subprocess.run(
-                [*RADON_CMD_PREFIX, "cc", "--json", "--show-complexity", str(target_dir)],
-                capture_output=True,
-                text=True,
-                timeout=90,
-            )
+        from slopometry.core.git_tracker import GitTracker
 
-            hal_result = subprocess.run(
-                [*RADON_CMD_PREFIX, "hal", "--json", str(target_dir)],
-                capture_output=True,
-                text=True,
-                timeout=90,
-            )
+        tracker = GitTracker(target_dir)
+        python_files = tracker.get_tracked_python_files()
 
-            mi_result = subprocess.run(
-                [*RADON_CMD_PREFIX, "mi", "--json", str(target_dir)],
-                capture_output=True,
-                text=True,
-                timeout=90,
-            )
-
-            if cc_result.returncode != 0 or hal_result.returncode != 0 or mi_result.returncode != 0:
-                return ExtendedComplexityMetrics()
-
-            return self._merge_metrics(
-                json.loads(cc_result.stdout),
-                json.loads(hal_result.stdout),
-                json.loads(mi_result.stdout),
-                target_dir,
-            )
-
-        except (subprocess.TimeoutExpired, subprocess.CalledProcessError, json.JSONDecodeError):
-            return ExtendedComplexityMetrics()
-
-    def _merge_metrics(
-        self,
-        cc_data: dict[str, Any],
-        hal_data: dict[str, Any],
-        mi_data: dict[str, Any],
-        reference_dir: Path,
-    ) -> ExtendedComplexityMetrics:
-        """Merge metrics from different radon commands into ExtendedComplexityMetrics.
-
-        Args:
-            cc_data: Cyclomatic complexity data
-            hal_data: Halstead metrics data
-            mi_data: Maintainability index data
-            reference_dir: Reference directory for path calculation
-
-        Returns:
-            Merged ExtendedComplexityMetrics
-        """
         files_by_complexity = {}
         all_complexities = []
         files_with_parse_errors = {}
 
-        for file_path, functions in cc_data.items():
-            if not functions:
+        total_volume = 0.0
+        total_difficulty = 0.0
+        total_effort = 0.0
+        hal_file_count = 0
+        total_mi = 0.0
+        mi_file_count = 0
+
+        for file_path in python_files:
+            try:
+                content = file_path.read_text(encoding="utf-8")
+
+                blocks = cc_lib.cc_visit(content)
+                file_complexity = sum(block.complexity for block in blocks)
+
+                relative_path = self._get_relative_path(str(file_path), target_dir)
+                files_by_complexity[relative_path] = file_complexity
+                all_complexities.append(file_complexity)
+
+                hal = metrics_lib.h_visit(content)
+                total = hal.total
+                total_volume += total.volume
+                total_difficulty += total.difficulty
+                total_effort += total.effort
+                hal_file_count += 1
+
+                mi_score = metrics_lib.mi_visit(content, multi=False)
+                total_mi += mi_score
+                mi_file_count += 1
+
+            except (SyntaxError, UnicodeDecodeError, OSError, ValueError) as e:
+                # Note: ValueError handles empty files which radon might complain about
+                relative_path = self._get_relative_path(str(file_path), target_dir)
+                files_with_parse_errors[relative_path] = str(e)
                 continue
 
-            if isinstance(functions, dict) and "error" in functions:
-                relative_path = self._get_relative_path(file_path, reference_dir)
-                files_with_parse_errors[relative_path] = functions["error"]
-                continue
+        feature_analyzer = PythonFeatureAnalyzer()
 
-            file_complexity = sum(func.get("complexity", 0) for func in functions)
-            relative_path = self._get_relative_path(file_path, reference_dir)
-            files_by_complexity[relative_path] = file_complexity
-            all_complexities.append(file_complexity)
+        feature_stats = feature_analyzer.analyze_directory(target_dir)
 
         total_files = len(all_complexities)
         total_complexity = sum(all_complexities)
@@ -287,38 +311,20 @@ class ComplexityAnalyzer:
         max_complexity = max(all_complexities) if all_complexities else 0
         min_complexity = min(all_complexities) if all_complexities else 0
 
-        total_volume = 0.0
-        total_difficulty = 0.0
-        total_effort = 0.0
-        hal_file_count = 0
-
-        for file_path, hal_metrics in hal_data.items():
-            if isinstance(hal_metrics, dict) and "total" in hal_metrics:
-                total_metrics = hal_metrics["total"]
-                if total_metrics:
-                    total_volume += total_metrics.get("volume", 0.0)
-                    total_difficulty += total_metrics.get("difficulty", 0.0)
-                    total_effort += total_metrics.get("effort", 0.0)
-                    hal_file_count += 1
-
         average_volume = total_volume / hal_file_count if hal_file_count > 0 else 0.0
         average_difficulty = total_difficulty / hal_file_count if hal_file_count > 0 else 0.0
-
-        total_mi = 0.0
-        mi_file_count = 0
-
-        for file_path, mi_value in mi_data.items():
-            if isinstance(mi_value, dict) and "mi" in mi_value:
-                mi_score = mi_value["mi"]
-            elif isinstance(mi_value, int | float):
-                mi_score = float(mi_value)
-            else:
-                continue
-
-            total_mi += mi_score
-            mi_file_count += 1
+        average_effort = total_effort / hal_file_count if hal_file_count > 0 else 0.0
 
         average_mi = total_mi / mi_file_count if mi_file_count > 0 else 0.0
+
+        total_typeable_items = feature_stats.args_count + feature_stats.returns_count
+        total_annotated = feature_stats.annotated_args_count + feature_stats.annotated_returns_count
+        type_hint_coverage = (total_annotated / total_typeable_items * 100.0) if total_typeable_items > 0 else 0.0
+
+        total_docstringable = feature_stats.functions_count + feature_stats.classes_count
+        docstring_coverage = (
+            (feature_stats.docstrings_count / total_docstringable * 100.0) if total_docstringable > 0 else 0.0
+        )
 
         return ExtendedComplexityMetrics(
             total_complexity=total_complexity,
@@ -326,12 +332,15 @@ class ComplexityAnalyzer:
             max_complexity=max_complexity,
             min_complexity=min_complexity,
             total_volume=total_volume,
-            total_difficulty=total_difficulty,
-            total_effort=total_effort,
             average_volume=average_volume,
+            total_effort=total_effort,
+            average_effort=average_effort,
             average_difficulty=average_difficulty,
             total_mi=total_mi,
             average_mi=average_mi,
+            type_hint_coverage=type_hint_coverage,
+            docstring_coverage=docstring_coverage,
+            deprecation_count=feature_stats.deprecations_count,
             total_files_analyzed=total_files,
             files_by_complexity=files_by_complexity,
             files_with_parse_errors=files_with_parse_errors,
