@@ -42,6 +42,13 @@ curl -fsSL http://claude.ai/install.sh | bash
 # Install as a global tool
 uv tool install git+https://github.com/TensorTemplar/slopometry.git
 
+# Add tool directory to PATH (required on macOS, may be needed on Linux)
+uv tool update-shell
+
+# Restart your terminal or run:
+source ~/.zshrc  # for zsh
+# or: source ~/.bashrc  # for bash
+
 # Or install from a local directory
 git clone https://github.com/TensorTemplar/slopometry
 cd slopometry

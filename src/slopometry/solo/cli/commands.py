@@ -29,6 +29,15 @@ def solo() -> None:
     pass
 
 
+def _warn_if_not_in_path() -> None:
+    """Print a warning if slopometry is not in PATH."""
+    import shutil
+
+    if not shutil.which("slopometry"):
+        console.print("\n[yellow]Warning: 'slopometry' is not in your PATH.[/yellow]")
+        console.print("[yellow]Run 'uv tool update-shell' and restart your terminal to fix this.[/yellow]")
+
+
 @click.command()
 @click.option(
     "--global/--local",
@@ -44,6 +53,7 @@ def install(global_: bool) -> None:
     if success:
         console.print(f"[green]{message}[/green]")
         console.print("[cyan]All Claude Code sessions will now be automatically tracked[/cyan]")
+        _warn_if_not_in_path()
     else:
         console.print(f"[red]{message}[/red]")
 
