@@ -171,8 +171,186 @@ def analyze_commits(start: str | None, end: str | None, repo_path: Path | None) 
         experiment_service.analyze_commit_chain(repo_path, start, end)
         console.print("\n[green]✓ Analysis complete[/green]")
 
+        _show_commit_range_baseline_comparison(repo_path, start, end)
+
     except Exception as e:
         console.print(f"[red]Failed to analyze commits: {e}[/red]")
+        sys.exit(1)
+
+
+def _show_commit_range_baseline_comparison(repo_path: Path, start: str, end: str) -> None:
+    """Show baseline comparison for analyzed commit range."""
+    from slopometry.core.complexity_analyzer import ComplexityAnalyzer
+    from slopometry.core.git_tracker import GitTracker
+    from slopometry.core.models import ComplexityDelta
+    from slopometry.display.formatters import display_baseline_comparison
+    from slopometry.summoner.services.baseline_service import BaselineService
+    from slopometry.summoner.services.impact_calculator import ImpactCalculator
+
+    console.print("\n[yellow]Computing baseline comparison...[/yellow]")
+
+    baseline_service = BaselineService()
+    baseline = baseline_service.get_or_compute_baseline(repo_path)
+
+    if not baseline:
+        console.print("[yellow]Could not compute baseline (need at least 2 commits).[/yellow]")
+        return
+
+    git_tracker = GitTracker(repo_path)
+    analyzer = ComplexityAnalyzer(working_directory=repo_path)
+
+    import shutil
+    import subprocess
+
+    start_sha_result = subprocess.run(
+        ["git", "rev-parse", start],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+    )
+    end_sha_result = subprocess.run(
+        ["git", "rev-parse", end],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+    )
+
+    if start_sha_result.returncode != 0 or end_sha_result.returncode != 0:
+        console.print("[yellow]Could not resolve commit refs for baseline comparison.[/yellow]")
+        return
+
+    start_sha = start_sha_result.stdout.strip()
+    end_sha = end_sha_result.stdout.strip()
+
+    start_dir = git_tracker.extract_files_from_commit(start_sha)
+    end_dir = git_tracker.extract_files_from_commit(end_sha)
+
+    if not start_dir or not end_dir:
+        console.print("[yellow]Could not extract commits for baseline comparison.[/yellow]")
+        return
+
+    try:
+        start_metrics = analyzer.analyze_extended_complexity(start_dir)
+        end_metrics = analyzer.analyze_extended_complexity(end_dir)
+
+        range_delta = ComplexityDelta(
+            total_complexity_change=end_metrics.total_complexity - start_metrics.total_complexity,
+            avg_complexity_change=end_metrics.average_complexity - start_metrics.average_complexity,
+            total_volume_change=end_metrics.total_volume - start_metrics.total_volume,
+            avg_volume_change=end_metrics.average_volume - start_metrics.average_volume,
+            total_difficulty_change=end_metrics.total_difficulty - start_metrics.total_difficulty,
+            avg_difficulty_change=end_metrics.average_difficulty - start_metrics.average_difficulty,
+            total_effort_change=end_metrics.total_effort - start_metrics.total_effort,
+            total_mi_change=end_metrics.total_mi - start_metrics.total_mi,
+            avg_mi_change=end_metrics.average_mi - start_metrics.average_mi,
+            net_files_change=end_metrics.total_files_analyzed - start_metrics.total_files_analyzed,
+        )
+
+        impact_calculator = ImpactCalculator()
+        assessment = impact_calculator.calculate_impact(range_delta, baseline)
+
+        console.print(f"\n[bold]Commit Range Baseline Comparison ({start}..{end})[/bold]")
+        display_baseline_comparison(
+            baseline=baseline,
+            assessment=assessment,
+            title="Commit Range Impact",
+        )
+
+    finally:
+        shutil.rmtree(start_dir, ignore_errors=True)
+        shutil.rmtree(end_dir, ignore_errors=True)
+
+
+@summoner.command("current-impact")
+@click.option(
+    "--repo-path",
+    "-r",
+    type=click.Path(exists=True, path_type=Path),
+    help="Repository path (default: current directory)",
+)
+@click.option(
+    "--recompute-baseline",
+    is_flag=True,
+    help="Force recomputation of baseline even if cached",
+)
+@click.option(
+    "--max-workers",
+    "-w",
+    default=4,
+    help="Maximum parallel workers for baseline computation (default: 4)",
+)
+def current_impact(
+    repo_path: Path | None,
+    recompute_baseline: bool,
+    max_workers: int,
+) -> None:
+    """Analyze impact of uncommitted changes against repository baseline.
+
+    Computes a baseline from your entire commit history, then evaluates
+    whether your uncommitted changes represent above-average or below-average
+    quality impact compared to typical commits in this repository.
+
+    Analyzes all uncommitted changes (staged + unstaged).
+
+    Impact categories:
+      - SIGNIFICANT_IMPROVEMENT: > 1.0 std dev better than average
+      - MINOR_IMPROVEMENT: 0.5 to 1.0 std dev better
+      - NEUTRAL: within ±0.5 std dev of average
+      - MINOR_DEGRADATION: 0.5 to 1.0 std dev worse
+      - SIGNIFICANT_DEGRADATION: > 1.0 std dev worse
+    """
+    from slopometry.core.working_tree_extractor import WorkingTreeExtractor
+    from slopometry.display.formatters import display_current_impact_analysis
+    from slopometry.summoner.services.baseline_service import BaselineService
+    from slopometry.summoner.services.current_impact_service import CurrentImpactService
+
+    if repo_path is None:
+        repo_path = Path.cwd()
+
+    extractor = WorkingTreeExtractor(repo_path)
+
+    changed_files = extractor.get_changed_python_files()
+    if not changed_files:
+        if not extractor.has_uncommitted_changes():
+            console.print("[yellow]No uncommitted changes found.[/yellow]")
+            console.print("[dim]Make some changes and try again.[/dim]")
+        else:
+            console.print("[yellow]No uncommitted Python files found.[/yellow]")
+            console.print("[dim]Modify some Python files and try again.[/dim]")
+        return
+
+    console.print("[bold]Analyzing uncommitted changes impact[/bold]")
+    console.print(f"Repository: {repo_path}")
+    console.print(f"Changed Python files: {len(changed_files)}")
+
+    baseline_service = BaselineService()
+
+    console.print("\n[yellow]Computing repository baseline...[/yellow]")
+    baseline = baseline_service.get_or_compute_baseline(
+        repo_path, recompute=recompute_baseline, max_workers=max_workers
+    )
+
+    if not baseline:
+        console.print("[red]Failed to compute baseline.[/red]")
+        console.print("[dim]Ensure the repository has at least 2 commits.[/dim]")
+        return
+
+    console.print(f"[green]✓ Baseline computed from {baseline.total_commits_analyzed} commits[/green]")
+
+    console.print("\n[yellow]Analyzing uncommitted changes...[/yellow]")
+
+    current_impact_service = CurrentImpactService()
+    try:
+        analysis = current_impact_service.analyze_uncommitted_changes(repo_path, baseline)
+
+        if not analysis:
+            console.print("[red]Failed to analyze uncommitted changes.[/red]")
+            return
+
+        display_current_impact_analysis(analysis)
+
+    except Exception as e:
+        console.print(f"[red]Failed to analyze uncommitted changes: {e}[/red]")
         sys.exit(1)
 
 
@@ -213,7 +391,6 @@ def show_experiment(experiment_id: str) -> None:
         table = create_progress_history_table(progress_data)
         console.print(table)
 
-        # Show final score
         final_row = progress_rows[-1]
         final_cli = final_row[1]
         console.print(f"\n[bold]Final CLI Score: {final_cli:.3f}[/bold]")
@@ -245,7 +422,6 @@ def userstorify(
 
     llm_service = LLMService()
 
-    # Handle feature ID resolution
     if feature_id:
         if base_commit or head_commit:
             console.print("[red]Cannot specify both --feature-id and --base-commit/--head-commit[/red]")
@@ -255,7 +431,6 @@ def userstorify(
 
         db = EventDatabase()
 
-        # Use match statement with length-based strategy
         match len(feature_id):
             case 36:  # Full UUID4 length
                 feature = db.get_feature_boundary_by_id(feature_id, repo_path)
@@ -295,7 +470,6 @@ def userstorify(
     console.print(f"Repository: {repo_path}")
     console.print(f"Using agents: {', '.join(llm_service.get_configured_agents())}")
 
-    # Get commit info for display
     commit_info = llm_service.get_commit_info_for_display(base_commit, head_commit)
 
     console.print("\n[yellow]Resolving commit references...[/yellow]")
@@ -549,7 +723,6 @@ def show_user_story(entry_id: str) -> None:
 
     db = EventDatabase()
 
-    # Use match statement with length-based strategy like feature IDs
     match len(entry_id):
         case 36:  # Full UUID4 length
             entry = db.get_user_story_entry_by_id(entry_id)
@@ -573,7 +746,6 @@ def show_user_story(entry_id: str) -> None:
             console.print("[dim]Entry IDs should be UUID4 format (36 chars) or partial (< 36 chars)[/dim]")
             sys.exit(1)
 
-    # Display entry details
     console.print(f"[bold]User Story Entry: {entry.short_id}[/bold]")
     console.print(f"Created: {entry.created_at.strftime('%Y-%m-%d %H:%M:%S')}")
     console.print(f"Repository: {entry.repository_path}")

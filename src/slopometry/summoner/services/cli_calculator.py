@@ -28,7 +28,7 @@ class CLICalculator:
 
         # Halstead Score (composite of volume, difficulty, effort)
         volume_ratio = current.total_volume / max(target.total_volume, 1)
-        difficulty_ratio = current.total_difficulty / max(target.total_difficulty, 1)
+        difficulty_ratio = current.average_difficulty / max(target.average_difficulty, 1)
         effort_ratio = current.total_effort / max(target.total_effort, 1)
 
         halstead_score = (
@@ -42,7 +42,6 @@ class CLICalculator:
         mi_ratio = current.average_mi / max(target.average_mi, 1) if target.average_mi > 0 else 0.0
         mi_score = self._score_with_penalty(mi_ratio, optimal=1.0, higher_is_better=True)
 
-        # Weighted CLI score
         cli_score = complexity_score * 0.4 + halstead_score * 0.35 + mi_score * 0.25
 
         component_scores = {

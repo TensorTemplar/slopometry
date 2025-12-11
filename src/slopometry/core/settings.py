@@ -81,6 +81,7 @@ class Settings(BaseSettings):
 
     enable_complexity_analysis: bool = True
     enable_complexity_feedback: bool = False
+    show_baseline_in_feedback: bool = True
 
     llm_proxy_url: str = ""
     llm_proxy_api_key: str = ""
@@ -89,7 +90,6 @@ class Settings(BaseSettings):
     hf_token: str = ""
     hf_default_repo: str = ""
 
-    # User story generation settings
     user_story_agents: list[str] = ["o3", "claude-opus-4", "gemini-2.5-pro"]
 
     @field_validator("database_path", mode="before")

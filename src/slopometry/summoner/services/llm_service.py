@@ -72,7 +72,7 @@ class LLMService:
                         head_commit=resolved_head,
                         diff_content=diff,
                         stride_size=stride_size,
-                        user_stories=result.data,
+                        user_stories=result.output,
                         rating=3,  # Default neutral rating for bulk generation
                         guidelines_for_improving="",
                         model_used=model_name,
@@ -96,12 +96,11 @@ class LLMService:
 
     def get_feature_boundaries(self, repo_path: Path, limit: int = 20) -> list:
         """Get detected feature boundaries from merge commits."""
-        # Try to get from database first
+
         cached_features = self.db.get_feature_boundaries(repo_path)
         if cached_features:
             return cached_features
 
-        # If not in database, detect and save them
         original_dir = os.getcwd()
         try:
             os.chdir(repo_path)
@@ -121,7 +120,6 @@ class LLMService:
             base_short = feature.base_commit[:8]
             head_short = feature.head_commit[:8]
 
-            # Get the best user story entry for this feature
             best_entry_id = self.db.get_best_user_story_entry_for_feature(feature)
             best_entry_short = best_entry_id[:8] if best_entry_id else "N/A"
 

@@ -16,12 +16,14 @@ from slopometry.core.models import (
     ExtendedComplexityMetrics,
     FeatureBoundary,
     GitState,
+    HistoricalMetricStats,
     HookEvent,
     HookEventType,
     NextFeaturePrediction,
     PlanEvolution,
     Project,
     ProjectSource,
+    RepoBaseline,
     SessionStatistics,
     ToolType,
     UserStory,
@@ -278,13 +280,53 @@ class EventDatabase:
                     complexity_metrics_json TEXT NOT NULL,
                     complexity_delta_json TEXT,
                     working_tree_hash TEXT,
-                    UNIQUE(session_id, repository_path, commit_sha, working_tree_hash)
+                    calculator_version TEXT,
+                    UNIQUE(session_id, repository_path, commit_sha, working_tree_hash, calculator_version)
                 )
             """)
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_code_quality_cache_repo_commit ON code_quality_cache(repository_path, commit_sha)"
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_code_quality_cache_session ON code_quality_cache(session_id)")
+
+            # Repo baseline statistics for staged-impact analysis
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS repo_baselines (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    repository_path TEXT NOT NULL,
+                    head_commit_sha TEXT NOT NULL,
+                    computed_at TEXT NOT NULL,
+                    total_commits_analyzed INTEGER NOT NULL,
+
+                    cc_delta_mean REAL NOT NULL,
+                    cc_delta_std REAL NOT NULL,
+                    cc_delta_median REAL NOT NULL,
+                    cc_delta_min REAL NOT NULL,
+                    cc_delta_max REAL NOT NULL,
+                    cc_delta_trend REAL NOT NULL,
+
+                    effort_delta_mean REAL NOT NULL,
+                    effort_delta_std REAL NOT NULL,
+                    effort_delta_median REAL NOT NULL,
+                    effort_delta_min REAL NOT NULL,
+                    effort_delta_max REAL NOT NULL,
+                    effort_delta_trend REAL NOT NULL,
+
+                    mi_delta_mean REAL NOT NULL,
+                    mi_delta_std REAL NOT NULL,
+                    mi_delta_median REAL NOT NULL,
+                    mi_delta_min REAL NOT NULL,
+                    mi_delta_max REAL NOT NULL,
+                    mi_delta_trend REAL NOT NULL,
+
+                    current_metrics_json TEXT NOT NULL,
+
+                    UNIQUE(repository_path, head_commit_sha)
+                )
+            """)
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_repo_baselines_repo_head ON repo_baselines(repository_path, head_commit_sha)"
+            )
 
             conn.commit()
 
@@ -1430,6 +1472,106 @@ class EventDatabase:
             if rows:
                 return rows[0][0]  # Return the entry ID
             return None
+
+    # Repo baseline cache methods for staged-impact analysis
+
+    def get_cached_baseline(self, repository_path: str, head_commit_sha: str) -> RepoBaseline | None:
+        """Retrieve cached baseline if HEAD matches."""
+        with self._get_db_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT repository_path, head_commit_sha, computed_at, total_commits_analyzed,
+                       cc_delta_mean, cc_delta_std, cc_delta_median, cc_delta_min, cc_delta_max, cc_delta_trend,
+                       effort_delta_mean, effort_delta_std, effort_delta_median, effort_delta_min, effort_delta_max, effort_delta_trend,
+                       mi_delta_mean, mi_delta_std, mi_delta_median, mi_delta_min, mi_delta_max, mi_delta_trend,
+                       current_metrics_json
+                FROM repo_baselines
+                WHERE repository_path = ? AND head_commit_sha = ?
+                """,
+                (repository_path, head_commit_sha),
+            ).fetchone()
+
+            if not row:
+                return None
+
+            return RepoBaseline(
+                repository_path=row[0],
+                head_commit_sha=row[1],
+                computed_at=datetime.fromisoformat(row[2]),
+                total_commits_analyzed=row[3],
+                cc_delta_stats=HistoricalMetricStats(
+                    metric_name="cc_delta",
+                    mean=row[4],
+                    std_dev=row[5],
+                    median=row[6],
+                    min_value=row[7],
+                    max_value=row[8],
+                    sample_count=row[3],
+                    trend_coefficient=row[9],
+                ),
+                effort_delta_stats=HistoricalMetricStats(
+                    metric_name="effort_delta",
+                    mean=row[10],
+                    std_dev=row[11],
+                    median=row[12],
+                    min_value=row[13],
+                    max_value=row[14],
+                    sample_count=row[3],
+                    trend_coefficient=row[15],
+                ),
+                mi_delta_stats=HistoricalMetricStats(
+                    metric_name="mi_delta",
+                    mean=row[16],
+                    std_dev=row[17],
+                    median=row[18],
+                    min_value=row[19],
+                    max_value=row[20],
+                    sample_count=row[3],
+                    trend_coefficient=row[21],
+                ),
+                current_metrics=ExtendedComplexityMetrics.model_validate_json(row[22]),
+            )
+
+    def save_baseline(self, baseline: RepoBaseline) -> None:
+        """Save computed baseline to cache."""
+        with self._get_db_connection() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO repo_baselines (
+                    repository_path, head_commit_sha, computed_at, total_commits_analyzed,
+                    cc_delta_mean, cc_delta_std, cc_delta_median, cc_delta_min, cc_delta_max, cc_delta_trend,
+                    effort_delta_mean, effort_delta_std, effort_delta_median, effort_delta_min, effort_delta_max, effort_delta_trend,
+                    mi_delta_mean, mi_delta_std, mi_delta_median, mi_delta_min, mi_delta_max, mi_delta_trend,
+                    current_metrics_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    baseline.repository_path,
+                    baseline.head_commit_sha,
+                    baseline.computed_at.isoformat(),
+                    baseline.total_commits_analyzed,
+                    baseline.cc_delta_stats.mean,
+                    baseline.cc_delta_stats.std_dev,
+                    baseline.cc_delta_stats.median,
+                    baseline.cc_delta_stats.min_value,
+                    baseline.cc_delta_stats.max_value,
+                    baseline.cc_delta_stats.trend_coefficient,
+                    baseline.effort_delta_stats.mean,
+                    baseline.effort_delta_stats.std_dev,
+                    baseline.effort_delta_stats.median,
+                    baseline.effort_delta_stats.min_value,
+                    baseline.effort_delta_stats.max_value,
+                    baseline.effort_delta_stats.trend_coefficient,
+                    baseline.mi_delta_stats.mean,
+                    baseline.mi_delta_stats.std_dev,
+                    baseline.mi_delta_stats.median,
+                    baseline.mi_delta_stats.min_value,
+                    baseline.mi_delta_stats.max_value,
+                    baseline.mi_delta_stats.trend_coefficient,
+                    baseline.current_metrics.model_dump_json(),
+                ),
+            )
+            conn.commit()
 
 
 class SessionManager:

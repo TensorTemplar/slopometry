@@ -104,11 +104,10 @@ class Migration003AddWorkingTreeHash(Migration):
 
     def up(self, conn: sqlite3.Connection) -> None:
         """Add working_tree_hash column and update constraints."""
-        # Add the working_tree_hash column
+
         try:
             conn.execute("ALTER TABLE code_quality_cache ADD COLUMN working_tree_hash TEXT")
         except sqlite3.OperationalError as e:
-            # Column already exists
             if "duplicate column name" not in str(e).lower():
                 raise
 
@@ -119,7 +118,6 @@ class Migration003AddWorkingTreeHash(Migration):
         row_count = cursor.fetchone()[0]
 
         if row_count == 0:
-            # Empty table - can drop and recreate safely
             conn.execute("DROP TABLE code_quality_cache")
             conn.execute("""
                 CREATE TABLE code_quality_cache (
@@ -135,7 +133,6 @@ class Migration003AddWorkingTreeHash(Migration):
                 )
             """)
 
-            # Recreate indexes
             conn.execute("""
                 CREATE INDEX idx_code_quality_cache_repo_commit 
                 ON code_quality_cache(repository_path, commit_sha)
@@ -152,6 +149,34 @@ class Migration003AddWorkingTreeHash(Migration):
             pass
 
 
+class Migration004AddCalculatorVersion(Migration):
+    """Add calculator_version column for cache invalidation."""
+
+    @property
+    def version(self) -> str:
+        return "004"
+
+    @property
+    def description(self) -> str:
+        return "Add calculator_version column to code_quality_cache for versioned metrics"
+
+    def up(self, conn: sqlite3.Connection) -> None:
+        """Add calculator_version column."""
+
+        try:
+            conn.execute("ALTER TABLE code_quality_cache ADD COLUMN calculator_version TEXT")
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" not in str(e).lower():
+                raise
+
+        # Since we can't easily drop constraints in SQLite without recreating the table,
+        # and we don't want to lose user data, we will just add the column for now.
+        # The unique constraint on existing rows will remain as (session_id, repo, commit, hash).
+        # New rows inserted by code_quality_cache.py will use versioning in logic,
+        # but strict DB constraint enforcement for version is less critical than preserving data.
+        # Ideally we would recreate the table with new constraints here like in Migration003.
+
+
 class MigrationRunner:
     """Manages database migrations."""
 
@@ -161,6 +186,7 @@ class MigrationRunner:
             Migration001AddTranscriptPath(),
             Migration002AddCodeQualityCache(),
             Migration003AddWorkingTreeHash(),
+            Migration004AddCalculatorVersion(),
         ]
 
     @contextmanager
