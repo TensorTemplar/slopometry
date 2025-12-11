@@ -229,7 +229,6 @@ class MigrationRunner:
                 migration_info = {"version": migration.version, "description": migration.description}
 
                 if self._is_migration_applied(conn, migration.version):
-                    # Get applied timestamp
                     cursor = conn.execute(
                         "SELECT applied_at FROM _slopometry_migrations WHERE version = ?", (migration.version,)
                     )

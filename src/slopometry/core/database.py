@@ -235,7 +235,6 @@ class EventDatabase:
                 )
             """)
 
-            # Update experiment_runs to include NFP reference
             try:
                 conn.execute("""
                     ALTER TABLE experiment_runs 
@@ -320,7 +319,6 @@ class EventDatabase:
                 ),
             )
             return cursor.lastrowid or 0
-
 
     def get_session_events(self, session_id: str) -> list[HookEvent]:
         """Get all events for a session."""
@@ -584,7 +582,6 @@ class EventDatabase:
         with self._get_db_connection() as conn:
             conn.row_factory = sqlite3.Row
 
-            # Only load POST_TOOL_USE events (these are what we need for plan evolution)
             rows = conn.execute(
                 """
                 SELECT timestamp, tool_name, tool_type, metadata
@@ -643,7 +640,6 @@ class EventDatabase:
 
             if git_tracker.has_previous_commit():
                 if baseline_commit_sha:
-                    # Use provided baseline from session start
                     baseline_ref = baseline_commit_sha
                 else:
                     # Fall back to merge-base with main/master for feature branches

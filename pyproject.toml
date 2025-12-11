@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "slopometry"
-version = "20251018-1"
+version = "20251211-1"
 description = "Claude Code session tracker / experiment runner"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -43,16 +43,6 @@ Homepage = "https://github.com/TensorTemplar/slopometry"
 Repository = "https://github.com/TensorTemplar/slopometry.git"
 Issues = "https://github.com/TensorTemplar/slopometry/issues"
 
-[project.optional-dependencies]
-dev = [
-    "mypy>=1.0.0",
-    "ruff>=0.0.244",
-    "isort>=5.12.0",
-    "pre-commit>=4.2.0",
-    "pytest>=8.3.5",
-    "pytest-cov>=4.1.0",
-    "types-toml>=0.10.8.20240310",
-]
 
 [project.scripts]
 slopometry = "slopometry.cli:cli"
@@ -122,3 +112,15 @@ precision = 2
 
 [tool.coverage.html]
 directory = "htmlcov"
+
+[dependency-groups]
+dev = [
+    "mypy>=1.0.0",
+    "ruff>=0.0.244",
+    "isort>=5.12.0",
+    "pre-commit>=4.2.0",
+    "pytest>=8.3.5",
+    "pytest-cov>=4.1.0",
+    "types-toml>=0.10.8.20240310",
+    "pyrefly>=0.45.2",
+]

@@ -25,10 +25,8 @@ class WorkingTreeStateCalculator:
         Returns:
             Unique hash representing current working tree state
         """
-        # Collect all Python files that would be analyzed by radon
         python_files = self._get_python_files()
 
-        # Build hash components
         hash_components = [commit_sha]
 
         # Add file modification times (sorted for consistency)
@@ -45,7 +43,6 @@ class WorkingTreeStateCalculator:
         # Add total file count to detect additions/deletions
         hash_components.append(f"file_count:{len(python_files)}")
 
-        # Create deterministic hash
         combined = "|".join(hash_components)
         return hashlib.sha256(combined.encode("utf-8")).hexdigest()[:16]
 
@@ -58,7 +55,6 @@ class WorkingTreeStateCalculator:
         python_files = []
 
         try:
-            # Use pathlib.glob to find all .py files recursively
             for py_file in self.working_directory.rglob("*.py"):
                 # Skip common directories that radon typically ignores
                 if self._should_include_file(py_file):
@@ -94,7 +90,6 @@ class WorkingTreeStateCalculator:
             ".eggs",
         }
 
-        # Check if any part of the path matches exclude patterns
         for part in file_path.parts:
             if part in exclude_patterns:
                 return False

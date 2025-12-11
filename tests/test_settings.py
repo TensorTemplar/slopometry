@@ -42,7 +42,7 @@ class TestSettingsOverridePriority:
 
         return TestSettings
 
-    def test_configuration_override_priority(self):
+    def test_settings_init__prioritizes_local_over_global_config(self):
         """Test that local config overrides global config which overrides defaults."""
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -75,7 +75,7 @@ class TestSettingsOverridePriority:
 
                 assert settings.backup_existing_settings is True
 
-    def test_environment_variables_override_all(self):
+    def test_settings_init__prioritizes_env_vars_over_all_config(self):
         """Test that environment variables override both local and global config."""
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -98,8 +98,8 @@ class TestSettingsOverridePriority:
 
                 assert settings.event_display_limit == 300
 
-    def test_global_config_directory_creation(self):
-        """Test that global config directory is created during initialization."""
+    def test_config_dir_creation__creates_xdg_path_on_linux(self):
+        """Test that global config directory is created (Linux/XDG)."""
 
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
@@ -111,12 +111,49 @@ class TestSettingsOverridePriority:
 
             with patch.dict(os.environ, {"XDG_CONFIG_HOME": "", "XDG_DATA_HOME": ""}, clear=False):
                 with patch("pathlib.Path.home", return_value=mock_home):
-                    Settings()
+                    with patch("sys.platform", "linux"):
+                        Settings()
 
                     assert global_config_dir.exists()
                     assert global_config_dir.is_dir()
 
-    def test_defaults_when_no_config_files(self):
+    def test_config_dir_creation__creates_app_support_path_on_mac(self):
+        """Test that global config directory is created (macOS)."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            mock_home = temp_path / "home"
+            mock_home.mkdir()
+
+            global_config_dir = mock_home / "Library/Application Support/slopometry"
+            assert not global_config_dir.exists()
+
+            with patch("pathlib.Path.home", return_value=mock_home):
+                with patch("sys.platform", "darwin"):
+                    Settings()
+
+                assert global_config_dir.exists()
+                assert global_config_dir.is_dir()
+
+    def test_config_dir_creation__creates_localappdata_path_on_windows(self):
+        """Test that global config directory is created (Windows)."""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            mock_localappdata = temp_path / "AppData/Local"
+            mock_localappdata.mkdir(parents=True)
+
+            global_config_dir = mock_localappdata / "slopometry"
+            assert not global_config_dir.exists()
+
+            with patch.dict(os.environ, {"LOCALAPPDATA": str(mock_localappdata)}, clear=False):
+                with patch("sys.platform", "win32"):
+                    Settings()
+
+                assert global_config_dir.exists()
+                assert global_config_dir.is_dir()
+
+    def test_settings_init__uses_defaults_when_no_config_files_exist(self):
         """Test that default values are used when no config files exist."""
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -139,7 +176,7 @@ class TestSettingsOverridePriority:
                 assert settings.backup_existing_settings is True
                 assert settings.session_id_prefix == ""
 
-    def test_config_priority_explicit_order(self):
+    def test_settings_init__respects_explicit_priority_order(self):
         """Test explicit priority order: env vars > local .env > global .env > defaults."""
 
         with tempfile.TemporaryDirectory() as temp_dir:
