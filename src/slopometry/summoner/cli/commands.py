@@ -1,9 +1,11 @@
 """CLI commands for summoner features."""
 
+import subprocess
 import sys
 from pathlib import Path
 
 import click
+from click.shell_completion import CompletionItem
 from rich.console import Console
 
 from slopometry.display.formatters import (
@@ -68,6 +70,38 @@ def complete_user_story_entry_id(ctx: click.Context, param: click.Parameter, inc
         return []
 
 
+def complete_commits(ctx: click.Context, param: click.Parameter, incomplete: str) -> list[CompletionItem]:
+    """Complete git commits with preview."""
+    try:
+        repo_path = Path.cwd()
+
+        result = subprocess.run(
+            ["git", "log", "--oneline", "-n", "50", "--no-color"],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+
+        if result.returncode != 0:
+            return []
+
+        suggestions = []
+        for line in result.stdout.strip().split("\n"):
+            parts = line.split(" ", 1)
+            if len(parts) == 2:
+                commit_hash, message = parts
+
+                if incomplete and not commit_hash.startswith(incomplete):
+                    continue
+
+                suggestions.append(CompletionItem(commit_hash, help=message))
+
+        return suggestions
+    except Exception:
+        return []
+
+
 @click.group()
 def summoner() -> None:
     """Summoner commands for advanced experimentation and AI integration."""
@@ -110,26 +144,31 @@ def run_experiments(commits: int, max_workers: int, repo_path: Path | None) -> N
 
 
 @summoner.command("analyze-commits")
-@click.option("--base-commit", "-b", default="HEAD~10", help="Base commit (default: HEAD~10)")
-@click.option("--head-commit", "-h", default="HEAD", help="Head commit (default: HEAD)")
+@click.argument("start", required=False, shell_complete=complete_commits)
+@click.argument("end", required=False, shell_complete=complete_commits)
 @click.option(
     "--repo-path",
     "-r",
     type=click.Path(exists=True, path_type=Path),
     help="Repository path (default: current directory)",
 )
-def analyze_commits(base_commit: str, head_commit: str, repo_path: Path | None) -> None:
+def analyze_commits(start: str | None, end: str | None, repo_path: Path | None) -> None:
     """Analyze complexity evolution across a chain of commits."""
     if repo_path is None:
         repo_path = Path.cwd()
 
+    if start is None:
+        start = "HEAD~10"
+    if end is None:
+        end = "HEAD"
+
     experiment_service = ExperimentService()
 
-    console.print(f"[bold]Analyzing commits from {base_commit} to {head_commit}[/bold]")
+    console.print(f"[bold]Analyzing commits from {start} to {end}[/bold]")
     console.print(f"Repository: {repo_path}")
 
     try:
-        experiment_service.analyze_commit_chain(repo_path, base_commit, head_commit)
+        experiment_service.analyze_commit_chain(repo_path, start, end)
         console.print("\n[green]✓ Analysis complete[/green]")
 
     except Exception as e:
@@ -231,6 +270,10 @@ def userstorify(
                     console.print("[dim]Use 'slopometry summoner list-features' to see all available features[/dim]")
                     sys.exit(1)
                 feature = db.get_feature_boundary_by_id(full_id, repo_path)
+                if not feature:
+                    console.print(f"[red]Feature ID not found: {full_id}[/red]")
+                    console.print("[dim]Use 'slopometry summoner list-features' to see all available features[/dim]")
+                    sys.exit(1)
             case _:  # Invalid length
                 console.print(f"[red]Invalid feature ID format: {feature_id}[/red]")
                 console.print("[dim]Feature IDs should be UUID4 format (36 chars) or partial (< 36 chars)[/dim]")
@@ -521,6 +564,10 @@ def show_user_story(entry_id: str) -> None:
                 console.print("[dim]Use 'slopometry summoner list-user-stories' to see all entries[/dim]")
                 sys.exit(1)
             entry = db.get_user_story_entry_by_id(full_id)
+            if not entry:
+                console.print(f"[red]User story entry not found: {full_id}[/red]")
+                console.print("[dim]Use 'slopometry summoner list-user-stories' to see all entries[/dim]")
+                sys.exit(1)
         case _:  # Invalid length
             console.print(f"[red]Invalid user story entry ID format: {entry_id}[/red]")
             console.print("[dim]Entry IDs should be UUID4 format (36 chars) or partial (< 36 chars)[/dim]")
