@@ -51,7 +51,6 @@ class EventDatabase:
         """Context manager that ensures database connections are properly closed."""
         conn = sqlite3.connect(self.db_path)
         try:
-            # Enable foreign keys for data integrity
             conn.execute("PRAGMA foreign_keys = ON")
             conn.execute("PRAGMA journal_mode=WAL")
             yield conn
@@ -76,7 +75,6 @@ class EventDatabase:
         """Create database tables."""
         with self._get_db_connection() as conn:
             conn.execute("PRAGMA journal_mode=WAL")
-            # Enable foreign keys for data integrity
             conn.execute("PRAGMA foreign_keys = ON")
 
             conn.execute("""
@@ -245,7 +243,6 @@ class EventDatabase:
                     REFERENCES nfp_objectives(id)
                 """)
             except sqlite3.OperationalError:
-                # Column already exists, ignore
                 pass
 
             conn.execute("CREATE INDEX IF NOT EXISTS idx_experiment_runs_status ON experiment_runs(status)")
@@ -323,6 +320,7 @@ class EventDatabase:
                 ),
             )
             return cursor.lastrowid or 0
+
 
     def get_session_events(self, session_id: str) -> list[HookEvent]:
         """Get all events for a session."""
@@ -602,14 +600,12 @@ class EventDatabase:
                 tool_name = row["tool_name"]
                 tool_type = ToolType(row["tool_type"]) if row["tool_type"] else None
 
-                # Handle TodoWrite events specially
                 if tool_name == "TodoWrite":
                     metadata = json.loads(row["metadata"]) if row["metadata"] else {}
                     tool_input = metadata.get("tool_input", {})
                     if tool_input:
                         analyzer.analyze_todo_write_event(tool_input, timestamp)
                 else:
-                    # For all other POST_TOOL_USE events, just count them
                     analyzer.increment_event_count(tool_type)
 
         return analyzer.get_plan_evolution()

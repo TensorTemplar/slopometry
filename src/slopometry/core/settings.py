@@ -13,16 +13,13 @@ def get_default_data_dir() -> Path:
     app_name = "slopometry"
 
     if sys.platform == "win32":
-        # Windows: %LOCALAPPDATA%\slopometry
         base = os.environ.get("LOCALAPPDATA")
         if not base:
             base = Path.home() / "AppData" / "Local"
         return Path(base) / app_name
     elif sys.platform == "darwin":
-        # macOS: ~/Library/Application Support/slopometry
         return Path.home() / "Library" / "Application Support" / app_name
     else:
-        # Linux/Unix: ~/.local/share/slopometry
         xdg_data_home = os.environ.get("XDG_DATA_HOME")
         if xdg_data_home:
             return Path(xdg_data_home) / app_name
