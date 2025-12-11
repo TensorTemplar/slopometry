@@ -155,11 +155,8 @@ def handle_hook(event_type_override: HookEventType | None = None) -> int:
                     event.exit_code = None
                     event.error_message = None
 
-        try:
-            db = EventDatabase()
-            db.save_event(event)
-        except KeyError:
-            pass
+        db = EventDatabase()
+        db.save_event(event)
 
         if event_type in (HookEventType.STOP, HookEventType.SUBAGENT_STOP) and settings.enable_complexity_analysis:
             return handle_stop_event(session_id, parsed_input)  # type: ignore[arg-type]

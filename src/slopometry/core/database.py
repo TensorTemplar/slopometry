@@ -51,6 +51,8 @@ class EventDatabase:
         """Context manager that ensures database connections are properly closed."""
         conn = sqlite3.connect(self.db_path)
         try:
+            conn.execute("PRAGMA foreign_keys = ON")
+            conn.execute("PRAGMA journal_mode=WAL")
             yield conn
             conn.commit()
         except Exception:
@@ -73,6 +75,7 @@ class EventDatabase:
         """Create database tables."""
         with self._get_db_connection() as conn:
             conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA foreign_keys = ON")
 
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS hook_events (
@@ -232,7 +235,6 @@ class EventDatabase:
                 )
             """)
 
-            # Update experiment_runs to include NFP reference
             try:
                 conn.execute("""
                     ALTER TABLE experiment_runs 
@@ -240,7 +242,6 @@ class EventDatabase:
                     REFERENCES nfp_objectives(id)
                 """)
             except sqlite3.OperationalError:
-                # Column already exists, ignore
                 pass
 
             conn.execute("CREATE INDEX IF NOT EXISTS idx_experiment_runs_status ON experiment_runs(status)")
@@ -289,8 +290,6 @@ class EventDatabase:
 
     def save_event(self, event: HookEvent) -> int:
         """Save a hook event to the database."""
-        self._update_plan_evolution(event)
-
         with self._get_db_connection() as conn:
             cursor = conn.execute(
                 """
@@ -320,19 +319,6 @@ class EventDatabase:
                 ),
             )
             return cursor.lastrowid or 0
-
-    def _update_plan_evolution(self, event: HookEvent) -> None:
-        """Update plan evolution tracking for a session."""
-        session_id = event.session_id
-        if session_id not in self._plan_analyzers:
-            self._plan_analyzers[session_id] = PlanAnalyzer()
-        analyzer = self._plan_analyzers[session_id]
-        if event.tool_name == "TodoWrite" and event.event_type == HookEventType.POST_TOOL_USE:
-            tool_input = event.metadata.get("tool_input", {})
-            if tool_input:
-                analyzer.analyze_todo_write_event(tool_input, event.timestamp)
-        elif event.event_type == HookEventType.POST_TOOL_USE:
-            analyzer.increment_event_count(event.tool_type)
 
     def get_session_events(self, session_id: str) -> list[HookEvent]:
         """Get all events for a session."""
@@ -596,7 +582,6 @@ class EventDatabase:
         with self._get_db_connection() as conn:
             conn.row_factory = sqlite3.Row
 
-            # Only load POST_TOOL_USE events (these are what we need for plan evolution)
             rows = conn.execute(
                 """
                 SELECT timestamp, tool_name, tool_type, metadata
@@ -612,14 +597,12 @@ class EventDatabase:
                 tool_name = row["tool_name"]
                 tool_type = ToolType(row["tool_type"]) if row["tool_type"] else None
 
-                # Handle TodoWrite events specially
                 if tool_name == "TodoWrite":
                     metadata = json.loads(row["metadata"]) if row["metadata"] else {}
                     tool_input = metadata.get("tool_input", {})
                     if tool_input:
                         analyzer.analyze_todo_write_event(tool_input, timestamp)
                 else:
-                    # For all other POST_TOOL_USE events, just count them
                     analyzer.increment_event_count(tool_type)
 
         return analyzer.get_plan_evolution()
@@ -657,7 +640,6 @@ class EventDatabase:
 
             if git_tracker.has_previous_commit():
                 if baseline_commit_sha:
-                    # Use provided baseline from session start
                     baseline_ref = baseline_commit_sha
                 else:
                     # Fall back to merge-base with main/master for feature branches

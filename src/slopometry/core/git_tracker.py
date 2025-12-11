@@ -1,6 +1,7 @@
 """Git state tracking for Claude Code sessions."""
 
 import subprocess
+import tarfile
 import tempfile
 from pathlib import Path
 
@@ -47,7 +48,6 @@ class GitTracker:
             return GitState(is_git_repo=False)
 
     def _get_commit_count(self) -> int:
-        """Get total number of commits in the repository."""
         try:
             result = subprocess.run(
                 ["git", "rev-list", "--count", "HEAD"],
@@ -66,7 +66,6 @@ class GitTracker:
         return 0
 
     def _get_current_branch(self) -> str | None:
-        """Get current branch name."""
         try:
             result = subprocess.run(
                 ["git", "branch", "--show-current"],
@@ -86,7 +85,6 @@ class GitTracker:
         return None
 
     def _has_uncommitted_changes(self) -> bool:
-        """Check if there are uncommitted changes."""
         try:
             result = subprocess.run(
                 ["git", "status", "--porcelain"],
@@ -187,7 +185,6 @@ class GitTracker:
             if result.returncode != 0:
                 return None
 
-            import tarfile
             from io import BytesIO
 
             tar_data = BytesIO(result.stdout)

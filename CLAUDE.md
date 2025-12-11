@@ -55,7 +55,7 @@ uv tool install .
 - Session IDs are provided directly by Claude Code (no generated IDs)
 - Hook handler reads JSON from stdin (provided by Claude Code)
 - Tool name mapping is done via `TOOL_TYPE_MAP` in hook_handler.py
-- Database uses sqlite-utils for schema-less flexibility
+- Database uses raw SQL with migration support for flexibility
 - All timestamps are stored as ISO format strings
 
 ## Dataset Protocol
