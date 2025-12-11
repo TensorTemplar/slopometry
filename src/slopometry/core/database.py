@@ -51,6 +51,9 @@ class EventDatabase:
         """Context manager that ensures database connections are properly closed."""
         conn = sqlite3.connect(self.db_path)
         try:
+            # Enable foreign keys for data integrity
+            conn.execute("PRAGMA foreign_keys = ON")
+            conn.execute("PRAGMA journal_mode=WAL")
             yield conn
             conn.commit()
         except Exception:
@@ -73,6 +76,8 @@ class EventDatabase:
         """Create database tables."""
         with self._get_db_connection() as conn:
             conn.execute("PRAGMA journal_mode=WAL")
+            # Enable foreign keys for data integrity
+            conn.execute("PRAGMA foreign_keys = ON")
 
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS hook_events (
@@ -289,8 +294,6 @@ class EventDatabase:
 
     def save_event(self, event: HookEvent) -> int:
         """Save a hook event to the database."""
-        self._update_plan_evolution(event)
-
         with self._get_db_connection() as conn:
             cursor = conn.execute(
                 """
@@ -320,19 +323,6 @@ class EventDatabase:
                 ),
             )
             return cursor.lastrowid or 0
-
-    def _update_plan_evolution(self, event: HookEvent) -> None:
-        """Update plan evolution tracking for a session."""
-        session_id = event.session_id
-        if session_id not in self._plan_analyzers:
-            self._plan_analyzers[session_id] = PlanAnalyzer()
-        analyzer = self._plan_analyzers[session_id]
-        if event.tool_name == "TodoWrite" and event.event_type == HookEventType.POST_TOOL_USE:
-            tool_input = event.metadata.get("tool_input", {})
-            if tool_input:
-                analyzer.analyze_todo_write_event(tool_input, event.timestamp)
-        elif event.event_type == HookEventType.POST_TOOL_USE:
-            analyzer.increment_event_count(event.tool_type)
 
     def get_session_events(self, session_id: str) -> list[HookEvent]:
         """Get all events for a session."""

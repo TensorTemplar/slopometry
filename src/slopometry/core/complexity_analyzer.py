@@ -7,7 +7,7 @@ from typing import Any
 
 from slopometry.core.models import ComplexityDelta, ComplexityMetrics, ExtendedComplexityMetrics
 
-RADON_CMD_PREFIX = ["uvx", "--python", "3.13", "radon"]
+RADON_CMD_PREFIX = ["uv", "run", "--no-sync", "radon"]
 
 
 class ComplexityAnalyzer:
