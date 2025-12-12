@@ -11,6 +11,7 @@ from rich.console import Console
 from rich.table import Table
 
 from slopometry.core.complexity_analyzer import ComplexityAnalyzer
+from slopometry.core.coverage_analyzer import CoverageAnalyzer
 from slopometry.core.database import EventDatabase
 from slopometry.core.git_tracker import GitTracker
 from slopometry.core.models import ExperimentProgress, ExperimentRun, ExperimentStatus, ExtendedComplexityMetrics
@@ -114,8 +115,8 @@ class ExperimentOrchestrator:
             )
             self.db.save_experiment_progress(progress)
 
-            # TODO: This is where the agent would run
-            # For now, simulate progress updates
+            # NOTE: Agent integration placeholder - currently simulates progress.
+            # Future: integrate with Claude Code agent to drive actual code changes.
             self._simulate_agent_progress(experiment_id, worktree_path, target_metrics)
 
         finally:
@@ -207,12 +208,15 @@ class ExperimentOrchestrator:
 
         analyzer = ComplexityAnalyzer(self.repo_path)
         previous_metrics = None
+        previous_coverage: float | None = None
 
         cumulative_cc = 0
         cumulative_volume = 0.0
         cumulative_difficulty = 0.0
         cumulative_effort = 0.0
         cumulative_mi = 0.0
+        cumulative_coverage = 0.0
+        coverage_data_points = 0  # Track how many commits had coverage data
 
         for i, commit_sha in enumerate(commits):
             console.print(f"\n[cyan]Analyzing commit {i + 1}/{len(commits)}: {commit_sha[:8]}[/cyan]")
@@ -223,6 +227,15 @@ class ExperimentOrchestrator:
 
             try:
                 metrics = analyzer.analyze_extended_complexity(temp_dir)
+
+                # Parse coverage if coverage.xml exists in this commit
+                coverage_percent: float | None = None
+                coverage_xml_path = temp_dir / "coverage.xml"
+                if coverage_xml_path.exists():
+                    coverage_analyzer = CoverageAnalyzer(temp_dir)
+                    coverage_result = coverage_analyzer.analyze_coverage()
+                    if coverage_result.coverage_available:
+                        coverage_percent = coverage_result.total_coverage_percent
 
                 # Calculate deltas if we have previous metrics
                 if previous_metrics:
@@ -292,6 +305,18 @@ class ExperimentOrchestrator:
                         f"[{files_color}]{files_change:+d}[/{files_color}]",
                     )
 
+                    # Test Coverage (higher is better)
+                    if coverage_percent is not None or previous_coverage is not None:
+                        prev_cov_str = f"{previous_coverage:.1f}%" if previous_coverage is not None else "N/A"
+                        curr_cov_str = f"{coverage_percent:.1f}%" if coverage_percent is not None else "N/A"
+                        if coverage_percent is not None and previous_coverage is not None:
+                            cov_change = coverage_percent - previous_coverage
+                            cov_color = "green" if cov_change > 0 else "red" if cov_change < 0 else "yellow"
+                            cov_change_str = f"[{cov_color}]{cov_change:+.1f}%[/{cov_color}]"
+                        else:
+                            cov_change_str = "[dim]N/A[/dim]"
+                        delta_table.add_row("Test Coverage", prev_cov_str, curr_cov_str, cov_change_str)
+
                     console.print(delta_table)
 
                     cumulative_cc += cc_change
@@ -299,6 +324,9 @@ class ExperimentOrchestrator:
                     cumulative_difficulty += diff_change
                     cumulative_effort += effort_change
                     cumulative_mi += mi_change
+                    if coverage_percent is not None and previous_coverage is not None:
+                        cumulative_coverage += coverage_percent - previous_coverage
+                        coverage_data_points += 1
                 else:
                     # First commit - show initial state
                     initial_table = Table(title=f"Initial State at {commit_sha[:8]}")
@@ -311,6 +339,8 @@ class ExperimentOrchestrator:
                     initial_table.add_row("Halstead Effort", f"{metrics.total_effort:.1f}")
                     initial_table.add_row("Avg Maintainability Index", f"{metrics.average_mi:.1f}")
                     initial_table.add_row("Files Analyzed", str(metrics.total_files_analyzed))
+                    if coverage_percent is not None:
+                        initial_table.add_row("Test Coverage", f"{coverage_percent:.1f}%")
 
                     console.print(initial_table)
 
@@ -322,9 +352,11 @@ class ExperimentOrchestrator:
                     incremental_complexity=metrics.total_complexity
                     - (previous_metrics.total_complexity if previous_metrics else 0),
                     file_metrics=metrics.model_dump_json(),
+                    test_coverage_percent=coverage_percent,
                 )
 
                 previous_metrics = metrics
+                previous_coverage = coverage_percent
 
             finally:
                 import shutil
@@ -373,5 +405,14 @@ class ExperimentOrchestrator:
                 f"[{mi_color}]{cumulative_mi:+.1f}[/{mi_color}]",
                 f"{cumulative_mi / len(commits):.1f}",
             )
+
+            # Test Coverage (only show if we had coverage data)
+            if coverage_data_points > 0:
+                cov_color = "green" if cumulative_coverage > 0 else "red" if cumulative_coverage < 0 else "yellow"
+                summary_table.add_row(
+                    "Test Coverage",
+                    f"[{cov_color}]{cumulative_coverage:+.1f}%[/{cov_color}]",
+                    f"{cumulative_coverage / coverage_data_points:.1f}%",
+                )
 
             console.print(summary_table)

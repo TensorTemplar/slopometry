@@ -119,6 +119,9 @@ class ComplexityMetrics(BaseModel):
     files_by_complexity: dict[str, int] = Field(
         default_factory=dict, description="Mapping of filename to complexity score"
     )
+    files_with_parse_errors: dict[str, str] = Field(
+        default_factory=dict, description="Files that failed to parse: {filepath: error_message}"
+    )
 
 
 class ComplexityDelta(BaseModel):
@@ -354,8 +357,32 @@ class ExtendedComplexityMetrics(ComplexityMetrics):
     )
     deprecation_count: int = Field(default=0, description="Number of deprecation warnings/markers found")
 
-    files_with_parse_errors: dict[str, str] = Field(
-        default_factory=dict, description="Files that radon couldn't parse: {filepath: error_message}"
+    # Type usage metrics for detecting overly generic types
+    any_type_percentage: float = Field(
+        default=0.0, description="Percentage of type annotations using Any (0-100). Lower is better."
+    )
+    str_type_percentage: float = Field(
+        default=0.0,
+        description="Percentage of type annotations using str (0-100). Consider enums for constrained strings.",
+    )
+
+    # Test coverage (optional, populated when available)
+    test_coverage_percent: float | None = Field(
+        default=None, description="Pytest test coverage percentage (0-100). None if unavailable."
+    )
+    test_coverage_source: str | None = Field(
+        default=None, description="Source file for coverage data (e.g., 'coverage.xml')"
+    )
+
+    # Code smell metrics
+    orphan_comment_count: int = Field(
+        default=0, description="Comments outside docstrings that aren't TODOs or explanatory URLs"
+    )
+    untracked_todo_count: int = Field(
+        default=0, description="TODO comments without ticket references (JIRA-123, #123) or URLs"
+    )
+    inline_import_count: int = Field(
+        default=0, description="Import statements not at module level (excluding TYPE_CHECKING guards)"
     )
 
 

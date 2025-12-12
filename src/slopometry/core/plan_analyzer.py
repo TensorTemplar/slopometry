@@ -16,7 +16,6 @@ class PlanAnalyzer:
         ToolType.WEB_FETCH,
         ToolType.READ,
         ToolType.LS,
-        ToolType.TASK,
         ToolType.TODO_READ,
         ToolType.NOTEBOOK_READ,
         ToolType.MCP_IDE_GET_DIAGNOSTICS,
@@ -88,12 +87,23 @@ class PlanAnalyzer:
         self.search_events_since_last_todo = 0
         self.implementation_events_since_last_todo = 0
 
-    def increment_event_count(self, tool_type: ToolType | None = None) -> None:
+    def increment_event_count(
+        self, tool_type: ToolType | None = None, tool_input: dict[str, Any] | None = None
+    ) -> None:
         """Increment the count of events since last TodoWrite."""
         self.events_since_last_todo += 1
 
         if tool_type:
-            if tool_type in self.SEARCH_TOOLS:
+            if tool_type == ToolType.TASK:
+                # Special handling for potentially ambiguous Task tools (subagents)
+                subagent_type = tool_input.get("subagent_type") if tool_input else None
+                # Check for "Explore" or "Exploration" in subagent type
+                if subagent_type and "explore" in subagent_type.lower():
+                    self.search_events_since_last_todo += 1
+                else:
+                    # Default to implementation for other subagents (Plan/Act/etc)
+                    self.implementation_events_since_last_todo += 1
+            elif tool_type in self.SEARCH_TOOLS:
                 self.search_events_since_last_todo += 1
             elif tool_type in self.IMPLEMENTATION_TOOLS:
                 self.implementation_events_since_last_todo += 1

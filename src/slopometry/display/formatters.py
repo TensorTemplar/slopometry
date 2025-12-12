@@ -136,9 +136,46 @@ def _display_complexity_metrics(stats: SessionStatistics) -> None:
     overview_table.add_row("[bold]Python Quality[/bold]", "")
     overview_table.add_row("  Type Hint Coverage", f"{metrics.type_hint_coverage:.1f}%")
     overview_table.add_row("  Docstring Coverage", f"{metrics.docstring_coverage:.1f}%")
+
+    # Any type percentage - lower is better (green <5%, yellow <15%, red >=15%)
+    any_color = "green" if metrics.any_type_percentage < 5 else "yellow" if metrics.any_type_percentage < 15 else "red"
+    overview_table.add_row("  Any Type Usage", f"[{any_color}]{metrics.any_type_percentage:.1f}%[/{any_color}]")
+
+    # str type percentage - lower is better for constrained strings (green <20%, yellow <40%, red >=40%)
+    str_color = "green" if metrics.str_type_percentage < 20 else "yellow" if metrics.str_type_percentage < 40 else "red"
+    overview_table.add_row("  str Type Usage", f"[{str_color}]{metrics.str_type_percentage:.1f}%[/{str_color}]")
+
+    # Test coverage - higher is better
+    if metrics.test_coverage_percent is not None:
+        cov_color = (
+            "green"
+            if metrics.test_coverage_percent >= 80
+            else "yellow"
+            if metrics.test_coverage_percent >= 50
+            else "red"
+        )
+        source_info = f" [dim](from {metrics.test_coverage_source})[/dim]" if metrics.test_coverage_source else ""
+        overview_table.add_row(
+            "  Test Coverage", f"[{cov_color}]{metrics.test_coverage_percent:.1f}%[/{cov_color}]{source_info}"
+        )
+    else:
+        overview_table.add_row("  Test Coverage", "[dim]N/A (run pytest first)[/dim]")
+
     overview_table.add_row(
         "  Deprecations", f"[yellow]{metrics.deprecation_count}[/yellow]" if metrics.deprecation_count > 0 else "0"
     )
+
+    # Code Smells section (all displayed in red since they're anti-patterns)
+    overview_table.add_row("[bold]Code Smells[/bold]", "")
+
+    smell_color = "red" if metrics.orphan_comment_count > 0 else "green"
+    overview_table.add_row("  Orphan Comments", f"[{smell_color}]{metrics.orphan_comment_count}[/{smell_color}]")
+
+    smell_color = "red" if metrics.untracked_todo_count > 0 else "green"
+    overview_table.add_row("  Untracked TODOs", f"[{smell_color}]{metrics.untracked_todo_count}[/{smell_color}]")
+
+    smell_color = "red" if metrics.inline_import_count > 0 else "green"
+    overview_table.add_row("  Inline Imports", f"[{smell_color}]{metrics.inline_import_count}[/{smell_color}]")
 
     console.print(overview_table)
 
@@ -662,8 +699,42 @@ def display_current_impact_analysis(analysis: CurrentChangesAnalysis) -> None:
     quality_table.add_row("Type Hint Coverage", f"{metrics.type_hint_coverage:.1f}%")
     quality_table.add_row("Docstring Coverage", f"{metrics.docstring_coverage:.1f}%")
 
+    # Any type percentage - lower is better
+    any_color = "green" if metrics.any_type_percentage < 5 else "yellow" if metrics.any_type_percentage < 15 else "red"
+    quality_table.add_row("Any Type Usage", f"[{any_color}]{metrics.any_type_percentage:.1f}%[/{any_color}]")
+
+    # str type percentage - lower is better for constrained strings
+    str_color = "green" if metrics.str_type_percentage < 20 else "yellow" if metrics.str_type_percentage < 40 else "red"
+    quality_table.add_row("str Type Usage", f"[{str_color}]{metrics.str_type_percentage:.1f}%[/{str_color}]")
+
+    # Test coverage - higher is better
+    if metrics.test_coverage_percent is not None:
+        cov_color = (
+            "green"
+            if metrics.test_coverage_percent >= 80
+            else "yellow"
+            if metrics.test_coverage_percent >= 50
+            else "red"
+        )
+        source_info = f" [dim](from {metrics.test_coverage_source})[/dim]" if metrics.test_coverage_source else ""
+        quality_table.add_row(
+            "Test Coverage", f"[{cov_color}]{metrics.test_coverage_percent:.1f}%[/{cov_color}]{source_info}"
+        )
+    else:
+        quality_table.add_row("Test Coverage", "[dim]N/A (run pytest first)[/dim]")
+
     dep_style = "red" if metrics.deprecation_count > 0 else "green"
     quality_table.add_row("Deprecations", f"[{dep_style}]{metrics.deprecation_count}[/{dep_style}]")
+
+    # Code Smells (all displayed in red since they're anti-patterns)
+    smell_color = "red" if metrics.orphan_comment_count > 0 else "green"
+    quality_table.add_row("Orphan Comments", f"[{smell_color}]{metrics.orphan_comment_count}[/{smell_color}]")
+
+    smell_color = "red" if metrics.untracked_todo_count > 0 else "green"
+    quality_table.add_row("Untracked TODOs", f"[{smell_color}]{metrics.untracked_todo_count}[/{smell_color}]")
+
+    smell_color = "red" if metrics.inline_import_count > 0 else "green"
+    quality_table.add_row("Inline Imports", f"[{smell_color}]{metrics.inline_import_count}[/{smell_color}]")
 
     console.print(quality_table)
 

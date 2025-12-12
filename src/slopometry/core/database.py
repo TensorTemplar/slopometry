@@ -176,6 +176,7 @@ class EventDatabase:
                     cumulative_complexity INTEGER NOT NULL,
                     incremental_complexity INTEGER NOT NULL,
                     file_metrics TEXT NOT NULL,
+                    test_coverage_percent REAL,
                     FOREIGN KEY (chain_id) REFERENCES commit_complexity_chains(id),
                     UNIQUE(chain_id, commit_sha)
                 )
@@ -239,9 +240,18 @@ class EventDatabase:
 
             try:
                 conn.execute("""
-                    ALTER TABLE experiment_runs 
-                    ADD COLUMN nfp_objective_id TEXT 
+                    ALTER TABLE experiment_runs
+                    ADD COLUMN nfp_objective_id TEXT
                     REFERENCES nfp_objectives(id)
+                """)
+            except sqlite3.OperationalError:
+                pass
+
+            # Add test_coverage_percent column to complexity_evolution if not exists
+            try:
+                conn.execute("""
+                    ALTER TABLE complexity_evolution
+                    ADD COLUMN test_coverage_percent REAL
                 """)
             except sqlite3.OperationalError:
                 pass
@@ -639,13 +649,14 @@ class EventDatabase:
                 tool_name = row["tool_name"]
                 tool_type = ToolType(row["tool_type"]) if row["tool_type"] else None
 
+                metadata = json.loads(row["metadata"]) if row["metadata"] else {}
+                tool_input = metadata.get("tool_input", {})
+
                 if tool_name == "TodoWrite":
-                    metadata = json.loads(row["metadata"]) if row["metadata"] else {}
-                    tool_input = metadata.get("tool_input", {})
                     if tool_input:
                         analyzer.analyze_todo_write_event(tool_input, timestamp)
                 else:
-                    analyzer.increment_event_count(tool_type)
+                    analyzer.increment_event_count(tool_type, tool_input)
 
         return analyzer.get_plan_evolution()
 
@@ -728,13 +739,15 @@ class EventDatabase:
 
                         shutil.rmtree(baseline_dir, ignore_errors=True)
                     except Exception:
+                        # Baseline comparison failed (subprocess, JSON parsing, file access, etc.)
+                        # Continue with just current metrics, no delta
                         if baseline_dir:
                             shutil.rmtree(baseline_dir, ignore_errors=True)
-                        pass
 
             return current_extended, complexity_delta
 
         except Exception:
+            # Analysis failed completely, return no metrics
             return None, None
 
     def list_sessions(self, limit: int | None = None) -> list[str]:
@@ -1004,6 +1017,7 @@ class EventDatabase:
         cumulative_complexity: int,
         incremental_complexity: int,
         file_metrics: str,
+        test_coverage_percent: float | None = None,
     ) -> None:
         """Save complexity evolution data for a commit."""
         with self._get_db_connection() as conn:
@@ -1011,10 +1025,18 @@ class EventDatabase:
                 """
                 INSERT OR REPLACE INTO complexity_evolution (
                     chain_id, commit_sha, commit_order, cumulative_complexity,
-                    incremental_complexity, file_metrics
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    incremental_complexity, file_metrics, test_coverage_percent
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-                (chain_id, commit_sha, commit_order, cumulative_complexity, incremental_complexity, file_metrics),
+                (
+                    chain_id,
+                    commit_sha,
+                    commit_order,
+                    cumulative_complexity,
+                    incremental_complexity,
+                    file_metrics,
+                    test_coverage_percent,
+                ),
             )
             conn.commit()
 

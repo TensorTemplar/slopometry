@@ -9,7 +9,7 @@ from slopometry.core.database import EventDatabase, SessionManager
 from slopometry.core.git_tracker import GitTracker
 from slopometry.core.models import (
     ComplexityDelta,
-    ComplexityMetrics,
+    ExtendedComplexityMetrics,
     HookEvent,
     HookEventType,
     HookInputUnion,
@@ -210,7 +210,8 @@ def handle_stop_event(session_id: str, parsed_input: "StopInput | SubagentStopIn
 
         current_metrics, delta = db.calculate_extended_complexity_metrics(stats.working_directory)
 
-        # TODO: Store complexity metrics in database for analytics
+        # NOTE: Complexity metrics are computed on-demand from session statistics.
+        # Storing them separately would enable historical analysis but adds storage overhead.
 
         if not settings.enable_complexity_feedback:
             return 0
@@ -293,7 +294,7 @@ def _get_baseline_feedback(working_directory: str, delta: ComplexityDelta) -> st
 
 
 def format_complexity_feedback(
-    current_metrics: "ComplexityMetrics",
+    current_metrics: "ExtendedComplexityMetrics",
     delta: "ComplexityDelta",
     baseline_feedback: str = "",
 ) -> str:
@@ -332,6 +333,21 @@ def format_complexity_feedback(
         lines.append(f"**Removed {len(delta.files_removed)} files**: {', '.join(delta.files_removed[:3])}")
         if len(delta.files_removed) > 3:
             lines.append(f"   ... and {len(delta.files_removed) - 3} more")
+
+    # Code Quality section - always show all metrics
+    lines.append("")
+    lines.append("**Code Quality**:")
+    lines.append(f"   • Type Hint Coverage: {current_metrics.type_hint_coverage:.1f}%")
+    lines.append(f"   • Docstring Coverage: {current_metrics.docstring_coverage:.1f}%")
+    lines.append(f"   • Any Type Usage: {current_metrics.any_type_percentage:.1f}%")
+    lines.append(f"   • str Type Usage: {current_metrics.str_type_percentage:.1f}%")
+
+    # Code Smells section - always show all counts
+    lines.append("")
+    lines.append("**Code Smells**:")
+    lines.append(f"   • Orphan Comments: {current_metrics.orphan_comment_count}")
+    lines.append(f"   • Untracked TODOs: {current_metrics.untracked_todo_count}")
+    lines.append(f"   • Inline Imports: {current_metrics.inline_import_count}")
 
     if delta.files_changed:
         lines.append("")

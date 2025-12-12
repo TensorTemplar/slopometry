@@ -124,6 +124,11 @@ def test_analyze_extended_complexity(mock_path):
         mock_feature_stats.annotated_returns_count = 5
         # (5+5)/(10+10) = 50%
 
+        # Mock type reference tracking
+        mock_feature_stats.total_type_references = 20
+        mock_feature_stats.any_type_count = 2  # 10% Any usage
+        mock_feature_stats.str_type_count = 5  # 25% str usage
+
         mock_features.analyze_directory.return_value = mock_feature_stats
 
         metrics = analyzer.analyze_extended_complexity(mock_path)
@@ -135,3 +140,7 @@ def test_analyze_extended_complexity(mock_path):
         assert metrics.average_mi == 80.0
         assert metrics.deprecation_count == 3
         assert metrics.type_hint_coverage == 50.0
+
+        # New type percentage checks
+        assert metrics.any_type_percentage == 10.0  # 2/20 * 100
+        assert metrics.str_type_percentage == 25.0  # 5/20 * 100

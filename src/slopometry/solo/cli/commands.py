@@ -121,6 +121,22 @@ def latest() -> None:
     console.print(f"[bold]Showing most recent session: {most_recent}[/bold]\n")
     stats = session_service.get_session_statistics(most_recent)
     if stats:
+        # Add test coverage if we have complexity metrics and working directory
+        if stats.complexity_metrics and stats.working_directory:
+            working_dir = Path(stats.working_directory)
+            if working_dir.exists():
+                try:
+                    from slopometry.core.coverage_analyzer import CoverageAnalyzer
+
+                    coverage_analyzer = CoverageAnalyzer(working_dir)
+                    coverage_result = coverage_analyzer.analyze_coverage()
+
+                    if coverage_result.coverage_available:
+                        stats.complexity_metrics.test_coverage_percent = coverage_result.total_coverage_percent
+                        stats.complexity_metrics.test_coverage_source = coverage_result.source_file
+                except Exception:
+                    pass  # Coverage is optional, silently skip on errors
+
         # Compute baseline if we have complexity delta
         baseline, assessment = _compute_session_baseline(stats)
         display_session_summary(stats, most_recent, baseline, assessment)

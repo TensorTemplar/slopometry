@@ -35,7 +35,8 @@ dependencies = [
     "pandas>=2.0.0",
     "pyarrow>=14.0.0",
     "datasets>=2.14.0",
-    "huggingface-hub>=0.20.0",    
+    "huggingface-hub>=0.20.0",
+    "coverage>=7.0.0",
 ]
 
 [project.urls]

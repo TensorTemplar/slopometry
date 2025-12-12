@@ -120,6 +120,7 @@ class ComplexityAnalyzer:
         """
         files_by_complexity = {}
         all_complexities = []
+        files_with_parse_errors: dict[str, str] = {}
 
         reference_directory = reference_dir or self.working_directory
 
@@ -127,9 +128,10 @@ class ComplexityAnalyzer:
             if not functions:
                 continue
 
-            # FIXME: parse errors due to python version mismatch should be handled
-            # as explicit negative case instead of implicit ok
+            # Track files that failed to parse (e.g., Python version mismatch)
             if isinstance(functions, dict) and "error" in functions:
+                relative_path = self._get_relative_path(file_path, reference_directory)
+                files_with_parse_errors[relative_path] = functions.get("error", "Unknown parse error")
                 continue
 
             file_complexity = sum(func.get("complexity", 0) for func in functions)
@@ -157,10 +159,13 @@ class ComplexityAnalyzer:
             max_complexity=max_complexity,
             min_complexity=min_complexity,
             files_by_complexity=files_by_complexity,
+            files_with_parse_errors=files_with_parse_errors,
         )
 
     def _calculate_delta(
-        self, baseline_metrics: ComplexityMetrics, current_metrics: ComplexityMetrics
+        self,
+        baseline_metrics: ComplexityMetrics | ExtendedComplexityMetrics,
+        current_metrics: ComplexityMetrics | ExtendedComplexityMetrics,
     ) -> ComplexityDelta:
         """Calculate complexity delta between baseline and current metrics.
 
@@ -203,23 +208,14 @@ class ComplexityAnalyzer:
             avg_complexity_change=avg_complexity_change,
         )
 
-        # Handle Extended Metrics if available (duck typing)
-        if hasattr(current_metrics, "average_effort") and hasattr(baseline_metrics, "average_effort"):
-            # We use getattr to safely access extended attributes that might not be on the base class type hint
-            delta.avg_effort_change = getattr(current_metrics, "average_effort", 0.0) - getattr(
-                baseline_metrics, "average_effort", 0.0
-            )
-            delta.total_effort_change = getattr(current_metrics, "total_effort", 0.0) - getattr(
-                baseline_metrics, "total_effort", 0.0
-            )
-
-        if hasattr(current_metrics, "average_mi") and hasattr(baseline_metrics, "average_mi"):
-            delta.avg_mi_change = getattr(current_metrics, "average_mi", 0.0) - getattr(
-                baseline_metrics, "average_mi", 0.0
-            )
-            delta.total_mi_change = getattr(current_metrics, "total_mi", 0.0) - getattr(
-                baseline_metrics, "total_mi", 0.0
-            )
+        # Handle Extended Metrics if both are ExtendedComplexityMetrics
+        if isinstance(current_metrics, ExtendedComplexityMetrics) and isinstance(
+            baseline_metrics, ExtendedComplexityMetrics
+        ):
+            delta.avg_effort_change = current_metrics.average_effort - baseline_metrics.average_effort
+            delta.total_effort_change = current_metrics.total_effort - baseline_metrics.total_effort
+            delta.avg_mi_change = current_metrics.average_mi - baseline_metrics.average_mi
+            delta.total_mi_change = current_metrics.total_mi - baseline_metrics.total_mi
 
         return delta
 
@@ -326,6 +322,11 @@ class ComplexityAnalyzer:
             (feature_stats.docstrings_count / total_docstringable * 100.0) if total_docstringable > 0 else 0.0
         )
 
+        # Type usage percentages for detecting overly generic types
+        total_type_refs = feature_stats.total_type_references
+        any_type_percentage = (feature_stats.any_type_count / total_type_refs * 100.0) if total_type_refs > 0 else 0.0
+        str_type_percentage = (feature_stats.str_type_count / total_type_refs * 100.0) if total_type_refs > 0 else 0.0
+
         return ExtendedComplexityMetrics(
             total_complexity=total_complexity,
             average_complexity=average_complexity,
@@ -341,7 +342,12 @@ class ComplexityAnalyzer:
             type_hint_coverage=type_hint_coverage,
             docstring_coverage=docstring_coverage,
             deprecation_count=feature_stats.deprecations_count,
+            any_type_percentage=any_type_percentage,
+            str_type_percentage=str_type_percentage,
             total_files_analyzed=total_files,
             files_by_complexity=files_by_complexity,
             files_with_parse_errors=files_with_parse_errors,
+            orphan_comment_count=feature_stats.orphan_comment_count,
+            untracked_todo_count=feature_stats.untracked_todo_count,
+            inline_import_count=feature_stats.inline_import_count,
         )
