@@ -7,6 +7,7 @@ from unittest.mock import patch
 from slopometry.core.code_quality_cache import CodeQualityCacheManager
 from slopometry.core.database import EventDatabase
 from slopometry.core.models import ComplexityDelta, ExtendedComplexityMetrics
+from conftest import make_test_metrics
 
 
 class TestWorkingTreeCacheManager:
@@ -18,7 +19,7 @@ class TestWorkingTreeCacheManager:
             db_path = Path(temp_dir) / "test.db"
             db = EventDatabase(db_path)
 
-            test_metrics = ExtendedComplexityMetrics(total_complexity=50)
+            test_metrics = ExtendedComplexityMetrics(**make_test_metrics(total_complexity=50))
             test_delta = ComplexityDelta(total_complexity_change=5)
 
             with db._get_db_connection() as conn:
@@ -51,7 +52,7 @@ class TestWorkingTreeCacheManager:
             db_path = Path(temp_dir) / "test.db"
             db = EventDatabase(db_path)
 
-            test_metrics = ExtendedComplexityMetrics(total_complexity=60)
+            test_metrics = ExtendedComplexityMetrics(**make_test_metrics(total_complexity=60))
             test_delta = ComplexityDelta(total_complexity_change=10)
 
             with db._get_db_connection() as conn:
@@ -87,7 +88,7 @@ class TestWorkingTreeCacheManager:
             db_path = Path(temp_dir) / "test.db"
             db = EventDatabase(db_path)
 
-            test_metrics = ExtendedComplexityMetrics(total_complexity=40)
+            test_metrics = ExtendedComplexityMetrics(**make_test_metrics(total_complexity=40))
 
             with db._get_db_connection() as conn:
                 cache_manager = CodeQualityCacheManager(conn)
@@ -109,8 +110,8 @@ class TestWorkingTreeCacheManager:
             db_path = Path(temp_dir) / "test.db"
             db = EventDatabase(db_path)
 
-            clean_metrics = ExtendedComplexityMetrics(total_complexity=30)
-            dirty_metrics = ExtendedComplexityMetrics(total_complexity=35)
+            clean_metrics = ExtendedComplexityMetrics(**make_test_metrics(total_complexity=30))
+            dirty_metrics = ExtendedComplexityMetrics(**make_test_metrics(total_complexity=35))
 
             with db._get_db_connection() as conn:
                 cache_manager = CodeQualityCacheManager(conn)
@@ -138,7 +139,7 @@ class TestWorkingTreeCacheManager:
             db_path = Path(temp_dir) / "test.db"
             db = EventDatabase(db_path)
 
-            test_metrics = ExtendedComplexityMetrics()
+            test_metrics = ExtendedComplexityMetrics(**make_test_metrics())
 
             with db._get_db_connection() as conn:
                 cache_manager = CodeQualityCacheManager(conn)
@@ -177,7 +178,7 @@ class TestWorkingTreeCachingIntegration:
 
             # Mock the actual complexity calculation
             with patch.object(db, "calculate_extended_complexity_metrics") as mock_calc:
-                expected_metrics = ExtendedComplexityMetrics(total_complexity=75)
+                expected_metrics = ExtendedComplexityMetrics(**make_test_metrics(total_complexity=75))
                 expected_delta = ComplexityDelta(total_complexity_change=25)
                 mock_calc.return_value = (expected_metrics, expected_delta)
 
@@ -210,7 +211,7 @@ class TestWorkingTreeCachingIntegration:
 
             # Mock the actual complexity calculation
             with patch.object(db, "calculate_extended_complexity_metrics") as mock_calc:
-                expected_metrics = ExtendedComplexityMetrics(total_complexity=50)
+                expected_metrics = ExtendedComplexityMetrics(**make_test_metrics(total_complexity=50))
                 expected_delta = ComplexityDelta(total_complexity_change=0)
                 mock_calc.return_value = (expected_metrics, expected_delta)
 

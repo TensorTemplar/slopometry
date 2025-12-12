@@ -143,6 +143,23 @@ class ComplexityDelta(BaseModel):
     total_mi_change: float = 0.0
     avg_mi_change: float = 0.0
 
+    # Quality indicator deltas
+    type_hint_coverage_change: float = 0.0
+    docstring_coverage_change: float = 0.0
+    deprecation_change: int = 0
+
+    # Type usage deltas
+    any_type_percentage_change: float = 0.0
+    str_type_percentage_change: float = 0.0
+
+    # Code smell deltas
+    orphan_comment_change: int = 0
+    untracked_todo_change: int = 0
+    inline_import_change: int = 0
+    dict_get_with_default_change: int = 0
+    hasattr_getattr_change: int = 0
+    nonempty_init_change: int = 0
+
 
 class TodoItem(BaseModel):
     """Represents a single todo item."""
@@ -338,17 +355,22 @@ class NextFeaturePrediction(BaseModel):
 
 
 class ExtendedComplexityMetrics(ComplexityMetrics):
-    """Extended metrics including Halstead and Maintainability Index."""
+    """Extended metrics including Halstead and Maintainability Index.
 
-    total_volume: float = 0.0
-    total_effort: float = 0.0
-    average_volume: float = 0.0
-    average_effort: float = 0.0
-    total_difficulty: float = 0.0
-    average_difficulty: float = 0.0
+    Core Halstead metrics are required to catch missing parameter bugs early.
+    """
 
-    total_mi: float = 0.0
-    average_mi: float = Field(default=0.0, description="Higher is better (0-100 scale)")
+    # Core Halstead metrics - required (no defaults to fail fast on missing params)
+    total_volume: float
+    total_effort: float
+    total_difficulty: float
+    average_volume: float
+    average_effort: float
+    average_difficulty: float
+
+    # Maintainability Index - required
+    total_mi: float
+    average_mi: float = Field(description="Higher is better (0-100 scale)")
 
     # Python-specific quality indicators
     type_hint_coverage: float = Field(default=0.0, description="Percentage of functions/args with type hints (0-100)")
@@ -383,6 +405,15 @@ class ExtendedComplexityMetrics(ComplexityMetrics):
     )
     inline_import_count: int = Field(
         default=0, description="Import statements not at module level (excluding TYPE_CHECKING guards)"
+    )
+    dict_get_with_default_count: int = Field(
+        default=0, description=".get() calls with defaults (indicates missing typed config)"
+    )
+    hasattr_getattr_count: int = Field(
+        default=0, description="hasattr()/getattr() calls (indicates missing domain models)"
+    )
+    nonempty_init_count: int = Field(
+        default=0, description="__init__.py files with implementation code (beyond imports/__all__)"
     )
 
 

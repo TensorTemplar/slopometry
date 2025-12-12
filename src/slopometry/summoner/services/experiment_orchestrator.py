@@ -218,8 +218,22 @@ class ExperimentOrchestrator:
         cumulative_coverage = 0.0
         coverage_data_points = 0  # Track how many commits had coverage data
 
+        analyzed_count = 0
         for i, commit_sha in enumerate(commits):
-            console.print(f"\n[cyan]Analyzing commit {i + 1}/{len(commits)}: {commit_sha[:8]}[/cyan]")
+            # Skip merge commits (they have 2+ parents and produce zero deltas)
+            parent_result = subprocess.run(
+                ["git", "rev-list", "--parents", "-n", "1", commit_sha],
+                cwd=self.repo_path,
+                capture_output=True,
+                text=True,
+            )
+            parents = parent_result.stdout.strip().split()[1:]  # First element is the commit itself
+            if len(parents) >= 2:
+                console.print(f"\n[yellow]Skipping merge commit {commit_sha[:8]} ({len(parents)} parents)[/yellow]")
+                continue
+
+            analyzed_count += 1
+            console.print(f"\n[cyan]Analyzing commit {analyzed_count}/{len(commits)}: {commit_sha[:8]}[/cyan]")
 
             temp_dir = self.git_tracker.extract_files_from_commit(commit_sha)
             if not temp_dir:
@@ -305,6 +319,120 @@ class ExperimentOrchestrator:
                         f"[{files_color}]{files_change:+d}[/{files_color}]",
                     )
 
+                    # Type Hint Coverage (higher is better)
+                    type_hint_change = metrics.type_hint_coverage - previous_metrics.type_hint_coverage
+                    type_hint_color = "green" if type_hint_change > 0 else "red" if type_hint_change < 0 else "yellow"
+                    delta_table.add_row(
+                        "Type Hint Coverage",
+                        f"{previous_metrics.type_hint_coverage:.1f}%",
+                        f"{metrics.type_hint_coverage:.1f}%",
+                        f"[{type_hint_color}]{type_hint_change:+.1f}%[/{type_hint_color}]",
+                    )
+
+                    # Docstring Coverage (higher is better)
+                    docstring_change = metrics.docstring_coverage - previous_metrics.docstring_coverage
+                    docstring_color = "green" if docstring_change > 0 else "red" if docstring_change < 0 else "yellow"
+                    delta_table.add_row(
+                        "Docstring Coverage",
+                        f"{previous_metrics.docstring_coverage:.1f}%",
+                        f"{metrics.docstring_coverage:.1f}%",
+                        f"[{docstring_color}]{docstring_change:+.1f}%[/{docstring_color}]",
+                    )
+
+                    # Any Type % (lower is better)
+                    any_type_change = metrics.any_type_percentage - previous_metrics.any_type_percentage
+                    any_type_color = "green" if any_type_change < 0 else "red" if any_type_change > 0 else "yellow"
+                    delta_table.add_row(
+                        "Any Type %",
+                        f"{previous_metrics.any_type_percentage:.1f}%",
+                        f"{metrics.any_type_percentage:.1f}%",
+                        f"[{any_type_color}]{any_type_change:+.1f}%[/{any_type_color}]",
+                    )
+
+                    # Str Type % (lower is better - consider enums)
+                    str_type_change = metrics.str_type_percentage - previous_metrics.str_type_percentage
+                    str_type_color = "green" if str_type_change < 0 else "red" if str_type_change > 0 else "yellow"
+                    delta_table.add_row(
+                        "Str Type %",
+                        f"{previous_metrics.str_type_percentage:.1f}%",
+                        f"{metrics.str_type_percentage:.1f}%",
+                        f"[{str_type_color}]{str_type_change:+.1f}%[/{str_type_color}]",
+                    )
+
+                    # Deprecations (lower is better)
+                    deprecation_change = metrics.deprecation_count - previous_metrics.deprecation_count
+                    deprecation_color = (
+                        "green" if deprecation_change < 0 else "red" if deprecation_change > 0 else "yellow"
+                    )
+                    delta_table.add_row(
+                        "Deprecations",
+                        str(previous_metrics.deprecation_count),
+                        str(metrics.deprecation_count),
+                        f"[{deprecation_color}]{deprecation_change:+d}[/{deprecation_color}]",
+                    )
+
+                    # Orphan Comments (lower is better)
+                    orphan_change = metrics.orphan_comment_count - previous_metrics.orphan_comment_count
+                    orphan_color = "green" if orphan_change < 0 else "red" if orphan_change > 0 else "yellow"
+                    delta_table.add_row(
+                        "Orphan Comments",
+                        str(previous_metrics.orphan_comment_count),
+                        str(metrics.orphan_comment_count),
+                        f"[{orphan_color}]{orphan_change:+d}[/{orphan_color}]",
+                    )
+
+                    # Untracked TODOs (lower is better)
+                    todo_change = metrics.untracked_todo_count - previous_metrics.untracked_todo_count
+                    todo_color = "green" if todo_change < 0 else "red" if todo_change > 0 else "yellow"
+                    delta_table.add_row(
+                        "Untracked TODOs",
+                        str(previous_metrics.untracked_todo_count),
+                        str(metrics.untracked_todo_count),
+                        f"[{todo_color}]{todo_change:+d}[/{todo_color}]",
+                    )
+
+                    # Inline Imports (lower is better)
+                    inline_change = metrics.inline_import_count - previous_metrics.inline_import_count
+                    inline_color = "green" if inline_change < 0 else "red" if inline_change > 0 else "yellow"
+                    delta_table.add_row(
+                        "Inline Imports",
+                        str(previous_metrics.inline_import_count),
+                        str(metrics.inline_import_count),
+                        f"[{inline_color}]{inline_change:+d}[/{inline_color}]",
+                    )
+
+                    # Dict .get() with defaults (lower is better)
+                    get_change = (
+                        metrics.dict_get_with_default_count - previous_metrics.dict_get_with_default_count
+                    )
+                    get_color = "green" if get_change < 0 else "red" if get_change > 0 else "yellow"
+                    delta_table.add_row(
+                        ".get() w/ Defaults",
+                        str(previous_metrics.dict_get_with_default_count),
+                        str(metrics.dict_get_with_default_count),
+                        f"[{get_color}]{get_change:+d}[/{get_color}]",
+                    )
+
+                    # hasattr/getattr calls (lower is better)
+                    attr_change = metrics.hasattr_getattr_count - previous_metrics.hasattr_getattr_count
+                    attr_color = "green" if attr_change < 0 else "red" if attr_change > 0 else "yellow"
+                    delta_table.add_row(
+                        "hasattr/getattr",
+                        str(previous_metrics.hasattr_getattr_count),
+                        str(metrics.hasattr_getattr_count),
+                        f"[{attr_color}]{attr_change:+d}[/{attr_color}]",
+                    )
+
+                    # Non-empty __init__.py (lower is better)
+                    init_change = metrics.nonempty_init_count - previous_metrics.nonempty_init_count
+                    init_color = "green" if init_change < 0 else "red" if init_change > 0 else "yellow"
+                    delta_table.add_row(
+                        "Non-empty __init__",
+                        str(previous_metrics.nonempty_init_count),
+                        str(metrics.nonempty_init_count),
+                        f"[{init_color}]{init_change:+d}[/{init_color}]",
+                    )
+
                     # Test Coverage (higher is better)
                     if coverage_percent is not None or previous_coverage is not None:
                         prev_cov_str = f"{previous_coverage:.1f}%" if previous_coverage is not None else "N/A"
@@ -339,6 +467,17 @@ class ExperimentOrchestrator:
                     initial_table.add_row("Halstead Effort", f"{metrics.total_effort:.1f}")
                     initial_table.add_row("Avg Maintainability Index", f"{metrics.average_mi:.1f}")
                     initial_table.add_row("Files Analyzed", str(metrics.total_files_analyzed))
+                    initial_table.add_row("Type Hint Coverage", f"{metrics.type_hint_coverage:.1f}%")
+                    initial_table.add_row("Docstring Coverage", f"{metrics.docstring_coverage:.1f}%")
+                    initial_table.add_row("Any Type %", f"{metrics.any_type_percentage:.1f}%")
+                    initial_table.add_row("Str Type %", f"{metrics.str_type_percentage:.1f}%")
+                    initial_table.add_row("Deprecations", str(metrics.deprecation_count))
+                    initial_table.add_row("Orphan Comments", str(metrics.orphan_comment_count))
+                    initial_table.add_row("Untracked TODOs", str(metrics.untracked_todo_count))
+                    initial_table.add_row("Inline Imports", str(metrics.inline_import_count))
+                    initial_table.add_row(".get() w/ Defaults", str(metrics.dict_get_with_default_count))
+                    initial_table.add_row("hasattr/getattr", str(metrics.hasattr_getattr_count))
+                    initial_table.add_row("Non-empty __init__", str(metrics.nonempty_init_count))
                     if coverage_percent is not None:
                         initial_table.add_row("Test Coverage", f"{coverage_percent:.1f}%")
 

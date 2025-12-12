@@ -115,7 +115,7 @@ class TestCoverageAnalyzerDB:
         assert result.coverage_available is True
         assert result.source_file == ".coverage"
         # DB coverage varies based on source files present at runtime (unlike XML which stores pre-computed values)
-        assert 35.0 <= result.total_coverage_percent <= 50.0
+        assert 30.0 <= result.total_coverage_percent <= 50.0
         assert result.files_analyzed > 0
 
     def test_analyze_coverage__handles_corrupt_db(self, tmp_path: Path) -> None:

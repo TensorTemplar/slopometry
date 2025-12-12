@@ -5,6 +5,7 @@ import pytest
 
 from slopometry.core.code_quality_cache import CodeQualityCacheManager
 from slopometry.core.models import ExtendedComplexityMetrics
+from conftest import make_test_metrics
 
 
 class TestCodeQualityCacheManager:
@@ -42,7 +43,7 @@ class TestCodeQualityCacheManager:
     def test_save_and_retrieve_cache_hit(self, db_connection):
         """Test that saved metrics can be retrieved correctly."""
         manager = CodeQualityCacheManager(db_connection)
-        dummy_metrics = ExtendedComplexityMetrics(total_complexity=42)
+        dummy_metrics = ExtendedComplexityMetrics(**make_test_metrics(total_complexity=42))
 
         success = manager.save_metrics_to_cache("sess_1", "/repo", "sha1", dummy_metrics)
         assert success is True
@@ -57,7 +58,7 @@ class TestCodeQualityCacheManager:
     def test_version_mismatch_invalidation(self, db_connection):
         """Test that entries with missing or different calculator_version are ignored."""
         manager = CodeQualityCacheManager(db_connection)
-        dummy_metrics = ExtendedComplexityMetrics(total_complexity=99)
+        dummy_metrics = ExtendedComplexityMetrics(**make_test_metrics(total_complexity=99))
         metrics_json = dummy_metrics.model_dump_json()
 
         # Insert a stale record (simulate old migration state or different version)
@@ -94,7 +95,7 @@ class TestCodeQualityCacheManager:
     def test_working_tree_hash_support(self, db_connection):
         """Test that working_tree_hash is correctly used in cache keys."""
         manager = CodeQualityCacheManager(db_connection)
-        dummy_metrics = ExtendedComplexityMetrics(total_complexity=100)
+        dummy_metrics = ExtendedComplexityMetrics(**make_test_metrics(total_complexity=100))
 
         # Save with a specific working tree hash
         manager.save_metrics_to_cache("sess_1", "/repo", "sha1", dummy_metrics, working_tree_hash="hash123")

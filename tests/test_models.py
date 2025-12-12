@@ -1,26 +1,42 @@
 """Tests for data models."""
 
+import pytest
+from pydantic import ValidationError
+
 from slopometry.core.models import ExtendedComplexityMetrics, UserStoryDisplayData, UserStoryStatistics
 
 
 class TestExtendedComplexityMetrics:
     """Test the extended complexity metrics model."""
 
-    def test_model_creation_with_defaults__creates_empty_metrics_when_no_values_provided(self):
-        """Test creating model with default values when no values provided."""
-        metrics = ExtendedComplexityMetrics()
+    def test_model_creation_without_required_fields__raises_validation_error(self):
+        """Test that ValidationError is raised when required Halstead fields are missing."""
+        with pytest.raises(ValidationError) as exc_info:
+            ExtendedComplexityMetrics()
 
-        assert metrics.total_complexity == 0
-        assert metrics.total_volume == 0.0
-        assert metrics.average_mi == 0.0
-        assert metrics.total_files_analyzed == 0
-        assert metrics.files_by_complexity == {}
+        errors = exc_info.value.errors()
+        missing_fields = {e["loc"][0] for e in errors}
+        # All Halstead and MI fields should be required
+        assert "total_volume" in missing_fields
+        assert "total_effort" in missing_fields
+        assert "total_difficulty" in missing_fields
+        assert "average_volume" in missing_fields
+        assert "average_effort" in missing_fields
+        assert "average_difficulty" in missing_fields
+        assert "total_mi" in missing_fields
+        assert "average_mi" in missing_fields
 
     def test_model_creation_with_values__creates_metrics_when_values_provided(self):
         """Test creating model with specific values when values provided."""
         metrics = ExtendedComplexityMetrics(
             total_complexity=150,
             total_volume=750.0,
+            total_effort=5000.0,
+            total_difficulty=10.5,
+            average_volume=75.0,
+            average_effort=500.0,
+            average_difficulty=1.05,
+            total_mi=800.0,
             average_mi=65.5,
             total_files_analyzed=10,
             files_by_complexity={"file1.py": 25, "file2.py": 30},
@@ -28,6 +44,7 @@ class TestExtendedComplexityMetrics:
 
         assert metrics.total_complexity == 150
         assert metrics.total_volume == 750.0
+        assert metrics.total_difficulty == 10.5
         assert metrics.average_mi == 65.5
         assert metrics.total_files_analyzed == 10
         assert len(metrics.files_by_complexity) == 2

@@ -177,6 +177,17 @@ def _display_complexity_metrics(stats: SessionStatistics) -> None:
     smell_color = "red" if metrics.inline_import_count > 0 else "green"
     overview_table.add_row("  Inline Imports", f"[{smell_color}]{metrics.inline_import_count}[/{smell_color}]")
 
+    smell_color = "red" if metrics.dict_get_with_default_count > 0 else "green"
+    overview_table.add_row(
+        "  .get() w/ Defaults", f"[{smell_color}]{metrics.dict_get_with_default_count}[/{smell_color}]"
+    )
+
+    smell_color = "red" if metrics.hasattr_getattr_count > 0 else "green"
+    overview_table.add_row("  hasattr/getattr", f"[{smell_color}]{metrics.hasattr_getattr_count}[/{smell_color}]")
+
+    smell_color = "red" if metrics.nonempty_init_count > 0 else "green"
+    overview_table.add_row("  Non-empty __init__", f"[{smell_color}]{metrics.nonempty_init_count}[/{smell_color}]")
+
     console.print(overview_table)
 
     if metrics.files_by_complexity:
@@ -735,6 +746,15 @@ def display_current_impact_analysis(analysis: CurrentChangesAnalysis) -> None:
 
     smell_color = "red" if metrics.inline_import_count > 0 else "green"
     quality_table.add_row("Inline Imports", f"[{smell_color}]{metrics.inline_import_count}[/{smell_color}]")
+
+    smell_color = "red" if metrics.dict_get_with_default_count > 0 else "green"
+    quality_table.add_row(".get() w/ Defaults", f"[{smell_color}]{metrics.dict_get_with_default_count}[/{smell_color}]")
+
+    smell_color = "red" if metrics.hasattr_getattr_count > 0 else "green"
+    quality_table.add_row("hasattr/getattr", f"[{smell_color}]{metrics.hasattr_getattr_count}[/{smell_color}]")
+
+    smell_color = "red" if metrics.nonempty_init_count > 0 else "green"
+    quality_table.add_row("Non-empty __init__", f"[{smell_color}]{metrics.nonempty_init_count}[/{smell_color}]")
 
     console.print(quality_table)
 

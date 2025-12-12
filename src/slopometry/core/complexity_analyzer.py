@@ -217,6 +217,43 @@ class ComplexityAnalyzer:
             delta.avg_mi_change = current_metrics.average_mi - baseline_metrics.average_mi
             delta.total_mi_change = current_metrics.total_mi - baseline_metrics.total_mi
 
+            # Quality indicator deltas
+            delta.type_hint_coverage_change = (
+                current_metrics.type_hint_coverage - baseline_metrics.type_hint_coverage
+            )
+            delta.docstring_coverage_change = (
+                current_metrics.docstring_coverage - baseline_metrics.docstring_coverage
+            )
+            delta.deprecation_change = current_metrics.deprecation_count - baseline_metrics.deprecation_count
+
+            # Type usage deltas
+            delta.any_type_percentage_change = (
+                current_metrics.any_type_percentage - baseline_metrics.any_type_percentage
+            )
+            delta.str_type_percentage_change = (
+                current_metrics.str_type_percentage - baseline_metrics.str_type_percentage
+            )
+
+            # Code smell deltas
+            delta.orphan_comment_change = (
+                current_metrics.orphan_comment_count - baseline_metrics.orphan_comment_count
+            )
+            delta.untracked_todo_change = (
+                current_metrics.untracked_todo_count - baseline_metrics.untracked_todo_count
+            )
+            delta.inline_import_change = (
+                current_metrics.inline_import_count - baseline_metrics.inline_import_count
+            )
+            delta.dict_get_with_default_change = (
+                current_metrics.dict_get_with_default_count - baseline_metrics.dict_get_with_default_count
+            )
+            delta.hasattr_getattr_change = (
+                current_metrics.hasattr_getattr_count - baseline_metrics.hasattr_getattr_count
+            )
+            delta.nonempty_init_change = (
+                current_metrics.nonempty_init_count - baseline_metrics.nonempty_init_count
+            )
+
         return delta
 
     def _get_relative_path(self, file_path: str | Path, reference_dir: Path | None = None) -> str:
@@ -336,6 +373,7 @@ class ComplexityAnalyzer:
             average_volume=average_volume,
             total_effort=total_effort,
             average_effort=average_effort,
+            total_difficulty=total_difficulty,
             average_difficulty=average_difficulty,
             total_mi=total_mi,
             average_mi=average_mi,
@@ -350,4 +388,7 @@ class ComplexityAnalyzer:
             orphan_comment_count=feature_stats.orphan_comment_count,
             untracked_todo_count=feature_stats.untracked_todo_count,
             inline_import_count=feature_stats.inline_import_count,
+            dict_get_with_default_count=feature_stats.dict_get_with_default_count,
+            hasattr_getattr_count=feature_stats.hasattr_getattr_count,
+            nonempty_init_count=feature_stats.nonempty_init_count,
         )
