@@ -34,8 +34,6 @@ class CodeQualityCacheManager:
             Tuple of (complexity_metrics, complexity_delta) or (None, None) if not cached
         """
         try:
-            # Handle both clean repos (working_tree_hash=None) and dirty repos (working_tree_hash=hash)
-            # AND filter by calculator_version to ensure we don't serve stale metrics from old logic
             if working_tree_hash is None:
                 cursor = self.db_connection.execute(
                     """
@@ -163,7 +161,6 @@ class CodeQualityCacheManager:
         Returns:
             True if cache is valid and should be used, False if fresh calculation needed
         """
-        # Check if we have a cache entry for this exact state AND version
         try:
             if working_tree_hash is None:
                 cursor = self.db_connection.execute(

@@ -22,11 +22,9 @@ class CLICalculator:
         Returns:
             Tuple of (cli_score, component_scores)
         """
-        # Cyclomatic Complexity Score (lower is better, but target is goal)
         complexity_ratio = current.total_complexity / max(target.total_complexity, 1)
         complexity_score = self._score_with_penalty(complexity_ratio, optimal=1.0)
 
-        # Halstead Score (composite of volume, difficulty, effort)
         volume_ratio = current.total_volume / max(target.total_volume, 1)
         difficulty_ratio = current.average_difficulty / max(target.average_difficulty, 1)
         effort_ratio = current.total_effort / max(target.total_effort, 1)
@@ -37,8 +35,6 @@ class CLICalculator:
             + self._score_with_penalty(effort_ratio, optimal=1.0) * 0.3
         )
 
-        # Maintainability Index Score (higher is better)
-        # MI is on 0-100 scale where higher = more maintainable
         mi_ratio = current.average_mi / max(target.average_mi, 1) if target.average_mi > 0 else 0.0
         mi_score = self._score_with_penalty(mi_ratio, optimal=1.0, higher_is_better=True)
 

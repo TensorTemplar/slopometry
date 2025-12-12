@@ -76,10 +76,8 @@ class BaselineService:
         """
         repo_path = repo_path.resolve()
 
-        # Get all commits in topological order
         commits = self._get_all_commits(repo_path)
         if len(commits) < 2:
-            # Need at least 2 commits to compute deltas
             return None
 
         head_sha = commits[0]
@@ -87,8 +85,6 @@ class BaselineService:
         analyzer = ComplexityAnalyzer(working_directory=repo_path)
         current_metrics = analyzer.analyze_extended_complexity()
 
-        # Create commit pairs for delta computation
-        # We compute delta between consecutive commits: (parent, child)
         commit_pairs = [(commits[i + 1], commits[i]) for i in range(len(commits) - 1)]
 
         deltas = self._compute_deltas_parallel(repo_path, commit_pairs, max_workers)
@@ -126,7 +122,7 @@ class BaselineService:
 
         commits = result.stdout.strip().split("\n")
         valid_commits = [c.strip() for c in commits if c.strip()]
-        # Limit to last 100 commits for performance
+        # PERF: Limit to last 100 commits to avoid slow analysis on large repos
         return valid_commits[:100]
 
     def _compute_deltas_parallel(
@@ -205,7 +201,6 @@ class BaselineService:
                 trend_coefficient=0.0,
             )
 
-        # Handle case where all values are the same (std_dev would be 0)
         std = stdev(values) if len(values) > 1 else 0.0
 
         return HistoricalMetricStats(
@@ -232,10 +227,8 @@ class BaselineService:
             return 0.0
 
         n = len(values)
-        # values are in chronological order (oldest first in original data,
-        # but we received them in reverse order from git rev-list)
-        # So index 0 is most recent, index n-1 is oldest
-        # We want to compute trend from oldest to newest, so reverse
+        # NOTE: Values arrive in reverse chronological order from git rev-list
+        # (index 0 = most recent). Reverse to compute trend oldest-to-newest.
         chronological_values = list(reversed(values))
 
         x_mean = (n - 1) / 2.0

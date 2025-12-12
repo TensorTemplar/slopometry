@@ -45,17 +45,14 @@ class CoverageAnalyzer:
         Returns:
             CoverageResult with coverage data from existing files
         """
-        # Try coverage.xml first (preferred - easy to parse)
         coverage_xml = self.repo_path / "coverage.xml"
         if coverage_xml.exists():
             return self._parse_coverage_xml(coverage_xml)
 
-        # Fallback to .coverage SQLite database
         coverage_db = self.repo_path / ".coverage"
         if coverage_db.exists():
             return self._parse_coverage_db(coverage_db)
 
-        # No coverage files found
         return CoverageResult(
             coverage_available=False,
             error_message="No coverage files found. Run 'uv run pytest' first.",
@@ -74,12 +71,10 @@ class CoverageAnalyzer:
             tree = ET.parse(xml_path)
             root = tree.getroot()
 
-            # Extract from root attributes
             line_rate = float(root.get("line-rate", 0))
             lines_valid = int(root.get("lines-valid", 0))
             lines_covered = int(root.get("lines-covered", 0))
 
-            # Count files by finding all 'class' elements regardless of package structure
             files_count = len(root.findall(".//class"))
 
             return CoverageResult(
@@ -116,14 +111,12 @@ class CoverageAnalyzer:
             cov = Coverage(data_file=str(db_path))
             cov.load()
 
-            # Get total percentage by running report to /dev/null
             output = StringIO()
             try:
                 total_percent = cov.report(file=output, show_missing=False)
             except Exception:
                 total_percent = 0.0
 
-            # Get file count from data
             data = cov.get_data()
             files_count = len(data.measured_files())
 

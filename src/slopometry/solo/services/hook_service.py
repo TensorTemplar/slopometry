@@ -37,7 +37,6 @@ class HookService:
 
         settings_dir.mkdir(exist_ok=True)
 
-        # Load existing settings
         existing_settings = {}
         if settings_file.exists():
             try:
@@ -46,13 +45,11 @@ class HookService:
             except json.JSONDecodeError:
                 return False, f"Invalid JSON in {settings_file}"
 
-        # Backup existing settings if requested
         if "hooks" in existing_settings and settings.backup_existing_settings:
             backup_file = settings_dir / f"settings.backup.{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
             with open(backup_file, "w") as f:
                 json.dump(existing_settings, f, indent=2)
 
-        # Install hooks
         slopometry_hooks = self.create_hook_configuration()
 
         if "hooks" not in existing_settings:
@@ -62,7 +59,6 @@ class HookService:
             if hook_type not in existing_settings["hooks"]:
                 existing_settings["hooks"][hook_type] = []
 
-            # Remove existing slopometry hooks
             existing_settings["hooks"][hook_type] = [
                 h
                 for h in existing_settings["hooks"][hook_type]
@@ -72,10 +68,8 @@ class HookService:
                 )
             ]
 
-            # Add new hooks
             existing_settings["hooks"][hook_type].extend(hook_configs)
 
-        # Save updated settings
         try:
             with open(settings_file, "w") as f:
                 json.dump(existing_settings, f, indent=2)
@@ -107,7 +101,6 @@ class HookService:
         if "hooks" not in settings_data:
             return True, "No hooks configuration found"
 
-        # Remove slopometry hooks
         removed_any = False
         for hook_type in settings_data["hooks"]:
             original_length = len(settings_data["hooks"][hook_type])
@@ -122,13 +115,11 @@ class HookService:
             if len(settings_data["hooks"][hook_type]) < original_length:
                 removed_any = True
 
-        # Clean up empty hook types
         settings_data["hooks"] = {k: v for k, v in settings_data["hooks"].items() if v}
 
         if not settings_data["hooks"]:
             del settings_data["hooks"]
 
-        # Save updated settings
         try:
             with open(settings_file, "w") as f:
                 json.dump(settings_data, f, indent=2)

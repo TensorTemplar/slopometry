@@ -110,7 +110,6 @@ def find_merge_commits(branch: str = "HEAD", limit: int = 50) -> list[MergeCommi
         List of merge commit info with hash, message, and parent commits
     """
     try:
-        # Get merge commits with their parents
         result = subprocess.run(
             ["git", "log", branch, "--merges", f"-{limit}", "--format=%H|%P|%s"],
             capture_output=True,
@@ -159,7 +158,6 @@ def get_feature_boundaries(limit: int = 20) -> list[FeatureBoundary]:
 
     for merge in merge_commits:
         try:
-            # Find the common ancestor of the two parents (merge base)
             result = subprocess.run(
                 ["git", "merge-base", merge.parents[0], merge.parents[1]], capture_output=True, text=True, check=True
             )

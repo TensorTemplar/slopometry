@@ -276,11 +276,10 @@ def _get_baseline_feedback(working_directory: str, delta: ComplexityDelta) -> st
     if not head_sha:
         return ""
 
-    # Try to get cached baseline
     baseline = baseline_service.db.get_cached_baseline(str(working_path), head_sha)
 
     if not baseline:
-        # No cached baseline - trigger background computation for next time
+
         def compute_baseline_background():
             try:
                 baseline_service.compute_full_baseline(working_path, max_workers=2)
@@ -381,7 +380,6 @@ def format_complexity_feedback(
         if len(delta.files_removed) > 3:
             lines.append(f"   ... and {len(delta.files_removed) - 3} more")
 
-    # Code Quality section - always show all metrics
     lines.append("")
     lines.append("**Code Quality**:")
     lines.append(f"   • Type Hint Coverage: {current_metrics.type_hint_coverage:.1f}%")
@@ -389,7 +387,6 @@ def format_complexity_feedback(
     lines.append(f"   • Any Type Usage: {current_metrics.any_type_percentage:.1f}%")
     lines.append(f"   • str Type Usage: {current_metrics.str_type_percentage:.1f}%")
 
-    # Code Smells section - always show all counts
     lines.append("")
     lines.append("**Code Smells**:")
     lines.append(f"   • Orphan Comments: {current_metrics.orphan_comment_count}")
@@ -406,11 +403,9 @@ def format_complexity_feedback(
             else:
                 lines.append(f"   • {file_path}: {change}")
 
-    # Add baseline comparison feedback if available
     if baseline_feedback:
         lines.append(baseline_feedback)
 
-    # Add context coverage feedback if available
     if context_feedback:
         lines.append(context_feedback)
 

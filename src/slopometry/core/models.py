@@ -185,6 +185,39 @@ class PlanStep(BaseModel):
     exploration_percentage: float = Field(default=0.0, description="Percentage of events that were exploration (0-100)")
 
 
+class TokenUsage(BaseModel):
+    """Token usage metrics categorized by exploration vs implementation."""
+
+    total_input_tokens: int = Field(default=0, description="Total input tokens across all messages")
+    total_output_tokens: int = Field(default=0, description="Total output tokens across all messages")
+    exploration_input_tokens: int = Field(default=0, description="Input tokens for exploration tools")
+    exploration_output_tokens: int = Field(default=0, description="Output tokens for exploration tools")
+    implementation_input_tokens: int = Field(default=0, description="Input tokens for implementation tools")
+    implementation_output_tokens: int = Field(default=0, description="Output tokens for implementation tools")
+    subagent_tokens: int = Field(default=0, description="Total tokens from subagent (Task tool) executions")
+
+    @property
+    def total_tokens(self) -> int:
+        """Total tokens (input + output)."""
+        return self.total_input_tokens + self.total_output_tokens
+
+    @property
+    def exploration_tokens(self) -> int:
+        """Total exploration tokens (input + output)."""
+        return self.exploration_input_tokens + self.exploration_output_tokens
+
+    @property
+    def implementation_tokens(self) -> int:
+        """Total implementation tokens (input + output)."""
+        return self.implementation_input_tokens + self.implementation_output_tokens
+
+    @property
+    def exploration_token_percentage(self) -> float:
+        """Percentage of tokens used for exploration (0-100)."""
+        total = self.exploration_tokens + self.implementation_tokens
+        return (self.exploration_tokens / total * 100) if total > 0 else 0.0
+
+
 class PlanEvolution(BaseModel):
     """Tracks how the plan evolves through TodoWrite events."""
 
@@ -198,6 +231,9 @@ class PlanEvolution(BaseModel):
     total_search_events: int = 0
     total_implementation_events: int = 0
     exploration_percentage: float = Field(default=0.0, description="Percentage of events that were exploration (0-100)")
+    token_usage: TokenUsage | None = Field(
+        default=None, description="Token usage breakdown by exploration vs implementation"
+    )
 
 
 class SessionStatistics(BaseModel):

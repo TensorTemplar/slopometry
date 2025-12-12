@@ -29,18 +29,14 @@ class WorkingTreeStateCalculator:
 
         hash_components = [commit_sha]
 
-        # Add file modification times (sorted for consistency)
         for py_file in sorted(python_files):
             try:
                 mtime = py_file.stat().st_mtime
-                # Include relative path and mtime
                 rel_path = py_file.relative_to(self.working_directory)
                 hash_components.append(f"{rel_path}:{mtime}")
             except (OSError, ValueError):
-                # If file is deleted/inaccessible, skip it
                 continue
 
-        # Add total file count to detect additions/deletions
         hash_components.append(f"file_count:{len(python_files)}")
 
         combined = "|".join(hash_components)
@@ -56,11 +52,9 @@ class WorkingTreeStateCalculator:
 
         try:
             for py_file in self.working_directory.rglob("*.py"):
-                # Skip common directories that radon typically ignores
                 if self._should_include_file(py_file):
                     python_files.append(py_file)
         except (OSError, PermissionError):
-            # If we can't scan the directory, return empty list
             pass
 
         return python_files
@@ -74,7 +68,6 @@ class WorkingTreeStateCalculator:
         Returns:
             True if file should be included in complexity analysis
         """
-        # Skip common directories that are typically not analyzed
         exclude_patterns = {
             "__pycache__",
             ".git",

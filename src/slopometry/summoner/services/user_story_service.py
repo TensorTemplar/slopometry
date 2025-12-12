@@ -66,13 +66,10 @@ class UserStoryService:
     def upload_to_huggingface(self, output_path: Path, hf_repo: str | None = None) -> str:
         """Upload user stories to Hugging Face."""
         if not hf_repo:
-            # Use default from settings if available
             if settings.hf_default_repo:
                 hf_repo = settings.hf_default_repo
             else:
-                # Auto-generate repo name from current project
                 project_name = Path.cwd().name.lower().replace("_", "-").replace(" ", "-")
-                # Remove any non-alphanumeric chars except hyphens
                 project_name = re.sub(r"[^a-z0-9-]", "", project_name)
                 hf_repo = f"slopometry-{project_name}-userstories"
 
@@ -90,13 +87,11 @@ class UserStoryService:
         self, limit: int, filter_model: str | None = None, unrated_only: bool = False
     ) -> list[UserStoryEntry]:
         """Filter user story entries for rating workflow."""
-        # Get entries for rating (more than needed to filter)
         entries = self.get_user_story_entries(limit=limit * 2)
 
         if not entries:
             return []
 
-        # Apply filters
         filtered_entries = []
         for entry in entries:
             if filter_model and entry.model_used != filter_model:
@@ -105,7 +100,6 @@ class UserStoryService:
                 continue
             filtered_entries.append(entry)
 
-        # Limit after filtering
         return filtered_entries[:limit]
 
     def collect_user_rating_and_feedback(self) -> tuple[int, str]:
@@ -113,7 +107,6 @@ class UserStoryService:
         console.print("\n[bold yellow]User Story Collection[/bold yellow]")
         console.print("Please rate the generated user stories and provide feedback for improvement.")
 
-        # Get rating
         while True:
             try:
                 rating = click.prompt(
@@ -126,7 +119,6 @@ class UserStoryService:
             except (ValueError, click.Abort):
                 console.print("[red]Please enter a valid number between 1 and 5[/red]")
 
-        # Get feedback
         guidelines = click.prompt(
             "\nProvide guidelines for improving user story generation (optional)", default="", show_default=False
         )

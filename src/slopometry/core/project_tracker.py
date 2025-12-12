@@ -64,12 +64,10 @@ class ProjectTracker:
 
         try:
             data = toml.load(pyproject_path)
-            # Look for the standard PEP 621 project name
             project_name = data.get("project", {}).get("name")
             if project_name and isinstance(project_name, str):
                 return Project(name=project_name, source=ProjectSource.PYPROJECT)
         except (toml.TomlDecodeError, OSError, KeyError, TypeError):
-            # Invalid TOML, file access error, or unexpected structure
             pass
 
         return None

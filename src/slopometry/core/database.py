@@ -154,7 +154,6 @@ class EventDatabase:
                 )
             """)
 
-            # Store pre-computed complexity deltas for commit ranges
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS commit_complexity_chains (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -248,7 +247,6 @@ class EventDatabase:
             except sqlite3.OperationalError:
                 pass
 
-            # Add test_coverage_percent column to complexity_evolution if not exists
             try:
                 conn.execute("""
                     ALTER TABLE complexity_evolution
@@ -300,7 +298,6 @@ class EventDatabase:
             )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_code_quality_cache_session ON code_quality_cache(session_id)")
 
-            # Repo baseline statistics for staged-impact analysis
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS repo_baselines (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -564,6 +561,15 @@ class EventDatabase:
 
         try:
             stats.plan_evolution = self._calculate_plan_evolution(session_id)
+            if stats.plan_evolution and stats.transcript_path:
+                try:
+                    from slopometry.core.transcript_token_analyzer import analyze_transcript_tokens
+
+                    transcript_path = Path(stats.transcript_path)
+                    if transcript_path.exists():
+                        stats.plan_evolution.token_usage = analyze_transcript_tokens(transcript_path)
+                except Exception:
+                    pass
         except Exception:
             stats.plan_evolution = None
 
@@ -593,7 +599,6 @@ class EventDatabase:
 
             baseline_commit_sha = initial_git_state.commit_sha if initial_git_state else None
 
-            # For non-git repos, fall back to direct calculation (no caching)
             if commit_sha is None:
                 return self.calculate_extended_complexity_metrics(working_directory, baseline_commit_sha)
 
@@ -729,10 +734,8 @@ class EventDatabase:
                 if baseline_commit_sha:
                     baseline_ref = baseline_commit_sha
                 else:
-                    # Fall back to merge-base with main/master for feature branches
                     baseline_ref = git_tracker.get_merge_base_with_main()
                     if baseline_ref is None:
-                        # Fall back to HEAD if no main branch found or on main itself
                         baseline_ref = "HEAD"
 
                 baseline_dir = git_tracker.extract_files_from_commit(baseline_ref)
@@ -763,7 +766,6 @@ class EventDatabase:
                         complexity_delta.total_mi_change = current_extended.total_mi - baseline_extended.total_mi
                         complexity_delta.avg_mi_change = current_extended.average_mi - baseline_extended.average_mi
 
-                        # Ensure consistency: use same CC values that were used in delta calculation
                         current_extended.total_complexity = current_basic.total_complexity
                         current_extended.average_complexity = current_basic.average_complexity
                         current_extended.max_complexity = current_basic.max_complexity
@@ -773,15 +775,12 @@ class EventDatabase:
 
                         shutil.rmtree(baseline_dir, ignore_errors=True)
                     except Exception:
-                        # Baseline comparison failed (subprocess, JSON parsing, file access, etc.)
-                        # Continue with just current metrics, no delta
                         if baseline_dir:
                             shutil.rmtree(baseline_dir, ignore_errors=True)
 
             return current_extended, complexity_delta
 
         except Exception:
-            # Analysis failed completely, return no metrics
             return None, None
 
     def list_sessions(self, limit: int | None = None) -> list[str]:
@@ -882,8 +881,6 @@ class EventDatabase:
                 seq_file.unlink()
                 files_deleted += 1
         return len(sessions), events_count, files_deleted
-
-    # Experiment tracking methods
 
     def save_experiment_run(self, experiment: ExperimentRun) -> None:
         """Save an experiment run to the database."""
@@ -1074,8 +1071,6 @@ class EventDatabase:
             )
             conn.commit()
 
-    # NFP (Next Feature Prediction) management methods
-
     def save_nfp_objective(self, nfp: NextFeaturePrediction) -> None:
         """Save an NFP objective with its user stories."""
         with self._get_db_connection() as conn:
@@ -1098,10 +1093,8 @@ class EventDatabase:
                 ),
             )
 
-            # Delete existing user stories for this NFP
             conn.execute("DELETE FROM user_stories WHERE nfp_id = ?", (nfp.id,))
 
-            # Save user stories
             for story in nfp.user_stories:
                 conn.execute(
                     """
@@ -1207,10 +1200,7 @@ class EventDatabase:
     def delete_nfp_objective(self, nfp_id: str) -> bool:
         """Delete an NFP objective and its user stories."""
         with self._get_db_connection() as conn:
-            # Delete user stories first
             conn.execute("DELETE FROM user_stories WHERE nfp_id = ?", (nfp_id,))
-
-            # Delete NFP objective
             cursor = conn.execute("DELETE FROM nfp_objectives WHERE id = ?", (nfp_id,))
             conn.commit()
 
@@ -1388,10 +1378,8 @@ class EventDatabase:
             if len(rows) == 1:
                 return rows[0][0]
             elif len(rows) > 1:
-                # Multiple matches, return None to indicate ambiguity
                 return None
             else:
-                # No matches
                 return None
 
     def get_user_story_entry_ids_for_completion(self) -> list[str]:
@@ -1403,10 +1391,8 @@ class EventDatabase:
     def save_feature_boundaries(self, features: list[FeatureBoundary], repository_path: Path) -> None:
         """Save feature boundaries to the database."""
         with self._get_db_connection() as conn:
-            # Clear existing features for this repository
             conn.execute("DELETE FROM feature_boundaries WHERE repository_path = ?", (repository_path.as_posix(),))
 
-            # Insert new features
             for feature in features:
                 conn.execute(
                     """
@@ -1492,10 +1478,8 @@ class EventDatabase:
             if len(rows) == 1:
                 return rows[0][0]
             elif len(rows) > 1:
-                # Multiple matches, return None to indicate ambiguity
                 return None
             else:
-                # No matches
                 return None
 
     def get_feature_ids_for_completion(self, repository_path: Path) -> list[str]:
@@ -1526,10 +1510,8 @@ class EventDatabase:
             ).fetchall()
 
             if rows:
-                return rows[0][0]  # Return the entry ID
+                return rows[0][0]
             return None
-
-    # Repo baseline cache methods for staged-impact analysis
 
     def get_cached_baseline(self, repository_path: str, head_commit_sha: str) -> RepoBaseline | None:
         """Retrieve cached baseline if HEAD matches."""

@@ -225,7 +225,6 @@ class GitTracker:
         try:
             temp_dir = Path(tempfile.mkdtemp(prefix="slopometry_baseline_"))
 
-            # Use git archive to extract entire tree at once
             result = subprocess.run(
                 ["git", "archive", "--format=tar", commit_ref],
                 cwd=self.working_dir,
@@ -240,9 +239,7 @@ class GitTracker:
 
             tar_data = BytesIO(result.stdout)
             with tarfile.open(fileobj=tar_data, mode="r") as tar:
-                # Extract Python files for complexity analysis
                 python_members = [m for m in tar.getmembers() if m.name.endswith(".py")]
-                # Also extract coverage.xml if present for coverage tracking
                 coverage_members = [m for m in tar.getmembers() if m.name == "coverage.xml"]
 
                 members_to_extract = python_members + coverage_members

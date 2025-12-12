@@ -259,7 +259,6 @@ class ExperimentOrchestrator:
                     delta_table.add_column("Current", justify="right")
                     delta_table.add_column("Change", justify="right")
 
-                    # Cyclomatic Complexity
                     cc_change = metrics.total_complexity - previous_metrics.total_complexity
                     cc_color = "green" if cc_change < 0 else "red" if cc_change > 0 else "yellow"
                     delta_table.add_row(
@@ -269,7 +268,6 @@ class ExperimentOrchestrator:
                         f"[{cc_color}]{cc_change:+d}[/{cc_color}]",
                     )
 
-                    # Halstead Volume
                     vol_change = metrics.total_volume - previous_metrics.total_volume
                     vol_color = "green" if vol_change < 0 else "red" if vol_change > 0 else "yellow"
                     delta_table.add_row(
@@ -279,7 +277,6 @@ class ExperimentOrchestrator:
                         f"[{vol_color}]{vol_change:+.1f}[/{vol_color}]",
                     )
 
-                    # Halstead Difficulty
                     diff_change = metrics.total_difficulty - previous_metrics.total_difficulty
                     diff_color = "green" if diff_change < 0 else "red" if diff_change > 0 else "yellow"
                     delta_table.add_row(
@@ -289,7 +286,6 @@ class ExperimentOrchestrator:
                         f"[{diff_color}]{diff_change:+.1f}[/{diff_color}]",
                     )
 
-                    # Halstead Effort
                     effort_change = metrics.total_effort - previous_metrics.total_effort
                     effort_color = "green" if effort_change < 0 else "red" if effort_change > 0 else "yellow"
                     delta_table.add_row(
@@ -299,7 +295,6 @@ class ExperimentOrchestrator:
                         f"[{effort_color}]{effort_change:+.1f}[/{effort_color}]",
                     )
 
-                    # Maintainability Index (higher is better)
                     mi_change = metrics.average_mi - previous_metrics.average_mi
                     mi_color = "red" if mi_change < 0 else "green" if mi_change > 0 else "yellow"
                     delta_table.add_row(
@@ -309,7 +304,6 @@ class ExperimentOrchestrator:
                         f"[{mi_color}]{mi_change:+.1f}[/{mi_color}]",
                     )
 
-                    # Files
                     files_change = metrics.total_files_analyzed - previous_metrics.total_files_analyzed
                     files_color = "green" if files_change < 0 else "red" if files_change > 0 else "yellow"
                     delta_table.add_row(
@@ -319,7 +313,6 @@ class ExperimentOrchestrator:
                         f"[{files_color}]{files_change:+d}[/{files_color}]",
                     )
 
-                    # Type Hint Coverage (higher is better)
                     type_hint_change = metrics.type_hint_coverage - previous_metrics.type_hint_coverage
                     type_hint_color = "green" if type_hint_change > 0 else "red" if type_hint_change < 0 else "yellow"
                     delta_table.add_row(
@@ -329,7 +322,6 @@ class ExperimentOrchestrator:
                         f"[{type_hint_color}]{type_hint_change:+.1f}%[/{type_hint_color}]",
                     )
 
-                    # Docstring Coverage (higher is better)
                     docstring_change = metrics.docstring_coverage - previous_metrics.docstring_coverage
                     docstring_color = "green" if docstring_change > 0 else "red" if docstring_change < 0 else "yellow"
                     delta_table.add_row(
@@ -339,7 +331,6 @@ class ExperimentOrchestrator:
                         f"[{docstring_color}]{docstring_change:+.1f}%[/{docstring_color}]",
                     )
 
-                    # Any Type % (lower is better)
                     any_type_change = metrics.any_type_percentage - previous_metrics.any_type_percentage
                     any_type_color = "green" if any_type_change < 0 else "red" if any_type_change > 0 else "yellow"
                     delta_table.add_row(
@@ -349,7 +340,6 @@ class ExperimentOrchestrator:
                         f"[{any_type_color}]{any_type_change:+.1f}%[/{any_type_color}]",
                     )
 
-                    # Str Type % (lower is better - consider enums)
                     str_type_change = metrics.str_type_percentage - previous_metrics.str_type_percentage
                     str_type_color = "green" if str_type_change < 0 else "red" if str_type_change > 0 else "yellow"
                     delta_table.add_row(
@@ -359,7 +349,6 @@ class ExperimentOrchestrator:
                         f"[{str_type_color}]{str_type_change:+.1f}%[/{str_type_color}]",
                     )
 
-                    # Deprecations (lower is better)
                     deprecation_change = metrics.deprecation_count - previous_metrics.deprecation_count
                     deprecation_color = (
                         "green" if deprecation_change < 0 else "red" if deprecation_change > 0 else "yellow"
@@ -371,7 +360,6 @@ class ExperimentOrchestrator:
                         f"[{deprecation_color}]{deprecation_change:+d}[/{deprecation_color}]",
                     )
 
-                    # Orphan Comments (lower is better)
                     orphan_change = metrics.orphan_comment_count - previous_metrics.orphan_comment_count
                     orphan_color = "green" if orphan_change < 0 else "red" if orphan_change > 0 else "yellow"
                     delta_table.add_row(
@@ -381,7 +369,6 @@ class ExperimentOrchestrator:
                         f"[{orphan_color}]{orphan_change:+d}[/{orphan_color}]",
                     )
 
-                    # Untracked TODOs (lower is better)
                     todo_change = metrics.untracked_todo_count - previous_metrics.untracked_todo_count
                     todo_color = "green" if todo_change < 0 else "red" if todo_change > 0 else "yellow"
                     delta_table.add_row(
@@ -391,7 +378,6 @@ class ExperimentOrchestrator:
                         f"[{todo_color}]{todo_change:+d}[/{todo_color}]",
                     )
 
-                    # Inline Imports (lower is better)
                     inline_change = metrics.inline_import_count - previous_metrics.inline_import_count
                     inline_color = "green" if inline_change < 0 else "red" if inline_change > 0 else "yellow"
                     delta_table.add_row(
@@ -401,7 +387,6 @@ class ExperimentOrchestrator:
                         f"[{inline_color}]{inline_change:+d}[/{inline_color}]",
                     )
 
-                    # Dict .get() with defaults (lower is better)
                     get_change = metrics.dict_get_with_default_count - previous_metrics.dict_get_with_default_count
                     get_color = "green" if get_change < 0 else "red" if get_change > 0 else "yellow"
                     delta_table.add_row(
@@ -411,7 +396,6 @@ class ExperimentOrchestrator:
                         f"[{get_color}]{get_change:+d}[/{get_color}]",
                     )
 
-                    # hasattr/getattr calls (lower is better)
                     attr_change = metrics.hasattr_getattr_count - previous_metrics.hasattr_getattr_count
                     attr_color = "green" if attr_change < 0 else "red" if attr_change > 0 else "yellow"
                     delta_table.add_row(
@@ -421,7 +405,6 @@ class ExperimentOrchestrator:
                         f"[{attr_color}]{attr_change:+d}[/{attr_color}]",
                     )
 
-                    # Non-empty __init__.py (lower is better)
                     init_change = metrics.nonempty_init_count - previous_metrics.nonempty_init_count
                     init_color = "green" if init_change < 0 else "red" if init_change > 0 else "yellow"
                     delta_table.add_row(
@@ -431,7 +414,6 @@ class ExperimentOrchestrator:
                         f"[{init_color}]{init_change:+d}[/{init_color}]",
                     )
 
-                    # Test Coverage (higher is better)
                     if coverage_percent is not None or previous_coverage is not None:
                         prev_cov_str = f"{previous_coverage:.1f}%" if previous_coverage is not None else "N/A"
                         curr_cov_str = f"{coverage_percent:.1f}%" if coverage_percent is not None else "N/A"
