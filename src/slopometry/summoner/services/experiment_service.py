@@ -17,7 +17,6 @@ class ExperimentService:
         """Run parallel experiments across git commits."""
         orchestrator = ExperimentOrchestrator(repo_path)
 
-        # Generate commit pairs (HEAD~n to HEAD~n-1)
         commit_pairs = []
         for i in range(commits, 0, -1):
             start_commit = f"HEAD~{i}"
@@ -72,7 +71,6 @@ class ExperimentService:
         """Get detailed information about a specific experiment."""
         try:
             with self.db._get_db_connection() as conn:
-                # Get experiment info
                 experiment_row = conn.execute(
                     "SELECT * FROM experiment_runs WHERE id LIKE ?", (f"{experiment_id}%",)
                 ).fetchone()
@@ -80,7 +78,6 @@ class ExperimentService:
                 if not experiment_row:
                     return None
 
-                # Get progress history
                 progress_rows = conn.execute(
                     """
                     SELECT timestamp, cli_score, complexity_score, halstead_score, maintainability_score

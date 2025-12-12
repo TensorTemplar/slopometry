@@ -142,15 +142,12 @@ def _display_complexity_metrics(stats: SessionStatistics) -> None:
     overview_table.add_row("  Type Hint Coverage", f"{metrics.type_hint_coverage:.1f}%")
     overview_table.add_row("  Docstring Coverage", f"{metrics.docstring_coverage:.1f}%")
 
-    # Any type percentage - lower is better (green <5%, yellow <15%, red >=15%)
     any_color = "green" if metrics.any_type_percentage < 5 else "yellow" if metrics.any_type_percentage < 15 else "red"
     overview_table.add_row("  Any Type Usage", f"[{any_color}]{metrics.any_type_percentage:.1f}%[/{any_color}]")
 
-    # str type percentage - lower is better for constrained strings (green <20%, yellow <40%, red >=40%)
     str_color = "green" if metrics.str_type_percentage < 20 else "yellow" if metrics.str_type_percentage < 40 else "red"
     overview_table.add_row("  str Type Usage", f"[{str_color}]{metrics.str_type_percentage:.1f}%[/{str_color}]")
 
-    # Test coverage - higher is better
     if metrics.test_coverage_percent is not None:
         cov_color = (
             "green"
@@ -170,7 +167,6 @@ def _display_complexity_metrics(stats: SessionStatistics) -> None:
         "  Deprecations", f"[yellow]{metrics.deprecation_count}[/yellow]" if metrics.deprecation_count > 0 else "0"
     )
 
-    # Code Smells section (all displayed in red since they're anti-patterns)
     overview_table.add_row("[bold]Code Smells[/bold]", "")
 
     smell_color = "red" if metrics.orphan_comment_count > 0 else "green"
@@ -277,7 +273,7 @@ def _display_complexity_delta(
 
     console.print(changes_table)
 
-    if has_baseline:
+    if has_baseline and assessment:
         impact_color = _get_impact_color(assessment.impact_category)
         console.print(
             f"\n[bold]Overall Impact:[/bold] [{impact_color}]{assessment.impact_category.value.upper()}[/{impact_color}] "
@@ -327,15 +323,42 @@ def _display_complexity_delta(
             console.print(file_changes_table)
 
 
+def _format_token_count(tokens: int) -> str:
+    """Format token count for display (e.g., 150000 -> '~150K').
+
+    Args:
+        tokens: Number of tokens
+
+    Returns:
+        Formatted string like '~150K' or '~1.5M'
+    """
+    if tokens >= 1_000_000:
+        return f"~{tokens / 1_000_000:.1f}M"
+    elif tokens >= 1_000:
+        return f"~{tokens / 1_000:.0f}K"
+    else:
+        return f"~{tokens}"
+
+
 def _display_work_summary(evolution: PlanEvolution) -> None:
     """Display compact work summary with task completion and work style."""
     console.print(
         f"\nTasks: {evolution.total_todos_completed}/{evolution.total_todos_created} completed ({evolution.planning_efficiency:.0%})"
     )
     impl_percentage = 100 - evolution.exploration_percentage
-    console.print(
-        f"Work style: {evolution.exploration_percentage:.0f}% exploration, {impl_percentage:.0f}% implementation"
-    )
+
+    # Build work style line with optional token info
+    if evolution.token_usage and evolution.token_usage.total_tokens > 0:
+        exploration_tokens = _format_token_count(evolution.token_usage.exploration_tokens)
+        implementation_tokens = _format_token_count(evolution.token_usage.implementation_tokens)
+        console.print(
+            f"Work style: {evolution.exploration_percentage:.0f}% exploration ({exploration_tokens} tokens), "
+            f"{impl_percentage:.0f}% implementation ({implementation_tokens} tokens)"
+        )
+    else:
+        console.print(
+            f"Work style: {evolution.exploration_percentage:.0f}% exploration, {impl_percentage:.0f}% implementation"
+        )
 
 
 def _display_context_coverage(coverage: ContextCoverage) -> None:
@@ -582,16 +605,14 @@ def display_staged_impact_analysis(analysis: StagedChangesAnalysis) -> None:
     impact_table.add_column("Z-Score", justify="right")
     impact_table.add_column("Assessment", style="dim")
 
-    # CC row (lower is better, so negative z-score is good)
     cc_color = "green" if assessment.cc_z_score < 0 else "red" if assessment.cc_z_score > 0 else "yellow"
     impact_table.add_row(
         "Cyclomatic Complexity",
         f"[{cc_color}]{assessment.cc_delta:+.2f}[/{cc_color}]",
         f"{assessment.cc_z_score:+.2f}",
-        _interpret_z_score(-assessment.cc_z_score),  # Negate for interpretation
+        _interpret_z_score(-assessment.cc_z_score),
     )
 
-    # Effort row (lower is better)
     effort_color = "green" if assessment.effort_z_score < 0 else "red" if assessment.effort_z_score > 0 else "yellow"
     impact_table.add_row(
         "Average Effort",
@@ -600,7 +621,6 @@ def display_staged_impact_analysis(analysis: StagedChangesAnalysis) -> None:
         _interpret_z_score(-assessment.effort_z_score),
     )
 
-    # MI row (higher is better, so positive z-score is good)
     mi_color = "green" if assessment.mi_z_score > 0 else "red" if assessment.mi_z_score < 0 else "yellow"
     impact_table.add_row(
         "Maintainability Index",
@@ -641,13 +661,11 @@ def _format_trend(trend_coefficient: float, lower_is_better: bool) -> str:
         return "[yellow]→ stable[/yellow]"
 
     if lower_is_better:
-        # For CC/Effort: negative trend (decreasing) is good
         if trend_coefficient < 0:
             return f"[green]↘ {trend_coefficient:.3f}[/green]"
         else:
             return f"[red]↗ +{trend_coefficient:.3f}[/red]"
     else:
-        # For MI: positive trend (increasing) is good
         if trend_coefficient > 0:
             return f"[green]↗ +{trend_coefficient:.3f}[/green]"
         else:
@@ -738,15 +756,12 @@ def display_current_impact_analysis(analysis: CurrentChangesAnalysis) -> None:
     quality_table.add_row("Type Hint Coverage", f"{metrics.type_hint_coverage:.1f}%")
     quality_table.add_row("Docstring Coverage", f"{metrics.docstring_coverage:.1f}%")
 
-    # Any type percentage - lower is better
     any_color = "green" if metrics.any_type_percentage < 5 else "yellow" if metrics.any_type_percentage < 15 else "red"
     quality_table.add_row("Any Type Usage", f"[{any_color}]{metrics.any_type_percentage:.1f}%[/{any_color}]")
 
-    # str type percentage - lower is better for constrained strings
     str_color = "green" if metrics.str_type_percentage < 20 else "yellow" if metrics.str_type_percentage < 40 else "red"
     quality_table.add_row("str Type Usage", f"[{str_color}]{metrics.str_type_percentage:.1f}%[/{str_color}]")
 
-    # Test coverage - higher is better
     if metrics.test_coverage_percent is not None:
         cov_color = (
             "green"
@@ -765,7 +780,6 @@ def display_current_impact_analysis(analysis: CurrentChangesAnalysis) -> None:
     dep_style = "red" if metrics.deprecation_count > 0 else "green"
     quality_table.add_row("Deprecations", f"[{dep_style}]{metrics.deprecation_count}[/{dep_style}]")
 
-    # Code Smells (all displayed in red since they're anti-patterns)
     smell_color = "red" if metrics.orphan_comment_count > 0 else "green"
     quality_table.add_row("Orphan Comments", f"[{smell_color}]{metrics.orphan_comment_count}[/{smell_color}]")
 
@@ -835,16 +849,14 @@ def display_baseline_comparison(
     impact_table.add_column("Z-Score", justify="right")
     impact_table.add_column("Assessment", style="dim")
 
-    # CC row (lower is better, so negative z-score is good)
     cc_color = "green" if assessment.cc_z_score < 0 else "red" if assessment.cc_z_score > 0 else "yellow"
     impact_table.add_row(
         "Cyclomatic Complexity",
         f"[{cc_color}]{assessment.cc_delta:+.2f}[/{cc_color}]",
         f"{assessment.cc_z_score:+.2f}",
-        _interpret_z_score(-assessment.cc_z_score),  # Negate for interpretation
+        _interpret_z_score(-assessment.cc_z_score),
     )
 
-    # Effort row (lower is better)
     effort_color = "green" if assessment.effort_z_score < 0 else "red" if assessment.effort_z_score > 0 else "yellow"
     impact_table.add_row(
         "Average Effort",
@@ -853,7 +865,6 @@ def display_baseline_comparison(
         _interpret_z_score(-assessment.effort_z_score),
     )
 
-    # MI row (higher is better, so positive z-score is good)
     mi_color = "green" if assessment.mi_z_score > 0 else "red" if assessment.mi_z_score < 0 else "yellow"
     impact_table.add_row(
         "Maintainability Index",
@@ -902,12 +913,10 @@ def display_baseline_comparison_compact(
         f"  Effort: {assessment.effort_delta:+.2f} (Z: {assessment.effort_z_score:+.2f} {effort_sign} {effort_quality})"
     )
 
-    # MI
     mi_sign = "↑" if assessment.mi_z_score > 0 else "↓" if assessment.mi_z_score < 0 else "→"
     mi_quality = "good" if assessment.mi_z_score > 0 else "below avg" if assessment.mi_z_score < 0 else "avg"
     lines.append(f"  MI: {assessment.mi_delta:+.2f} (Z: {assessment.mi_z_score:+.2f} {mi_sign} {mi_quality})")
 
-    # Overall
     category_display = assessment.impact_category.value.replace("_", " ").upper()
     lines.append(f"Session Impact: {category_display} ({assessment.impact_score:+.2f})")
 

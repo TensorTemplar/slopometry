@@ -47,7 +47,6 @@ class CurrentImpactService:
         temp_dir = extractor.extract_working_state()
 
         if not temp_dir:
-            # Fall back to analyzing current working directory
             current_metrics = analyzer.analyze_extended_complexity()
         else:
             try:
@@ -89,5 +88,5 @@ class CurrentImpactService:
         )
 
 
-# Backwards compatibility alias
+# NOTE: Backwards compatibility alias for renamed service
 StagedImpactService = CurrentImpactService

@@ -111,18 +111,14 @@ def shell_completion(shell: str) -> None:
     console.print("\n[yellow]Note: Restart your shell or source your config file after installation.[/yellow]")
 
 
-# Flat commands: Generic setup and core functionality
-# Persona command groups
 from slopometry.solo.cli.commands import install, latest, solo, status, uninstall
 from slopometry.summoner.cli.commands import summoner
 
-# Register flat commands (generic setup + latest)
 cli.add_command(install)
 cli.add_command(uninstall)
 cli.add_command(status)
 cli.add_command(latest)
 
-# Register persona command groups
 cli.add_command(solo)
 cli.add_command(summoner)
 

@@ -111,9 +111,8 @@ class Migration003AddWorkingTreeHash(Migration):
             if "duplicate column name" not in str(e).lower():
                 raise
 
-        # Drop the old unique constraint and create a new one
-        # SQLite doesn't support DROP CONSTRAINT, so we need to recreate the table
-        # But first, let's check if this is a fresh table or has data
+        # WORKAROUND: SQLite doesn't support DROP CONSTRAINT, so we recreate the
+        # table for empty DBs or skip constraint changes for existing data.
         cursor = conn.execute("SELECT COUNT(*) FROM code_quality_cache")
         row_count = cursor.fetchone()[0]
 
@@ -142,10 +141,8 @@ class Migration003AddWorkingTreeHash(Migration):
                 ON code_quality_cache(session_id)
             """)
         else:
-            # Table has data - need to migrate carefully
-            # For existing rows, working_tree_hash will be NULL (representing clean repos)
-            # The existing UNIQUE constraint will still work for clean repos
-            # We'll handle dirty repos with a different constraint approach in the cache manager
+            # NOTE: Existing data preserved - working_tree_hash=NULL represents clean repos.
+            # Cache manager handles dirty repo constraint logic separately.
             pass
 
 
@@ -169,12 +166,8 @@ class Migration004AddCalculatorVersion(Migration):
             if "duplicate column name" not in str(e).lower():
                 raise
 
-        # Since we can't easily drop constraints in SQLite without recreating the table,
-        # and we don't want to lose user data, we will just add the column for now.
-        # The unique constraint on existing rows will remain as (session_id, repo, commit, hash).
-        # New rows inserted by code_quality_cache.py will use versioning in logic,
-        # but strict DB constraint enforcement for version is less critical than preserving data.
-        # Ideally we would recreate the table with new constraints here like in Migration003.
+        # WORKAROUND: Can't drop SQLite constraints without losing user data.
+        # Cache manager enforces version validation in code instead.
 
 
 class MigrationRunner:

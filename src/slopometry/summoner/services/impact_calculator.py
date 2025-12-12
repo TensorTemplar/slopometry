@@ -11,7 +11,6 @@ from slopometry.core.models import (
 class ImpactCalculator:
     """Calculates impact score for staged changes against baseline."""
 
-    # Use existing CLI weights
     CC_WEIGHT = 0.40
     HALSTEAD_WEIGHT = 0.35  # Applied to Effort
     MI_WEIGHT = 0.25
@@ -40,8 +39,6 @@ class ImpactCalculator:
         Returns:
             ImpactAssessment with Z-scores and composite score
         """
-
-        # Use average complexity change to avoid penalizing features with many simple files
         cc_delta = staged_delta.avg_complexity_change
         effort_delta = staged_delta.avg_effort_change
         mi_delta = staged_delta.avg_mi_change
@@ -62,12 +59,8 @@ class ImpactCalculator:
             baseline.mi_delta_stats.std_dev,
         )
 
-        # Normalize directions for impact score:
-        # For CC/Effort: negative z-score = below average increase = GOOD
-        #   So we negate: -z makes "below average" positive
-        # For MI: positive z-score = above average increase = GOOD
-        #   So we keep as-is
-
+        # NOTE: Normalize z-score directions for impact scoring:
+        # CC/Effort: negate (lower=better), MI: keep (higher=better)
         normalized_cc = -cc_z
         normalized_effort = -effort_z
         normalized_mi = mi_z
