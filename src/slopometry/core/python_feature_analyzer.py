@@ -1,6 +1,9 @@
 """Analyzer for Python-specific language features."""
 
 import ast
+import io
+import re
+import tokenize
 from pathlib import Path
 from typing import NamedTuple
 
@@ -20,8 +23,21 @@ class FeatureStats(NamedTuple):
     returns_count: int = 0
     annotated_returns_count: int = 0
 
+    # Type Reference Tracking (for detecting overly generic types)
+    total_type_references: int = 0  # Total type names found in annotations
+    any_type_count: int = 0  # Count of 'Any' type references
+    str_type_count: int = 0  # Count of 'str' type references
+
     # Deprecations
     deprecations_count: int = 0  # Number of deprecated functions/classes or warnings.warn calls
+
+    # Code Smells
+    orphan_comment_count: int = 0  # Comments outside docstrings that aren't TODOs or explanatory URLs
+    untracked_todo_count: int = 0  # TODO comments without ticket references (JIRA-123, #123) or URLs
+    inline_import_count: int = 0  # Import statements not at module level (excluding TYPE_CHECKING guards)
+    dict_get_with_default_count: int = 0  # .get() calls with default values (indicates missing typed config)
+    hasattr_getattr_count: int = 0  # hasattr()/getattr() calls (indicates missing domain models)
+    nonempty_init_count: int = 0  # __init__.py files with implementation code (beyond imports/__all__)
 
 
 class PythonFeatureAnalyzer:
@@ -63,7 +79,112 @@ class PythonFeatureAnalyzer:
 
         visitor = FeatureVisitor()
         visitor.visit(tree)
-        return visitor.stats
+        ast_stats = visitor.stats
+
+        # Analyze comments (not in AST)
+        orphan_comments, untracked_todos = self._analyze_comments(content)
+
+        # Check for non-empty __init__.py
+        nonempty_init = 1 if self._is_nonempty_init(file_path, tree) else 0
+
+        return FeatureStats(
+            functions_count=ast_stats.functions_count,
+            classes_count=ast_stats.classes_count,
+            docstrings_count=ast_stats.docstrings_count,
+            args_count=ast_stats.args_count,
+            annotated_args_count=ast_stats.annotated_args_count,
+            returns_count=ast_stats.returns_count,
+            annotated_returns_count=ast_stats.annotated_returns_count,
+            total_type_references=ast_stats.total_type_references,
+            any_type_count=ast_stats.any_type_count,
+            str_type_count=ast_stats.str_type_count,
+            deprecations_count=ast_stats.deprecations_count,
+            orphan_comment_count=orphan_comments,
+            untracked_todo_count=untracked_todos,
+            inline_import_count=ast_stats.inline_import_count,
+            dict_get_with_default_count=ast_stats.dict_get_with_default_count,
+            hasattr_getattr_count=ast_stats.hasattr_getattr_count,
+            nonempty_init_count=nonempty_init,
+        )
+
+    def _is_nonempty_init(self, file_path: Path, tree: ast.Module) -> bool:
+        """Check if file is __init__.py with implementation code (beyond imports/__all__).
+
+        Acceptable content in __init__.py:
+        - Imports (Import, ImportFrom)
+        - __all__ assignment
+        - Module docstring
+        - Pass statements
+
+        Implementation code (flagged as smell):
+        - Function definitions
+        - Class definitions
+        - Other assignments (except __all__)
+        - Other expressions
+        """
+        if file_path.name != "__init__.py":
+            return False
+
+        for node in tree.body:
+            # Skip module docstring (first Expr with Constant string)
+            if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
+                if isinstance(node.value.value, str):
+                    continue
+
+            # Skip imports
+            if isinstance(node, ast.Import | ast.ImportFrom):
+                continue
+
+            # Skip pass statements
+            if isinstance(node, ast.Pass):
+                continue
+
+            # Skip __all__ assignment
+            if isinstance(node, ast.Assign):
+                if any(isinstance(target, ast.Name) and target.id == "__all__" for target in node.targets):
+                    continue
+
+            # Any other node is implementation code
+            return True
+
+        return False
+
+    def _analyze_comments(self, content: str) -> tuple[int, int]:
+        """Analyze comments in source code using tokenize.
+
+        Returns:
+            Tuple of (orphan_comment_count, untracked_todo_count)
+        """
+        orphan_comments = 0
+        untracked_todos = 0
+
+        # Patterns for detection
+        todo_pattern = re.compile(r"\b(TODO|FIXME|XXX|HACK)\b", re.IGNORECASE)
+        url_pattern = re.compile(r"https?://")
+        ticket_pattern = re.compile(r"([A-Z]+-\d+|#\d+)")
+
+        try:
+            tokens = tokenize.generate_tokens(io.StringIO(content).readline)
+            for tok in tokens:
+                if tok.type == tokenize.COMMENT:
+                    comment_text = tok.string
+
+                    is_todo = bool(todo_pattern.search(comment_text))
+                    has_url = bool(url_pattern.search(comment_text))
+
+                    if is_todo:
+                        # Check if it has a ticket reference or URL
+                        has_ticket = bool(ticket_pattern.search(comment_text))
+                        if not has_ticket and not has_url:
+                            untracked_todos += 1
+                    elif not has_url:
+                        # Not a TODO and no URL - it's an orphan comment
+                        orphan_comments += 1
+        except tokenize.TokenizeError:
+            # If tokenization fails, we just skip comment analysis
+            pass
+
+        return orphan_comments, untracked_todos
 
     def _merge_stats(self, s1: FeatureStats, s2: FeatureStats) -> FeatureStats:
         """Merge two stats objects."""
@@ -75,7 +196,16 @@ class PythonFeatureAnalyzer:
             annotated_args_count=s1.annotated_args_count + s2.annotated_args_count,
             returns_count=s1.returns_count + s2.returns_count,
             annotated_returns_count=s1.annotated_returns_count + s2.annotated_returns_count,
+            total_type_references=s1.total_type_references + s2.total_type_references,
+            any_type_count=s1.any_type_count + s2.any_type_count,
+            str_type_count=s1.str_type_count + s2.str_type_count,
             deprecations_count=s1.deprecations_count + s2.deprecations_count,
+            orphan_comment_count=s1.orphan_comment_count + s2.orphan_comment_count,
+            untracked_todo_count=s1.untracked_todo_count + s2.untracked_todo_count,
+            inline_import_count=s1.inline_import_count + s2.inline_import_count,
+            dict_get_with_default_count=s1.dict_get_with_default_count + s2.dict_get_with_default_count,
+            hasattr_getattr_count=s1.hasattr_getattr_count + s2.hasattr_getattr_count,
+            nonempty_init_count=s1.nonempty_init_count + s2.nonempty_init_count,
         )
 
 
@@ -91,6 +221,17 @@ class FeatureVisitor(ast.NodeVisitor):
         self.returns = 0
         self.annotated_returns = 0
         self.deprecations = 0
+        # Type reference tracking
+        self.total_type_refs = 0
+        self.any_type_refs = 0
+        self.str_type_refs = 0
+        # Inline import tracking
+        self.inline_imports = 0
+        self._in_type_checking_block = False
+        self._scope_depth = 0  # Track nesting level (0 = module level)
+        # Code smell tracking
+        self.dict_get_with_default = 0  # .get(key, default) calls
+        self.hasattr_getattr_calls = 0  # hasattr() and getattr() calls
 
     @property
     def stats(self) -> FeatureStats:
@@ -102,10 +243,69 @@ class FeatureVisitor(ast.NodeVisitor):
             annotated_args_count=self.annotated_args,
             returns_count=self.returns,
             annotated_returns_count=self.annotated_returns,
+            total_type_references=self.total_type_refs,
+            any_type_count=self.any_type_refs,
+            str_type_count=self.str_type_refs,
             deprecations_count=self.deprecations,
+            inline_import_count=self.inline_imports,
+            dict_get_with_default_count=self.dict_get_with_default,
+            hasattr_getattr_count=self.hasattr_getattr_calls,
         )
 
-    def visit_FunctionDef(self, node: ast.FunctionDef):
+    def _collect_type_names(self, node: ast.AST | None) -> None:
+        """Recursively collect type names from an annotation node.
+
+        Handles various annotation patterns:
+        - ast.Name: simple types like int, str, Any
+        - ast.Subscript: generic types like list[str], dict[str, Any]
+        - ast.BinOp: union types like str | None (Python 3.10+)
+        - ast.Tuple: for dict key-value pairs
+        - ast.Constant: string annotations like "SomeClass"
+        - ast.Attribute: qualified names like typing.Any
+        """
+        if node is None:
+            return
+
+        if isinstance(node, ast.Name):
+            self.total_type_refs += 1
+            if node.id == "Any":
+                self.any_type_refs += 1
+            elif node.id == "str":
+                self.str_type_refs += 1
+
+        elif isinstance(node, ast.Attribute):
+            # Handle typing.Any, typing.Optional, etc.
+            self.total_type_refs += 1
+            if node.attr == "Any":
+                self.any_type_refs += 1
+            elif node.attr == "str":
+                self.str_type_refs += 1
+
+        elif isinstance(node, ast.Subscript):
+            # Handle generic types like list[str], dict[str, Any], Optional[int]
+            self._collect_type_names(node.value)  # The generic type itself
+            self._collect_type_names(node.slice)  # The type parameter(s)
+
+        elif isinstance(node, ast.BinOp):
+            # Handle union types: str | None (Python 3.10+)
+            self._collect_type_names(node.left)
+            self._collect_type_names(node.right)
+
+        elif isinstance(node, ast.Tuple):
+            # Handle multiple type params: dict[str, int] -> (str, int)
+            for elt in node.elts:
+                self._collect_type_names(elt)
+
+        elif isinstance(node, ast.Constant):
+            # Handle string annotations like "ForwardRef"
+            if isinstance(node.value, str):
+                self.total_type_refs += 1
+                if node.value == "Any":
+                    self.any_type_refs += 1
+                elif node.value == "str":
+                    self.str_type_refs += 1
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         self.functions += 1
 
         # Docstring check
@@ -116,6 +316,7 @@ class FeatureVisitor(ast.NodeVisitor):
         self.returns += 1
         if node.returns:
             self.annotated_returns += 1
+            self._collect_type_names(node.returns)
 
         # Arguments check
         for arg in node.args.args:
@@ -125,21 +326,28 @@ class FeatureVisitor(ast.NodeVisitor):
             self.args += 1
             if arg.annotation:
                 self.annotated_args += 1
+                self._collect_type_names(arg.annotation)
 
         # Check for @deprecated or @warnings.deprecated decorator
         for decorator in node.decorator_list:
             if self._is_deprecated_decorator(decorator):
                 self.deprecations += 1
 
+        # Track scope for inline import detection
+        self._scope_depth += 1
         self.generic_visit(node)
+        self._scope_depth -= 1
 
-    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef):
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
         self._visit_func_common(node)
         # Check for @deprecated decorator
         for decorator in node.decorator_list:
             if self._is_deprecated_decorator(decorator):
                 self.deprecations += 1
+        # Track scope for inline import detection
+        self._scope_depth += 1
         self.generic_visit(node)
+        self._scope_depth -= 1
 
     def _visit_func_common(self, node):
         self.functions += 1
@@ -150,6 +358,7 @@ class FeatureVisitor(ast.NodeVisitor):
         self.returns += 1
         if node.returns:
             self.annotated_returns += 1
+            self._collect_type_names(node.returns)
 
         for arg in node.args.args:
             if arg.arg == "self" or arg.arg == "cls":
@@ -158,8 +367,9 @@ class FeatureVisitor(ast.NodeVisitor):
             self.args += 1
             if arg.annotation:
                 self.annotated_args += 1
+                self._collect_type_names(arg.annotation)
 
-    def visit_ClassDef(self, node: ast.ClassDef):
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
         self.classes += 1
 
         if ast.get_docstring(node):
@@ -170,20 +380,30 @@ class FeatureVisitor(ast.NodeVisitor):
             if self._is_deprecated_decorator(decorator):
                 self.deprecations += 1
 
+        # Track scope for inline import detection
+        self._scope_depth += 1
         self.generic_visit(node)
+        self._scope_depth -= 1
 
-    def visit_Call(self, node: ast.Call):
-        """Check for warnings.warn calls."""
-        # Check for coverage of warnings.warn(..., DeprecationWarning)
+    def visit_Call(self, node: ast.Call) -> None:
+        """Check for warnings.warn, .get() with defaults, and hasattr/getattr calls."""
         if self._is_warnings_warn(node.func):
             if len(node.args) > 1:
                 category = node.args[1]
                 if self._is_deprecation_warning(category):
                     self.deprecations += 1
-            # Check kwargs for category
             for keyword in node.keywords:
                 if keyword.arg == "category" and self._is_deprecation_warning(keyword.value):
                     self.deprecations += 1
+
+        if isinstance(node.func, ast.Attribute) and node.func.attr == "get":
+            has_default = len(node.args) >= 2 or any(kw.arg == "default" for kw in node.keywords)
+            if has_default:
+                self.dict_get_with_default += 1
+
+        elif isinstance(node.func, ast.Name):
+            if node.func.id in ("hasattr", "getattr"):
+                self.hasattr_getattr_calls += 1
 
         self.generic_visit(node)
 
@@ -213,4 +433,33 @@ class FeatureVisitor(ast.NodeVisitor):
             return "DeprecationWarning" in node.id or "PendingDeprecationWarning" in node.id
         elif isinstance(node, ast.Attribute):
             return "DeprecationWarning" in node.attr or "PendingDeprecationWarning" in node.attr
+        return False
+
+    def visit_If(self, node: ast.If) -> None:
+        """Track TYPE_CHECKING blocks to exclude their imports."""
+        if self._is_type_checking_guard(node):
+            self._in_type_checking_block = True
+            self.generic_visit(node)
+            self._in_type_checking_block = False
+        else:
+            self.generic_visit(node)
+
+    def visit_Import(self, node: ast.Import) -> None:
+        """Track inline imports (not at module level, not in TYPE_CHECKING)."""
+        if self._scope_depth > 0 and not self._in_type_checking_block:
+            self.inline_imports += 1
+        self.generic_visit(node)
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        """Track inline imports (not at module level, not in TYPE_CHECKING)."""
+        if self._scope_depth > 0 and not self._in_type_checking_block:
+            self.inline_imports += 1
+        self.generic_visit(node)
+
+    def _is_type_checking_guard(self, node: ast.If) -> bool:
+        """Check if this is an `if TYPE_CHECKING:` block."""
+        if isinstance(node.test, ast.Name):
+            return node.test.id == "TYPE_CHECKING"
+        if isinstance(node.test, ast.Attribute):
+            return node.test.attr == "TYPE_CHECKING"
         return False

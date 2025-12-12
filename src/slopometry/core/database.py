@@ -10,6 +10,7 @@ from pathlib import Path
 from slopometry.core.migrations import MigrationRunner
 from slopometry.core.models import (
     ComplexityDelta,
+    ContextCoverage,
     ExperimentProgress,
     ExperimentRun,
     ExperimentStatus,
@@ -176,6 +177,7 @@ class EventDatabase:
                     cumulative_complexity INTEGER NOT NULL,
                     incremental_complexity INTEGER NOT NULL,
                     file_metrics TEXT NOT NULL,
+                    test_coverage_percent REAL,
                     FOREIGN KEY (chain_id) REFERENCES commit_complexity_chains(id),
                     UNIQUE(chain_id, commit_sha)
                 )
@@ -239,9 +241,18 @@ class EventDatabase:
 
             try:
                 conn.execute("""
-                    ALTER TABLE experiment_runs 
-                    ADD COLUMN nfp_objective_id TEXT 
+                    ALTER TABLE experiment_runs
+                    ADD COLUMN nfp_objective_id TEXT
                     REFERENCES nfp_objectives(id)
+                """)
+            except sqlite3.OperationalError:
+                pass
+
+            # Add test_coverage_percent column to complexity_evolution if not exists
+            try:
+                conn.execute("""
+                    ALTER TABLE complexity_evolution
+                    ADD COLUMN test_coverage_percent REAL
                 """)
             except sqlite3.OperationalError:
                 pass
@@ -556,6 +567,11 @@ class EventDatabase:
         except Exception:
             stats.plan_evolution = None
 
+        try:
+            stats.context_coverage = self._calculate_context_coverage(stats.transcript_path, stats.working_directory)
+        except Exception:
+            stats.context_coverage = None
+
         return stats
 
     def _get_session_complexity_metrics(
@@ -639,15 +655,44 @@ class EventDatabase:
                 tool_name = row["tool_name"]
                 tool_type = ToolType(row["tool_type"]) if row["tool_type"] else None
 
+                metadata = json.loads(row["metadata"]) if row["metadata"] else {}
+                tool_input = metadata.get("tool_input", {})
+
                 if tool_name == "TodoWrite":
-                    metadata = json.loads(row["metadata"]) if row["metadata"] else {}
-                    tool_input = metadata.get("tool_input", {})
                     if tool_input:
                         analyzer.analyze_todo_write_event(tool_input, timestamp)
                 else:
-                    analyzer.increment_event_count(tool_type)
+                    analyzer.increment_event_count(tool_type, tool_input)
 
         return analyzer.get_plan_evolution()
+
+    def _calculate_context_coverage(
+        self, transcript_path: str | None, working_directory: str | None
+    ) -> ContextCoverage | None:
+        """Calculate context coverage from session transcript.
+
+        Args:
+            transcript_path: Path to the Claude Code transcript JSONL
+            working_directory: Working directory for the session
+
+        Returns:
+            ContextCoverage with metrics, or None if unavailable
+        """
+        if not transcript_path or not working_directory:
+            return None
+
+        transcript_file = Path(transcript_path)
+        if not transcript_file.exists():
+            return None
+
+        working_dir = Path(working_directory)
+        if not working_dir.exists():
+            return None
+
+        from slopometry.core.context_coverage_analyzer import ContextCoverageAnalyzer
+
+        analyzer = ContextCoverageAnalyzer(working_dir)
+        return analyzer.analyze_transcript(transcript_file)
 
     def calculate_extended_complexity_metrics(
         self, working_directory: str, baseline_commit_sha: str | None = None
@@ -728,13 +773,15 @@ class EventDatabase:
 
                         shutil.rmtree(baseline_dir, ignore_errors=True)
                     except Exception:
+                        # Baseline comparison failed (subprocess, JSON parsing, file access, etc.)
+                        # Continue with just current metrics, no delta
                         if baseline_dir:
                             shutil.rmtree(baseline_dir, ignore_errors=True)
-                        pass
 
             return current_extended, complexity_delta
 
         except Exception:
+            # Analysis failed completely, return no metrics
             return None, None
 
     def list_sessions(self, limit: int | None = None) -> list[str]:
@@ -1004,6 +1051,7 @@ class EventDatabase:
         cumulative_complexity: int,
         incremental_complexity: int,
         file_metrics: str,
+        test_coverage_percent: float | None = None,
     ) -> None:
         """Save complexity evolution data for a commit."""
         with self._get_db_connection() as conn:
@@ -1011,10 +1059,18 @@ class EventDatabase:
                 """
                 INSERT OR REPLACE INTO complexity_evolution (
                     chain_id, commit_sha, commit_order, cumulative_complexity,
-                    incremental_complexity, file_metrics
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    incremental_complexity, file_metrics, test_coverage_percent
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-                (chain_id, commit_sha, commit_order, cumulative_complexity, incremental_complexity, file_metrics),
+                (
+                    chain_id,
+                    commit_sha,
+                    commit_order,
+                    cumulative_complexity,
+                    incremental_complexity,
+                    file_metrics,
+                    test_coverage_percent,
+                ),
             )
             conn.commit()
 

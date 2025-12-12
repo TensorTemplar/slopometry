@@ -68,7 +68,8 @@ class ProjectTracker:
             project_name = data.get("project", {}).get("name")
             if project_name and isinstance(project_name, str):
                 return Project(name=project_name, source=ProjectSource.PYPROJECT)
-        except Exception:
+        except (toml.TomlDecodeError, OSError, KeyError, TypeError):
+            # Invalid TOML, file access error, or unexpected structure
             pass
 
         return None

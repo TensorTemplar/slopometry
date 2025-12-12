@@ -28,6 +28,7 @@ def baseline_metrics():
         min_complexity=1,
         total_volume=5000.0,
         total_effort=2500000.0,
+        total_difficulty=500.0,
         average_volume=250.0,
         average_effort=125000.0,
         average_difficulty=25.0,

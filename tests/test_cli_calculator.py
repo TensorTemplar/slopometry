@@ -1,5 +1,7 @@
 """Tests for CLI Calculator functionality."""
 
+from conftest import make_test_metrics
+
 from slopometry.core.models import ExtendedComplexityMetrics
 from slopometry.summoner.services.cli_calculator import CLICalculator
 
@@ -12,12 +14,15 @@ class TestCLICalculator:
         calculator = CLICalculator()
 
         metrics = ExtendedComplexityMetrics(
-            total_complexity=100,
-            total_volume=500.0,
-            average_difficulty=12.5,
-            total_effort=6250.0,
-            average_mi=60.0,
-            total_files_analyzed=5,
+            **make_test_metrics(
+                total_complexity=100,
+                total_volume=500.0,
+                total_difficulty=62.5,
+                average_difficulty=12.5,
+                total_effort=6250.0,
+                average_mi=60.0,
+                total_files_analyzed=5,
+            )
         )
 
         cli_score, components = calculator.calculate_cli(metrics, metrics)
@@ -32,21 +37,27 @@ class TestCLICalculator:
         calculator = CLICalculator()
 
         current = ExtendedComplexityMetrics(
-            total_complexity=50,
-            total_volume=250.0,
-            average_difficulty=6.25,
-            total_effort=1562.5,
-            average_mi=30.0,
-            total_files_analyzed=5,
+            **make_test_metrics(
+                total_complexity=50,
+                total_volume=250.0,
+                total_difficulty=31.25,
+                average_difficulty=6.25,
+                total_effort=1562.5,
+                average_mi=30.0,
+                total_files_analyzed=5,
+            )
         )
 
         target = ExtendedComplexityMetrics(
-            total_complexity=100,
-            total_volume=500.0,
-            average_difficulty=12.5,
-            total_effort=3125.0,
-            average_mi=60.0,
-            total_files_analyzed=5,
+            **make_test_metrics(
+                total_complexity=100,
+                total_volume=500.0,
+                total_difficulty=62.5,
+                average_difficulty=12.5,
+                total_effort=3125.0,
+                average_mi=60.0,
+                total_files_analyzed=5,
+            )
         )
 
         cli_score, components = calculator.calculate_cli(current, target)
@@ -61,21 +72,27 @@ class TestCLICalculator:
         calculator = CLICalculator()
 
         current = ExtendedComplexityMetrics(
-            total_complexity=200,
-            total_volume=1000.0,
-            average_difficulty=25.0,
-            total_effort=25000.0,
-            average_mi=120.0,
-            total_files_analyzed=5,
+            **make_test_metrics(
+                total_complexity=200,
+                total_volume=1000.0,
+                total_difficulty=125.0,
+                average_difficulty=25.0,
+                total_effort=25000.0,
+                average_mi=120.0,
+                total_files_analyzed=5,
+            )
         )
 
         target = ExtendedComplexityMetrics(
-            total_complexity=100,
-            total_volume=500.0,
-            average_difficulty=12.5,
-            total_effort=12500.0,
-            average_mi=60.0,
-            total_files_analyzed=5,
+            **make_test_metrics(
+                total_complexity=100,
+                total_volume=500.0,
+                total_difficulty=62.5,
+                average_difficulty=12.5,
+                total_effort=12500.0,
+                average_mi=60.0,
+                total_files_analyzed=5,
+            )
         )
 
         cli_score, components = calculator.calculate_cli(current, target)

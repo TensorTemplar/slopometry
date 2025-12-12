@@ -212,7 +212,7 @@ class GitTracker:
         return files
 
     def extract_files_from_commit(self, commit_ref: str = "HEAD~1") -> Path | None:
-        """Extract Python files from a specific commit to a temporary directory.
+        """Extract Python files and coverage.xml from a specific commit to a temporary directory.
 
         Uses git archive for efficient extraction of entire tree.
 
@@ -240,11 +240,16 @@ class GitTracker:
 
             tar_data = BytesIO(result.stdout)
             with tarfile.open(fileobj=tar_data, mode="r") as tar:
+                # Extract Python files for complexity analysis
                 python_members = [m for m in tar.getmembers() if m.name.endswith(".py")]
+                # Also extract coverage.xml if present for coverage tracking
+                coverage_members = [m for m in tar.getmembers() if m.name == "coverage.xml"]
+
+                members_to_extract = python_members + coverage_members
                 if not python_members:
                     return None
 
-                tar.extractall(path=temp_dir, members=python_members)
+                tar.extractall(path=temp_dir, members=members_to_extract, filter="data")
 
             return temp_dir
 

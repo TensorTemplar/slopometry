@@ -16,7 +16,6 @@ class PlanAnalyzer:
         ToolType.WEB_FETCH,
         ToolType.READ,
         ToolType.LS,
-        ToolType.TASK,
         ToolType.TODO_READ,
         ToolType.NOTEBOOK_READ,
         ToolType.MCP_IDE_GET_DIAGNOSTICS,
@@ -75,7 +74,7 @@ class PlanAnalyzer:
         for todo_data in todos_data:
             try:
                 todo = TodoItem(**todo_data)
-                current_todos[todo.id] = todo
+                current_todos[todo.content] = todo
             except Exception:
                 continue
 
@@ -88,12 +87,23 @@ class PlanAnalyzer:
         self.search_events_since_last_todo = 0
         self.implementation_events_since_last_todo = 0
 
-    def increment_event_count(self, tool_type: ToolType | None = None) -> None:
-        """Increment the count of events since last TodoWrite."""
+    def increment_event_count(
+        self, tool_type: ToolType | None = None, tool_input: dict[str, Any] | None = None
+    ) -> None:
+        """Increment the count of events since last TodoWrite.
+
+        Task tools are classified by subagent_type: 'Explore' -> search, others -> implementation.
+        """
         self.events_since_last_todo += 1
 
         if tool_type:
-            if tool_type in self.SEARCH_TOOLS:
+            if tool_type == ToolType.TASK:
+                subagent_type = tool_input.get("subagent_type") if tool_input else None
+                if subagent_type and "explore" in subagent_type.lower():
+                    self.search_events_since_last_todo += 1
+                else:
+                    self.implementation_events_since_last_todo += 1
+            elif tool_type in self.SEARCH_TOOLS:
                 self.search_events_since_last_todo += 1
             elif tool_type in self.IMPLEMENTATION_TOOLS:
                 self.implementation_events_since_last_todo += 1
@@ -134,9 +144,8 @@ class PlanAnalyzer:
 
         total_search_events = sum(step.search_events for step in self.plan_steps)
         total_implementation_events = sum(step.implementation_events for step in self.plan_steps)
-        overall_search_to_implementation_ratio = (
-            total_search_events / total_implementation_events if total_implementation_events > 0 else 0.0
-        )
+        total_events = total_search_events + total_implementation_events
+        exploration_percentage = (total_search_events / total_events * 100) if total_events > 0 else 0.0
 
         return PlanEvolution(
             total_plan_steps=len(self.plan_steps),
@@ -148,14 +157,14 @@ class PlanAnalyzer:
             planning_efficiency=planning_efficiency,
             total_search_events=total_search_events,
             total_implementation_events=total_implementation_events,
-            overall_search_to_implementation_ratio=overall_search_to_implementation_ratio,
+            exploration_percentage=exploration_percentage,
         )
 
     def _calculate_plan_step(self, current_todos: dict[str, TodoItem], timestamp: datetime) -> PlanStep | None:
         """Calculate the differences between previous and current todos.
 
         Args:
-            current_todos: Current todo items by ID
+            current_todos: Current todo items by content
             timestamp: When this step occurred
 
         Returns:
@@ -163,11 +172,8 @@ class PlanAnalyzer:
         """
         self.step_number += 1
 
-        search_to_implementation_ratio = (
-            self.search_events_since_last_todo / self.implementation_events_since_last_todo
-            if self.implementation_events_since_last_todo > 0
-            else 0.0
-        )
+        total_events = self.search_events_since_last_todo + self.implementation_events_since_last_todo
+        exploration_percentage = (self.search_events_since_last_todo / total_events * 100) if total_events > 0 else 0.0
 
         if not self.previous_todos:
             return PlanStep(
@@ -177,31 +183,28 @@ class PlanAnalyzer:
                 timestamp=timestamp,
                 search_events=self.search_events_since_last_todo,
                 implementation_events=self.implementation_events_since_last_todo,
-                search_to_implementation_ratio=search_to_implementation_ratio,
+                exploration_percentage=exploration_percentage,
             )
 
-        previous_ids = set(self.previous_todos.keys())
-        current_ids = set(current_todos.keys())
+        previous_contents = set(self.previous_todos.keys())
+        current_contents = set(current_todos.keys())
 
-        new_todo_ids = current_ids - previous_ids
-        todos_added = [current_todos[todo_id].content for todo_id in new_todo_ids]
+        new_contents = current_contents - previous_contents
+        todos_added = list(new_contents)
 
-        removed_todo_ids = previous_ids - current_ids
-        todos_removed = [self.previous_todos[todo_id].content for todo_id in removed_todo_ids]
+        removed_contents = previous_contents - current_contents
+        todos_removed = list(removed_contents)
 
-        common_ids = previous_ids & current_ids
+        common_contents = previous_contents & current_contents
         todos_status_changed = {}
-        todos_content_changed = {}
+        todos_content_changed: dict[str, tuple[str, str]] = {}
 
-        for todo_id in common_ids:
-            prev_todo = self.previous_todos[todo_id]
-            curr_todo = current_todos[todo_id]
+        for content in common_contents:
+            prev_todo = self.previous_todos[content]
+            curr_todo = current_todos[content]
 
             if prev_todo.status != curr_todo.status:
-                todos_status_changed[curr_todo.content] = (prev_todo.status, curr_todo.status)
-
-            if prev_todo.content != curr_todo.content:
-                todos_content_changed[prev_todo.content] = (prev_todo.content, curr_todo.content)
+                todos_status_changed[content] = (prev_todo.status, curr_todo.status)
 
         return PlanStep(
             step_number=self.step_number,
@@ -213,5 +216,5 @@ class PlanAnalyzer:
             timestamp=timestamp,
             search_events=self.search_events_since_last_todo,
             implementation_events=self.implementation_events_since_last_todo,
-            search_to_implementation_ratio=search_to_implementation_ratio,
+            exploration_percentage=exploration_percentage,
         )

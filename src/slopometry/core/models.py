@@ -119,6 +119,9 @@ class ComplexityMetrics(BaseModel):
     files_by_complexity: dict[str, int] = Field(
         default_factory=dict, description="Mapping of filename to complexity score"
     )
+    files_with_parse_errors: dict[str, str] = Field(
+        default_factory=dict, description="Files that failed to parse: {filepath: error_message}"
+    )
 
 
 class ComplexityDelta(BaseModel):
@@ -140,14 +143,27 @@ class ComplexityDelta(BaseModel):
     total_mi_change: float = 0.0
     avg_mi_change: float = 0.0
 
+    type_hint_coverage_change: float = 0.0
+    docstring_coverage_change: float = 0.0
+    deprecation_change: int = 0
+
+    any_type_percentage_change: float = 0.0
+    str_type_percentage_change: float = 0.0
+
+    orphan_comment_change: int = 0
+    untracked_todo_change: int = 0
+    inline_import_change: int = 0
+    dict_get_with_default_change: int = 0
+    hasattr_getattr_change: int = 0
+    nonempty_init_change: int = 0
+
 
 class TodoItem(BaseModel):
-    """Represents a single todo item."""
+    """Represents a single todo item from Claude Code's TodoWrite tool."""
 
-    id: str
-    content: str
-    status: str = Field(description="Status of the todo item: pending, in_progress, or completed")
-    priority: str = Field(description="Priority level: high, medium, or low")
+    content: str = Field(description="The todo item description")
+    status: str = Field(description="Status: pending, in_progress, or completed")
+    activeForm: str = Field(description="Present continuous form shown during execution")
 
 
 class PlanStep(BaseModel):
@@ -164,11 +180,9 @@ class PlanStep(BaseModel):
         default_factory=dict, description="Mapping of old_content to new_content for content changes"
     )
     timestamp: datetime = Field(default_factory=datetime.now)
-    search_events: int = Field(default=0, description="Number of search-type tool events")
+    search_events: int = Field(default=0, description="Number of exploration-type tool events")
     implementation_events: int = Field(default=0, description="Number of implementation-type tool events")
-    search_to_implementation_ratio: float = Field(
-        default=0.0, description="Ratio of search events to implementation events (0 if no implementation events)"
-    )
+    exploration_percentage: float = Field(default=0.0, description="Percentage of events that were exploration (0-100)")
 
 
 class PlanEvolution(BaseModel):
@@ -183,7 +197,7 @@ class PlanEvolution(BaseModel):
     planning_efficiency: float = Field(default=0.0, description="Ratio of completed todos to total todos created")
     total_search_events: int = 0
     total_implementation_events: int = 0
-    overall_search_to_implementation_ratio: float = 0.0
+    exploration_percentage: float = Field(default=0.0, description="Percentage of events that were exploration (0-100)")
 
 
 class SessionStatistics(BaseModel):
@@ -205,6 +219,7 @@ class SessionStatistics(BaseModel):
     complexity_metrics: "ExtendedComplexityMetrics | None" = None
     complexity_delta: ComplexityDelta | None = None
     plan_evolution: PlanEvolution | None = None
+    context_coverage: "ContextCoverage | None" = None
     project: Project | None = None
     transcript_path: str | None = None
 
@@ -335,27 +350,59 @@ class NextFeaturePrediction(BaseModel):
 
 
 class ExtendedComplexityMetrics(ComplexityMetrics):
-    """Extended metrics including Halstead and Maintainability Index."""
+    """Extended metrics including Halstead and Maintainability Index.
 
-    total_volume: float = 0.0
-    total_effort: float = 0.0
-    average_volume: float = 0.0
-    average_effort: float = 0.0
-    total_difficulty: float = 0.0
-    average_difficulty: float = 0.0
+    Core Halstead metrics are required to catch missing parameter bugs early.
+    """
 
-    total_mi: float = 0.0
-    average_mi: float = Field(default=0.0, description="Higher is better (0-100 scale)")
+    total_volume: float
+    total_effort: float
+    total_difficulty: float
+    average_volume: float
+    average_effort: float
+    average_difficulty: float
 
-    # Python-specific quality indicators
+    total_mi: float
+    average_mi: float = Field(description="Higher is better (0-100 scale)")
+
     type_hint_coverage: float = Field(default=0.0, description="Percentage of functions/args with type hints (0-100)")
     docstring_coverage: float = Field(
         default=0.0, description="Percentage of functions/classes with docstrings (0-100)"
     )
     deprecation_count: int = Field(default=0, description="Number of deprecation warnings/markers found")
 
-    files_with_parse_errors: dict[str, str] = Field(
-        default_factory=dict, description="Files that radon couldn't parse: {filepath: error_message}"
+    any_type_percentage: float = Field(
+        default=0.0, description="Percentage of type annotations using Any (0-100). Lower is better."
+    )
+    str_type_percentage: float = Field(
+        default=0.0,
+        description="Percentage of type annotations using str (0-100). Consider enums for constrained strings.",
+    )
+
+    test_coverage_percent: float | None = Field(
+        default=None, description="Pytest test coverage percentage (0-100). None if unavailable."
+    )
+    test_coverage_source: str | None = Field(
+        default=None, description="Source file for coverage data (e.g., 'coverage.xml')"
+    )
+
+    orphan_comment_count: int = Field(
+        default=0, description="Comments outside docstrings that aren't TODOs or explanatory URLs"
+    )
+    untracked_todo_count: int = Field(
+        default=0, description="TODO comments without ticket references (JIRA-123, #123) or URLs"
+    )
+    inline_import_count: int = Field(
+        default=0, description="Import statements not at module level (excluding TYPE_CHECKING guards)"
+    )
+    dict_get_with_default_count: int = Field(
+        default=0, description=".get() calls with defaults (indicates missing typed config)"
+    )
+    hasattr_getattr_count: int = Field(
+        default=0, description="hasattr()/getattr() calls (indicates missing domain models)"
+    )
+    nonempty_init_count: int = Field(
+        default=0, description="__init__.py files with implementation code (beyond imports/__all__)"
     )
 
 
@@ -457,20 +504,16 @@ class UserStoryEntry(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid4()))
     created_at: datetime = Field(default_factory=datetime.now)
 
-    # Git diff information
     base_commit: str = Field(description="Base commit reference")
     head_commit: str = Field(description="Head commit reference")
     diff_content: str = Field(description="The git diff content")
     stride_size: int = Field(default=1, description="Number of intermediate commits spanned")
 
-    # Generated content
     user_stories: str = Field(description="Generated user stories markdown")
 
-    # Ratings and feedback
     rating: int = Field(ge=1, le=5, description="User rating from 1-5")
     guidelines_for_improving: str = Field(default="", description="Guidelines for improving the user story generation")
 
-    # Metadata
     model_used: str = Field(default="o3", description="Model used for generation")
     prompt_template: str = Field(default="", description="Template used for prompt")
     repository_path: str = Field(default="", description="Repository path")
@@ -605,3 +648,75 @@ class CurrentChangesAnalysis(BaseModel):
 
     assessment: ImpactAssessment
     baseline: RepoBaseline
+
+
+class FileCoverageStatus(BaseModel):
+    """Coverage status for a single edited file showing what context was read."""
+
+    file_path: str = Field(description="Relative path to the edited file")
+    was_read_before_edit: bool = Field(description="Whether the file was read before being edited")
+    imports: list[str] = Field(default_factory=list, description="Files this file imports")
+    imports_read: list[str] = Field(default_factory=list, description="Imported files that were read")
+    dependents: list[str] = Field(default_factory=list, description="Files that import this file")
+    dependents_read: list[str] = Field(default_factory=list, description="Dependent files that were read")
+    test_files: list[str] = Field(default_factory=list, description="Related test files")
+    test_files_read: list[str] = Field(default_factory=list, description="Related test files that were read")
+
+    @property
+    def imports_coverage(self) -> float:
+        """Percentage of imports that were read (0-100)."""
+        if not self.imports:
+            return 100.0
+        return len(self.imports_read) / len(self.imports) * 100
+
+    @property
+    def dependents_coverage(self) -> float:
+        """Percentage of dependents that were read (0-100)."""
+        if not self.dependents:
+            return 100.0
+        return len(self.dependents_read) / len(self.dependents) * 100
+
+    @property
+    def test_coverage(self) -> float:
+        """Percentage of test files that were read (0-100)."""
+        if not self.test_files:
+            return 100.0
+        return len(self.test_files_read) / len(self.test_files) * 100
+
+
+class ContextCoverage(BaseModel):
+    """Tracks whether Claude read enough context before editing files."""
+
+    files_edited: list[str] = Field(default_factory=list, description="All files that were edited")
+    files_read: list[str] = Field(default_factory=list, description="All files that were read")
+    file_coverage: list[FileCoverageStatus] = Field(
+        default_factory=list, description="Coverage status for each edited file"
+    )
+    blind_spots: list[str] = Field(default_factory=list, description="Files related to edits that were never read")
+
+    @property
+    def files_read_before_edit_ratio(self) -> float:
+        """Ratio of edited files that were read first (0-1)."""
+        if not self.file_coverage:
+            return 1.0
+        read_first = sum(1 for f in self.file_coverage if f.was_read_before_edit)
+        return read_first / len(self.file_coverage)
+
+    @property
+    def overall_imports_coverage(self) -> float:
+        """Average imports coverage across all edited files (0-100)."""
+        if not self.file_coverage:
+            return 100.0
+        return sum(f.imports_coverage for f in self.file_coverage) / len(self.file_coverage)
+
+    @property
+    def overall_dependents_coverage(self) -> float:
+        """Average dependents coverage across all edited files (0-100)."""
+        if not self.file_coverage:
+            return 100.0
+        return sum(f.dependents_coverage for f in self.file_coverage) / len(self.file_coverage)
+
+    @property
+    def total_blind_spots(self) -> int:
+        """Total number of related files that were never read."""
+        return len(self.blind_spots)

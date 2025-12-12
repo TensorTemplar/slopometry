@@ -1561,6 +1561,7 @@ version = "20251211.post5"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
+    { name = "coverage" },
     { name = "datasets" },
     { name = "huggingface-hub" },
     { name = "pandas" },
@@ -1589,6 +1590,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.0" },
+    { name = "coverage", specifier = ">=7.0.0" },
     { name = "datasets", specifier = ">=2.14.0" },
     { name = "huggingface-hub", specifier = ">=0.20.0" },
     { name = "pandas", specifier = ">=2.0.0" },

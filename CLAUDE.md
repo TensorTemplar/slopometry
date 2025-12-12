@@ -33,6 +33,11 @@ When installing slopometry as a global uv tool:
 uv tool install .
 ```
 
+After making code changes, reinstall to update the global tool:
+```bash
+uv tool install . --reinstall
+```
+
 
 ## Key Architecture
 

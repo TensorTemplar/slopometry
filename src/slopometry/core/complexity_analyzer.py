@@ -53,6 +53,8 @@ class ComplexityAnalyzer:
     def _analyze_directory(self, directory: Path) -> ComplexityMetrics:
         """Analyze complexity of Python files in a specific directory.
 
+        Files with syntax errors or encoding issues are silently skipped.
+
         Args:
             directory: Directory to analyze
 
@@ -81,10 +83,6 @@ class ComplexityAnalyzer:
                 all_complexities.append(file_complexity)
 
             except (SyntaxError, UnicodeDecodeError, OSError):
-                # Note: radon cc_visit can raise SyntaxError on invalid python code
-                # We track these as errors just like the CLI parser did
-                # But ComplexityMetrics does not expose parse_errors dict in this method's return type currently
-                # So we just skip or log
                 continue
 
         total_files = len(all_complexities)
@@ -111,6 +109,8 @@ class ComplexityAnalyzer:
     def _process_radon_output(self, radon_data: dict[str, Any], reference_dir: Path | None = None) -> ComplexityMetrics:
         """Process radon JSON output into ComplexityMetrics.
 
+        Files with parse errors (e.g., Python version mismatch) are tracked separately.
+
         Args:
             radon_data: Raw JSON data from radon
             reference_dir: Reference directory for path calculation (defaults to working_directory)
@@ -120,6 +120,7 @@ class ComplexityAnalyzer:
         """
         files_by_complexity = {}
         all_complexities = []
+        files_with_parse_errors: dict[str, str] = {}
 
         reference_directory = reference_dir or self.working_directory
 
@@ -127,9 +128,9 @@ class ComplexityAnalyzer:
             if not functions:
                 continue
 
-            # FIXME: parse errors due to python version mismatch should be handled
-            # as explicit negative case instead of implicit ok
             if isinstance(functions, dict) and "error" in functions:
+                relative_path = self._get_relative_path(file_path, reference_directory)
+                files_with_parse_errors[relative_path] = functions.get("error", "Unknown parse error")
                 continue
 
             file_complexity = sum(func.get("complexity", 0) for func in functions)
@@ -157,10 +158,13 @@ class ComplexityAnalyzer:
             max_complexity=max_complexity,
             min_complexity=min_complexity,
             files_by_complexity=files_by_complexity,
+            files_with_parse_errors=files_with_parse_errors,
         )
 
     def _calculate_delta(
-        self, baseline_metrics: ComplexityMetrics, current_metrics: ComplexityMetrics
+        self,
+        baseline_metrics: ComplexityMetrics | ExtendedComplexityMetrics,
+        current_metrics: ComplexityMetrics | ExtendedComplexityMetrics,
     ) -> ComplexityDelta:
         """Calculate complexity delta between baseline and current metrics.
 
@@ -189,9 +193,6 @@ class ComplexityAnalyzer:
                 files_changed[file_path] = complexity_change
 
         total_complexity_change = current_metrics.total_complexity - baseline_metrics.total_complexity
-
-        # Calculate global average complexity change (not just common files)
-        # This prevents penalizing adding many simple files (which increases total but decreases average)
         avg_complexity_change = current_metrics.average_complexity - baseline_metrics.average_complexity
 
         delta = ComplexityDelta(
@@ -203,23 +204,35 @@ class ComplexityAnalyzer:
             avg_complexity_change=avg_complexity_change,
         )
 
-        # Handle Extended Metrics if available (duck typing)
-        if hasattr(current_metrics, "average_effort") and hasattr(baseline_metrics, "average_effort"):
-            # We use getattr to safely access extended attributes that might not be on the base class type hint
-            delta.avg_effort_change = getattr(current_metrics, "average_effort", 0.0) - getattr(
-                baseline_metrics, "average_effort", 0.0
+        if isinstance(current_metrics, ExtendedComplexityMetrics) and isinstance(
+            baseline_metrics, ExtendedComplexityMetrics
+        ):
+            delta.avg_effort_change = current_metrics.average_effort - baseline_metrics.average_effort
+            delta.total_effort_change = current_metrics.total_effort - baseline_metrics.total_effort
+            delta.avg_mi_change = current_metrics.average_mi - baseline_metrics.average_mi
+            delta.total_mi_change = current_metrics.total_mi - baseline_metrics.total_mi
+
+            delta.type_hint_coverage_change = current_metrics.type_hint_coverage - baseline_metrics.type_hint_coverage
+            delta.docstring_coverage_change = current_metrics.docstring_coverage - baseline_metrics.docstring_coverage
+            delta.deprecation_change = current_metrics.deprecation_count - baseline_metrics.deprecation_count
+
+            delta.any_type_percentage_change = (
+                current_metrics.any_type_percentage - baseline_metrics.any_type_percentage
             )
-            delta.total_effort_change = getattr(current_metrics, "total_effort", 0.0) - getattr(
-                baseline_metrics, "total_effort", 0.0
+            delta.str_type_percentage_change = (
+                current_metrics.str_type_percentage - baseline_metrics.str_type_percentage
             )
 
-        if hasattr(current_metrics, "average_mi") and hasattr(baseline_metrics, "average_mi"):
-            delta.avg_mi_change = getattr(current_metrics, "average_mi", 0.0) - getattr(
-                baseline_metrics, "average_mi", 0.0
+            delta.orphan_comment_change = current_metrics.orphan_comment_count - baseline_metrics.orphan_comment_count
+            delta.untracked_todo_change = current_metrics.untracked_todo_count - baseline_metrics.untracked_todo_count
+            delta.inline_import_change = current_metrics.inline_import_count - baseline_metrics.inline_import_count
+            delta.dict_get_with_default_change = (
+                current_metrics.dict_get_with_default_count - baseline_metrics.dict_get_with_default_count
             )
-            delta.total_mi_change = getattr(current_metrics, "total_mi", 0.0) - getattr(
-                baseline_metrics, "total_mi", 0.0
+            delta.hasattr_getattr_change = (
+                current_metrics.hasattr_getattr_count - baseline_metrics.hasattr_getattr_count
             )
+            delta.nonempty_init_change = current_metrics.nonempty_init_count - baseline_metrics.nonempty_init_count
 
         return delta
 
@@ -296,7 +309,6 @@ class ComplexityAnalyzer:
                 mi_file_count += 1
 
             except (SyntaxError, UnicodeDecodeError, OSError, ValueError) as e:
-                # Note: ValueError handles empty files which radon might complain about
                 relative_path = self._get_relative_path(str(file_path), target_dir)
                 files_with_parse_errors[relative_path] = str(e)
                 continue
@@ -326,6 +338,10 @@ class ComplexityAnalyzer:
             (feature_stats.docstrings_count / total_docstringable * 100.0) if total_docstringable > 0 else 0.0
         )
 
+        total_type_refs = feature_stats.total_type_references
+        any_type_percentage = (feature_stats.any_type_count / total_type_refs * 100.0) if total_type_refs > 0 else 0.0
+        str_type_percentage = (feature_stats.str_type_count / total_type_refs * 100.0) if total_type_refs > 0 else 0.0
+
         return ExtendedComplexityMetrics(
             total_complexity=total_complexity,
             average_complexity=average_complexity,
@@ -335,13 +351,22 @@ class ComplexityAnalyzer:
             average_volume=average_volume,
             total_effort=total_effort,
             average_effort=average_effort,
+            total_difficulty=total_difficulty,
             average_difficulty=average_difficulty,
             total_mi=total_mi,
             average_mi=average_mi,
             type_hint_coverage=type_hint_coverage,
             docstring_coverage=docstring_coverage,
             deprecation_count=feature_stats.deprecations_count,
+            any_type_percentage=any_type_percentage,
+            str_type_percentage=str_type_percentage,
             total_files_analyzed=total_files,
             files_by_complexity=files_by_complexity,
             files_with_parse_errors=files_with_parse_errors,
+            orphan_comment_count=feature_stats.orphan_comment_count,
+            untracked_todo_count=feature_stats.untracked_todo_count,
+            inline_import_count=feature_stats.inline_import_count,
+            dict_get_with_default_count=feature_stats.dict_get_with_default_count,
+            hasattr_getattr_count=feature_stats.hasattr_getattr_count,
+            nonempty_init_count=feature_stats.nonempty_init_count,
         )

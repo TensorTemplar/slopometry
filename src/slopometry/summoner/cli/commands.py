@@ -347,6 +347,19 @@ def current_impact(
             console.print("[red]Failed to analyze uncommitted changes.[/red]")
             return
 
+        # Add test coverage if available from existing coverage files
+        try:
+            from slopometry.core.coverage_analyzer import CoverageAnalyzer
+
+            coverage_analyzer = CoverageAnalyzer(repo_path)
+            coverage_result = coverage_analyzer.analyze_coverage()
+
+            if coverage_result.coverage_available:
+                analysis.current_metrics.test_coverage_percent = coverage_result.total_coverage_percent
+                analysis.current_metrics.test_coverage_source = coverage_result.source_file
+        except Exception:
+            pass  # Coverage is optional, silently skip on errors
+
         display_current_impact_analysis(analysis)
 
     except Exception as e:
