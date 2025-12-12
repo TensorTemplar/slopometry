@@ -9,6 +9,7 @@ from slopometry.core.database import EventDatabase, SessionManager
 from slopometry.core.git_tracker import GitTracker
 from slopometry.core.models import (
     ComplexityDelta,
+    ContextCoverage,
     ExtendedComplexityMetrics,
     HookEvent,
     HookEventType,
@@ -226,7 +227,11 @@ def handle_stop_event(session_id: str, parsed_input: "StopInput | SubagentStopIn
         if settings.show_baseline_in_feedback:
             baseline_feedback = _get_baseline_feedback(stats.working_directory, delta)
 
-        feedback = format_complexity_feedback(current_metrics, delta, baseline_feedback)
+        context_feedback = ""
+        if stats.context_coverage and stats.context_coverage.files_edited:
+            context_feedback = format_context_coverage_feedback(stats.context_coverage)
+
+        feedback = format_complexity_feedback(current_metrics, delta, baseline_feedback, context_feedback)
 
         hook_output = {"decision": "block", "reason": feedback}
 
@@ -293,10 +298,51 @@ def _get_baseline_feedback(working_directory: str, delta: ComplexityDelta) -> st
     return "\n" + display_baseline_comparison_compact(baseline, assessment)
 
 
+def format_context_coverage_feedback(coverage: ContextCoverage) -> str:
+    """Format context coverage information for Claude consumption.
+
+    Args:
+        coverage: Context coverage metrics from the session
+
+    Returns:
+        Formatted feedback string highlighting gaps in context reading
+    """
+    lines = []
+    lines.append("")
+    lines.append("**Context Coverage**")
+
+    read_ratio = coverage.files_read_before_edit_ratio
+    if read_ratio < 1.0:
+        lines.append(
+            f"   • Read before edit: {read_ratio:.0%} ({int(read_ratio * len(coverage.files_edited))}/{len(coverage.files_edited)} files)"
+        )
+    else:
+        lines.append(f"   • Read before edit: {read_ratio:.0%} ✓")
+
+    imports_cov = coverage.overall_imports_coverage
+    if imports_cov < 100:
+        lines.append(f"   • Imports coverage: {imports_cov:.0f}%")
+
+    dependents_cov = coverage.overall_dependents_coverage
+    if dependents_cov < 100:
+        lines.append(f"   • Dependents coverage: {dependents_cov:.0f}%")
+
+    if coverage.blind_spots:
+        lines.append("")
+        lines.append("**Blind spots** (related files not read):")
+        for blind_spot in coverage.blind_spots[:5]:
+            lines.append(f"   • {blind_spot}")
+        if len(coverage.blind_spots) > 5:
+            lines.append(f"   ... and {len(coverage.blind_spots) - 5} more")
+
+    return "\n".join(lines)
+
+
 def format_complexity_feedback(
     current_metrics: "ExtendedComplexityMetrics",
     delta: "ComplexityDelta",
     baseline_feedback: str = "",
+    context_feedback: str = "",
 ) -> str:
     """Format complexity delta information for Claude consumption.
 
@@ -304,6 +350,7 @@ def format_complexity_feedback(
         current_metrics: Current complexity metrics
         delta: Complexity changes from previous commit
         baseline_feedback: Optional baseline comparison feedback
+        context_feedback: Optional context coverage feedback
 
     Returns:
         Formatted feedback string for Claude
@@ -362,6 +409,10 @@ def format_complexity_feedback(
     # Add baseline comparison feedback if available
     if baseline_feedback:
         lines.append(baseline_feedback)
+
+    # Add context coverage feedback if available
+    if context_feedback:
+        lines.append(context_feedback)
 
     lines.append("")
     if delta.total_complexity_change > 20:

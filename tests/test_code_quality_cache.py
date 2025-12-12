@@ -2,10 +2,10 @@ import sqlite3
 from datetime import datetime
 
 import pytest
+from conftest import make_test_metrics
 
 from slopometry.core.code_quality_cache import CodeQualityCacheManager
 from slopometry.core.models import ExtendedComplexityMetrics
-from conftest import make_test_metrics
 
 
 class TestCodeQualityCacheManager:

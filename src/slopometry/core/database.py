@@ -10,6 +10,7 @@ from pathlib import Path
 from slopometry.core.migrations import MigrationRunner
 from slopometry.core.models import (
     ComplexityDelta,
+    ContextCoverage,
     ExperimentProgress,
     ExperimentRun,
     ExperimentStatus,
@@ -566,6 +567,11 @@ class EventDatabase:
         except Exception:
             stats.plan_evolution = None
 
+        try:
+            stats.context_coverage = self._calculate_context_coverage(stats.transcript_path, stats.working_directory)
+        except Exception:
+            stats.context_coverage = None
+
         return stats
 
     def _get_session_complexity_metrics(
@@ -659,6 +665,34 @@ class EventDatabase:
                     analyzer.increment_event_count(tool_type, tool_input)
 
         return analyzer.get_plan_evolution()
+
+    def _calculate_context_coverage(
+        self, transcript_path: str | None, working_directory: str | None
+    ) -> ContextCoverage | None:
+        """Calculate context coverage from session transcript.
+
+        Args:
+            transcript_path: Path to the Claude Code transcript JSONL
+            working_directory: Working directory for the session
+
+        Returns:
+            ContextCoverage with metrics, or None if unavailable
+        """
+        if not transcript_path or not working_directory:
+            return None
+
+        transcript_file = Path(transcript_path)
+        if not transcript_file.exists():
+            return None
+
+        working_dir = Path(working_directory)
+        if not working_dir.exists():
+            return None
+
+        from slopometry.core.context_coverage_analyzer import ContextCoverageAnalyzer
+
+        analyzer = ContextCoverageAnalyzer(working_dir)
+        return analyzer.analyze_transcript(transcript_file)
 
     def calculate_extended_complexity_metrics(
         self, working_directory: str, baseline_commit_sha: str | None = None

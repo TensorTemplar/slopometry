@@ -370,20 +370,44 @@ def migrations() -> None:
     console.print(f"Pending: {len(status['pending'])}")
 
 
+def _find_plan_names_from_transcript(transcript_path: Path) -> list[str]:
+    """Extract plan filenames from transcript by searching for plans/*.md references."""
+    import re
+
+    plan_names: set[str] = set()
+    pattern = re.compile(r"plans/([a-z0-9-]+\.md)")
+
+    try:
+        with open(transcript_path, encoding="utf-8") as f:
+            for line in f:
+                matches = pattern.findall(line)
+                plan_names.update(matches)
+    except Exception as e:
+        console.print(f"[yellow]Warning: Failed to parse plans from transcript: {e}[/yellow]")
+
+    return list(plan_names)
+
+
+def _find_session_todos(session_id: str) -> list[Path]:
+    """Find todo files matching session ID pattern in ~/.claude/todos/."""
+    todos_dir = Path.home() / ".claude" / "todos"
+    if not todos_dir.exists():
+        return []
+
+    return list(todos_dir.glob(f"{session_id}-*.json"))
+
+
 @solo.command()
 @click.argument("session_id", required=False, shell_complete=complete_session_id)
 @click.option("--output-dir", "-o", default=".", help="Directory to save the transcript to (default: current)")
-@click.option("--no-git-add", is_flag=True, help="Skip adding the transcript to git")
 @click.option("--yes", is_flag=True, help="Skip confirmation prompt when using latest session")
-def save_transcript(session_id: str | None, output_dir: str, no_git_add: bool, yes: bool) -> None:
-    """Save the Claude Code transcript for a session and add it to git.
+def save_transcript(session_id: str | None, output_dir: str, yes: bool) -> None:
+    """Save the Claude Code transcript, plans, and todos for a session.
 
-    If no SESSION_ID is provided, saves the transcript from the latest session.
-    The transcript will be copied from ~/.claude/projects/<project>/session.jsonl
-    to a .slopometry/ directory within the specified output directory.
+    If no SESSION_ID is provided, saves from the latest session.
+    Creates .slopometry/<session-id>/ with transcript.jsonl, plans/, and todos/.
     """
     import shutil
-    import subprocess
     from pathlib import Path
 
     session_service = SessionService()
@@ -426,43 +450,32 @@ def save_transcript(session_id: str | None, output_dir: str, no_git_add: bool, y
         console.print(f"[red]Transcript file not found: {transcript_path}[/red]")
         return
 
-    # Create output directory if needed
     output_path_dir = Path(output_dir)
-    slopometry_dir = output_path_dir / ".slopometry"
-    slopometry_dir.mkdir(parents=True, exist_ok=True)
+    session_dir = output_path_dir / ".slopometry" / session_id
+    session_dir.mkdir(parents=True, exist_ok=True)
 
-    # Generate output filename
-    output_filename = f"claude-transcript-{session_id}.jsonl"
-    output_path = slopometry_dir / output_filename
-
-    # Copy the transcript
+    transcript_output = session_dir / "transcript.jsonl"
     try:
-        shutil.copy2(transcript_path, output_path)
-        console.print(f"[green]✓[/green] Saved transcript to: {output_path}")
+        shutil.copy2(transcript_path, transcript_output)
+        console.print(f"[green]✓[/green] Saved transcript to: {transcript_output}")
     except Exception as e:
         console.print(f"[red]Failed to copy transcript: {e}[/red]")
         return
 
-    # Git add if requested
-    if not no_git_add:
-        try:
-            # Check if we're in a git repository
-            result = subprocess.run(
-                ["git", "rev-parse", "--git-dir"],
-                capture_output=True,
-                text=True,
-                cwd=output_dir,
-            )
+    plan_names = _find_plan_names_from_transcript(transcript_path)
+    if plan_names:
+        plans_dir = session_dir / "plans"
+        plans_dir.mkdir(exist_ok=True)
+        for plan_name in plan_names:
+            plan_source = Path.home() / ".claude" / "plans" / plan_name
+            if plan_source.exists():
+                shutil.copy2(plan_source, plans_dir / plan_name)
+                console.print(f"[green]✓[/green] Saved plan: {plan_name}")
 
-            if result.returncode == 0:
-                # Add file to git
-                subprocess.run(
-                    ["git", "add", str(output_path)],
-                    check=True,
-                    cwd=output_dir,
-                )
-                console.print(f"[green]✓[/green] Added to git: .slopometry/{output_filename}")
-            else:
-                console.print("[yellow]Not in a git repository, skipping git add[/yellow]")
-        except subprocess.CalledProcessError as e:
-            console.print(f"[red]Failed to add to git: {e}[/red]")
+    todo_files = _find_session_todos(session_id)
+    if todo_files:
+        todos_dir = session_dir / "todos"
+        todos_dir.mkdir(exist_ok=True)
+        for todo_file in todo_files:
+            shutil.copy2(todo_file, todos_dir / todo_file.name)
+            console.print(f"[green]✓[/green] Saved todo: {todo_file.name}")

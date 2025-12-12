@@ -43,7 +43,7 @@ Thumbs.db
 slopometry.db
 *.parquet
 *.log
-.slopometry/claude-transcript-test*
+.slopometry/
 
 # Testing and coverage
 .pytest_cache/

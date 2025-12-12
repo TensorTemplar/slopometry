@@ -53,6 +53,9 @@ source ~/.zshrc  # for zsh
 git clone https://github.com/TensorTemplar/slopometry
 cd slopometry
 uv tool install .
+
+# After making code changes, reinstall to update the global tool
+uv tool install . --reinstall
 ```
 
 ## Quick Start
@@ -73,7 +76,7 @@ slopometry solo show <session_id>
 # Alias for latest session, same as solo show <session_id>
 slopometry latest
 
-# Copy the claude code transcript and git add it (saved to .slopometry/ directory in the session's project)
+# Save session artifacts (transcript, plans, todos) to .slopometry/<session_id>/
 slopometry solo save-transcript  # latest
 slopometry solo save-transcript <session_id>
 ```

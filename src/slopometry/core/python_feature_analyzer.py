@@ -132,7 +132,7 @@ class PythonFeatureAnalyzer:
                     continue
 
             # Skip imports
-            if isinstance(node, (ast.Import, ast.ImportFrom)):
+            if isinstance(node, ast.Import | ast.ImportFrom):
                 continue
 
             # Skip pass statements
@@ -141,9 +141,7 @@ class PythonFeatureAnalyzer:
 
             # Skip __all__ assignment
             if isinstance(node, ast.Assign):
-                if any(
-                    isinstance(target, ast.Name) and target.id == "__all__" for target in node.targets
-                ):
+                if any(isinstance(target, ast.Name) and target.id == "__all__" for target in node.targets):
                     continue
 
             # Any other node is implementation code
@@ -387,18 +385,25 @@ class FeatureVisitor(ast.NodeVisitor):
         self.generic_visit(node)
         self._scope_depth -= 1
 
-    def visit_Call(self, node: ast.Call):
-        """Check for warnings.warn calls."""
-        # Check for coverage of warnings.warn(..., DeprecationWarning)
+    def visit_Call(self, node: ast.Call) -> None:
+        """Check for warnings.warn, .get() with defaults, and hasattr/getattr calls."""
         if self._is_warnings_warn(node.func):
             if len(node.args) > 1:
                 category = node.args[1]
                 if self._is_deprecation_warning(category):
                     self.deprecations += 1
-            # Check kwargs for category
             for keyword in node.keywords:
                 if keyword.arg == "category" and self._is_deprecation_warning(keyword.value):
                     self.deprecations += 1
+
+        if isinstance(node.func, ast.Attribute) and node.func.attr == "get":
+            has_default = len(node.args) >= 2 or any(kw.arg == "default" for kw in node.keywords)
+            if has_default:
+                self.dict_get_with_default += 1
+
+        elif isinstance(node.func, ast.Name):
+            if node.func.id in ("hasattr", "getattr"):
+                self.hasattr_getattr_calls += 1
 
         self.generic_visit(node)
 
@@ -449,22 +454,6 @@ class FeatureVisitor(ast.NodeVisitor):
         """Track inline imports (not at module level, not in TYPE_CHECKING)."""
         if self._scope_depth > 0 and not self._in_type_checking_block:
             self.inline_imports += 1
-        self.generic_visit(node)
-
-    def visit_Call(self, node: ast.Call) -> None:
-        """Track .get() with defaults and hasattr/getattr calls."""
-        # Check for .get(key, default) - method call with 2 args
-        if isinstance(node.func, ast.Attribute) and node.func.attr == "get":
-            # .get() with a default value (2 positional args or 'default' keyword)
-            has_default = len(node.args) >= 2 or any(kw.arg == "default" for kw in node.keywords)
-            if has_default:
-                self.dict_get_with_default += 1
-
-        # Check for hasattr() and getattr() builtin calls
-        elif isinstance(node.func, ast.Name):
-            if node.func.id in ("hasattr", "getattr"):
-                self.hasattr_getattr_calls += 1
-
         self.generic_visit(node)
 
     def _is_type_checking_guard(self, node: ast.If) -> bool:

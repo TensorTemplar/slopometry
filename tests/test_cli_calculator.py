@@ -1,8 +1,9 @@
 """Tests for CLI Calculator functionality."""
 
+from conftest import make_test_metrics
+
 from slopometry.core.models import ExtendedComplexityMetrics
 from slopometry.summoner.services.cli_calculator import CLICalculator
-from conftest import make_test_metrics
 
 
 class TestCLICalculator:

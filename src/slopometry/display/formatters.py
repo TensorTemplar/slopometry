@@ -4,9 +4,11 @@ from rich.console import Console
 from rich.table import Table
 
 from slopometry.core.models import (
+    ContextCoverage,
     CurrentChangesAnalysis,
     ImpactAssessment,
     ImpactCategory,
+    PlanEvolution,
     RepoBaseline,
     SessionStatistics,
     StagedChangesAnalysis,
@@ -66,7 +68,10 @@ def display_session_summary(
         _display_complexity_delta(stats, baseline, assessment)
 
     if stats.plan_evolution and stats.plan_evolution.total_plan_steps > 0:
-        _display_plan_evolution(stats)
+        _display_work_summary(stats.plan_evolution)
+
+    if stats.context_coverage and stats.context_coverage.files_edited:
+        _display_context_coverage(stats.context_coverage)
 
 
 def _display_events_by_type_table(events_by_type: dict) -> None:
@@ -322,45 +327,68 @@ def _display_complexity_delta(
             console.print(file_changes_table)
 
 
-def _display_plan_evolution(stats: SessionStatistics) -> None:
-    """Display plan evolution section."""
-    evolution = stats.plan_evolution
-    console.print("\n[bold]Plan Evolution[/bold]")
-    console.print(f"Total planning steps: {evolution.total_plan_steps}")
-    console.print(f"Todos created: {evolution.total_todos_created}")
-    console.print(f"Todos completed: {evolution.total_todos_completed}")
-    console.print(f"Planning efficiency: {evolution.planning_efficiency:.1%}")
-    console.print(f"Average events per step: {evolution.average_events_per_step:.1f}")
-    console.print(f"Search events: {evolution.total_search_events}")
-    console.print(f"Implementation events: {evolution.total_implementation_events}")
-    console.print(f"Search/Implementation ratio: {evolution.overall_search_to_implementation_ratio:.2f}")
+def _display_work_summary(evolution: PlanEvolution) -> None:
+    """Display compact work summary with task completion and work style."""
+    console.print(
+        f"\nTasks: {evolution.total_todos_completed}/{evolution.total_todos_created} completed ({evolution.planning_efficiency:.0%})"
+    )
+    impl_percentage = 100 - evolution.exploration_percentage
+    console.print(
+        f"Work style: {evolution.exploration_percentage:.0f}% exploration, {impl_percentage:.0f}% implementation"
+    )
 
-    if evolution.plan_steps:
-        table = Table(title="Planning Steps")
-        table.add_column("Step", style="cyan", width=4)
-        table.add_column("Events", justify="right", width=6)
-        table.add_column("S/I Ratio", justify="right", width=8)
-        table.add_column("Changes", style="yellow")
 
-        for step in evolution.plan_steps[:5]:
-            changes = []
-            if step.todos_added:
-                changes.append(f"+{len(step.todos_added)} added")
-            if step.todos_removed:
-                changes.append(f"-{len(step.todos_removed)} removed")
-            if step.todos_status_changed:
-                changes.append(f"{len(step.todos_status_changed)} status changed")
-            if step.todos_content_changed:
-                changes.append(f"{len(step.todos_content_changed)} content changed")
+def _display_context_coverage(coverage: ContextCoverage) -> None:
+    """Display context coverage section showing what files were read before editing."""
+    console.print("\n[bold]Context Coverage[/bold]")
+    console.print(f"Files edited: {len(coverage.files_edited)}")
+    console.print(f"Files read: {len(coverage.files_read)}")
 
-            change_summary = ", ".join(changes) if changes else "Initial plan"
-            ratio_display = f"{step.search_to_implementation_ratio:.2f}" if step.implementation_events > 0 else "N/A"
-            table.add_row(str(step.step_number), str(step.events_in_step), ratio_display, change_summary)
+    read_before_ratio = coverage.files_read_before_edit_ratio
+    ratio_color = "green" if read_before_ratio >= 0.9 else "yellow" if read_before_ratio >= 0.7 else "red"
+    console.print(f"Read before edit: [{ratio_color}]{read_before_ratio:.0%}[/{ratio_color}]")
 
-        if len(evolution.plan_steps) > 5:
-            table.add_row("...", "...", "...", f"... and {len(evolution.plan_steps) - 5} more steps")
+    if coverage.file_coverage:
+        table = Table(title="Coverage by Edited File")
+        table.add_column("File", style="cyan", no_wrap=True, max_width=40)
+        table.add_column("Read?", justify="center", width=5)
+        table.add_column("Imports", justify="right", width=10)
+        table.add_column("Dependents", justify="right", width=10)
+        table.add_column("Tests", justify="right", width=8)
+
+        for fc in coverage.file_coverage[:10]:
+            read_mark = "[green]✓[/green]" if fc.was_read_before_edit else "[red]✗[/red]"
+
+            imports_display = _format_coverage_ratio(len(fc.imports_read), len(fc.imports))
+            dependents_display = _format_coverage_ratio(len(fc.dependents_read), len(fc.dependents))
+            tests_display = _format_coverage_ratio(len(fc.test_files_read), len(fc.test_files))
+
+            file_display = fc.file_path
+            if len(file_display) > 40:
+                file_display = "..." + file_display[-37:]
+
+            table.add_row(file_display, read_mark, imports_display, dependents_display, tests_display)
+
+        if len(coverage.file_coverage) > 10:
+            table.add_row("...", "", "", "", f"({len(coverage.file_coverage) - 10} more)")
 
         console.print(table)
+
+    if coverage.blind_spots:
+        console.print(f"\n[yellow]Potential blind spots ({len(coverage.blind_spots)} files):[/yellow]")
+        for blind_spot in coverage.blind_spots[:5]:
+            console.print(f"  • {blind_spot}")
+        if len(coverage.blind_spots) > 5:
+            console.print(f"  ... and {len(coverage.blind_spots) - 5} more")
+
+
+def _format_coverage_ratio(read: int, total: int) -> str:
+    """Format a coverage ratio with color coding."""
+    if total == 0:
+        return "[dim]n/a[/dim]"
+    ratio = read / total
+    color = "green" if ratio >= 0.8 else "yellow" if ratio >= 0.5 else "red"
+    return f"[{color}]{read}/{total}[/{color}]"
 
 
 def create_sessions_table(sessions_data: list[dict]) -> Table:

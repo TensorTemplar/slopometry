@@ -402,9 +402,7 @@ class ExperimentOrchestrator:
                     )
 
                     # Dict .get() with defaults (lower is better)
-                    get_change = (
-                        metrics.dict_get_with_default_count - previous_metrics.dict_get_with_default_count
-                    )
+                    get_change = metrics.dict_get_with_default_count - previous_metrics.dict_get_with_default_count
                     get_color = "green" if get_change < 0 else "red" if get_change > 0 else "yellow"
                     delta_table.add_row(
                         ".get() w/ Defaults",

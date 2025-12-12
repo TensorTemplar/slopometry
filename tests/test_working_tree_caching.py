@@ -4,10 +4,11 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
+from conftest import make_test_metrics
+
 from slopometry.core.code_quality_cache import CodeQualityCacheManager
 from slopometry.core.database import EventDatabase
 from slopometry.core.models import ComplexityDelta, ExtendedComplexityMetrics
-from conftest import make_test_metrics
 
 
 class TestWorkingTreeCacheManager:
