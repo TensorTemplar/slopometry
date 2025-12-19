@@ -2,7 +2,7 @@ import subprocess
 from pathlib import Path
 
 from pydantic_ai import Agent
-from pydantic_ai.models.openai import OpenAIModel
+from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from slopometry.core.models import FeatureBoundary, MergeCommit
@@ -11,10 +11,10 @@ from slopometry.core.settings import settings
 llm_gateway = OpenAIProvider(base_url=settings.llm_proxy_url, api_key=settings.llm_proxy_api_key)
 
 # In llm gateway land, everything is an openai model
-gemma_fp8 = OpenAIModel(model_name="gemma3:27b-it-q8_0", provider=llm_gateway)
-cluade = Agent(model=OpenAIModel(model_name="claude-opus-4", provider=llm_gateway))
-gemini = Agent(model=OpenAIModel(model_name="gemini-2.5-pro", provider=llm_gateway))
-user_story_agent = Agent(model=OpenAIModel(model_name="o3", provider=llm_gateway))
+vlm = OpenAIChatModel(model_name="gemma3:27b-it-q8_0", provider=llm_gateway)
+cluade = Agent(model=OpenAIChatModel(model_name="claude-opus-4", provider=llm_gateway))
+gemini = Agent(model=OpenAIChatModel(model_name="gemini-3.5-pro", provider=llm_gateway))
+user_story_agent = Agent(model=OpenAIChatModel(model_name="o3", provider=llm_gateway))
 
 
 def get_user_story_prompt(diff: str) -> str:
@@ -127,7 +127,7 @@ def find_merge_commits(branch: str = "HEAD", limit: int = 50) -> list[MergeCommi
                 parents = parts[1].split()
                 message = parts[2]
 
-                if len(parents) >= 2:  # True merge commit has 2+ parents
+                if len(parents) >= 2:
                     merge_commits.append(
                         MergeCommit(
                             hash=commit_hash,
@@ -163,7 +163,6 @@ def get_feature_boundaries(limit: int = 20) -> list[FeatureBoundary]:
             )
             merge_base = result.stdout.strip()
 
-            # Get the feature branch tip commit message for better context
             result = subprocess.run(
                 ["git", "log", "-1", "--format=%s", merge.feature_branch], capture_output=True, text=True, check=True
             )

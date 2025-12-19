@@ -21,6 +21,7 @@ class CoverageResult(BaseModel):
         default=None, description="Which file the coverage was read from (e.g., 'coverage.xml')"
     )
     error_message: str | None = Field(default=None, description="Error message if coverage failed")
+    file_coverage: dict[str, float] = Field(default_factory=dict, description="Coverage percentage per file")
 
 
 class CoverageAnalyzer:
@@ -75,6 +76,16 @@ class CoverageAnalyzer:
             lines_valid = int(root.get("lines-valid", 0))
             lines_covered = int(root.get("lines-covered", 0))
 
+            file_coverage = {}
+            for class_elem in root.findall(".//class"):
+                filename = class_elem.get("filename")
+                if filename:
+                    try:
+                        f_rate = float(class_elem.get("line-rate", 0))
+                        file_coverage[filename] = f_rate * 100
+                    except (ValueError, TypeError):
+                        pass
+
             files_count = len(root.findall(".//class"))
 
             return CoverageResult(
@@ -85,6 +96,7 @@ class CoverageAnalyzer:
                 files_analyzed=files_count,
                 coverage_available=True,
                 source_file="coverage.xml",
+                file_coverage=file_coverage,
             )
 
         except ET.ParseError as e:
@@ -118,13 +130,33 @@ class CoverageAnalyzer:
                 total_percent = 0.0
 
             data = cov.get_data()
-            files_count = len(data.measured_files())
+            measured_files = data.measured_files()
+            files_count = len(measured_files)
+
+            file_coverage = {}
+            for filename in measured_files:
+                try:
+                    analysis = cov.analysis(filename)
+                    statements = analysis[1]
+                    missing = analysis[3]
+
+                    if statements:
+                        pc = 100.0 * (len(statements) - len(missing)) / len(statements)
+
+                        try:
+                            rel_path = str(Path(filename).relative_to(self.repo_path))
+                            file_coverage[rel_path] = pc
+                        except ValueError:
+                            file_coverage[filename] = pc
+                except Exception:
+                    continue
 
             return CoverageResult(
                 total_coverage_percent=total_percent,
                 files_analyzed=files_count,
                 coverage_available=True,
                 source_file=".coverage",
+                file_coverage=file_coverage,
             )
 
         except Exception as e:

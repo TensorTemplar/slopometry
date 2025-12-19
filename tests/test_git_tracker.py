@@ -1,3 +1,4 @@
+import os
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -23,19 +24,22 @@ def git_repo(tmp_path):
     Returns the Path to the root of the repo.
     """
     # Initialize repo
-    subprocess.run(["git", "init"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.name", "Test User"], cwd=tmp_path, check=True)
+    env = os.environ.copy()
+    env["HOME"] = str(tmp_path)
+
+    subprocess.run(["git", "init"], cwd=tmp_path, env=env, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, env=env, check=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=tmp_path, env=env, check=True)
 
     # Create initial commit with a file
     (tmp_path / "main.py").write_text("print('hello')")
-    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
-    subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, env=env, check=True)
+    subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=tmp_path, env=env, check=True)
 
     # Create another commit
     (tmp_path / "utils.py").write_text("def foo(): pass")
-    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
-    subprocess.run(["git", "commit", "-m", "Add utils"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, env=env, check=True)
+    subprocess.run(["git", "commit", "-m", "Add utils"], cwd=tmp_path, env=env, check=True)
 
     return tmp_path
 
@@ -45,20 +49,23 @@ def complex_git_repo(tmp_path):
     """
     Creates a git repo with branches, ignores, and untracked files.
     """
-    subprocess.run(["git", "init"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.name", "Test User"], cwd=tmp_path, check=True)
+    env = os.environ.copy()
+    env["HOME"] = str(tmp_path)
+
+    subprocess.run(["git", "init"], cwd=tmp_path, env=env, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=tmp_path, env=env, check=True)
+    subprocess.run(["git", "config", "user.name", "Test User"], cwd=tmp_path, env=env, check=True)
 
     # .gitignore
     (tmp_path / ".gitignore").write_text("ignored.py\n__pycache__/\n")
-    subprocess.run(["git", "add", ".gitignore"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "commit", "-m", "Add gitignore"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", ".gitignore"], cwd=tmp_path, env=env, check=True)
+    subprocess.run(["git", "commit", "-m", "Add gitignore"], cwd=tmp_path, env=env, check=True)
 
     # Valid python files
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "app.py").write_text("x = 1")
-    subprocess.run(["git", "add", "src/app.py"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "commit", "-m", "Add src/app.py"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "src/app.py"], cwd=tmp_path, env=env, check=True)
+    subprocess.run(["git", "commit", "-m", "Add src/app.py"], cwd=tmp_path, env=env, check=True)
 
     # Ignored file
     (tmp_path / "ignored.py").write_text("x = 2")
@@ -198,10 +205,13 @@ def test_get_merge_base_with_main__calculates_correct_merge_base(git_repo):
     tracker = GitTracker(git_repo)
 
     # Create a branch properly
-    subprocess.run(["git", "checkout", "-b", "feature-branch"], cwd=git_repo, check=True)
+    # Create a branch properly
+    env = os.environ.copy()
+    env["HOME"] = str(git_repo)
+    subprocess.run(["git", "checkout", "-b", "feature-branch"], cwd=git_repo, env=env, check=True)
     (git_repo / "feature.py").write_text("feature")
-    subprocess.run(["git", "add", "."], cwd=git_repo, check=True)
-    subprocess.run(["git", "commit", "-m", "feature commit"], cwd=git_repo, check=True)
+    subprocess.run(["git", "add", "."], cwd=git_repo, env=env, check=True)
+    subprocess.run(["git", "commit", "-m", "feature commit"], cwd=git_repo, env=env, check=True)
 
     # Merge base with master/main should be the commit before feature-branch was created
     # i.e., the "Add utils" commit (HEAD~1 from current feature branch)

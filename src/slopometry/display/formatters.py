@@ -138,6 +138,11 @@ def _display_complexity_metrics(stats: SessionStatistics) -> None:
     overview_table.add_row("  Total MI", f"{metrics.total_mi:.1f}")
     overview_table.add_row("  File average MI", f"{metrics.average_mi:.1f} (higher is better)")
 
+    overview_table.add_row("[bold]Token Usage[/bold]", "")
+    overview_table.add_row("  Total Tokens", _format_token_count(metrics.total_tokens))
+    overview_table.add_row("  Average Tokens", f"{metrics.average_tokens:.1f}")
+    overview_table.add_row("  Max Tokens", str(metrics.max_tokens))
+
     overview_table.add_row("[bold]Python Quality[/bold]", "")
     overview_table.add_row("  Type Hint Coverage", f"{metrics.type_hint_coverage:.1f}%")
     overview_table.add_row("  Docstring Coverage", f"{metrics.docstring_coverage:.1f}%")
@@ -190,6 +195,9 @@ def _display_complexity_metrics(stats: SessionStatistics) -> None:
     overview_table.add_row("  Non-empty __init__", f"[{smell_color}]{metrics.nonempty_init_count}[/{smell_color}]")
 
     console.print(overview_table)
+
+    # Display detailed code smells
+    _display_code_smells_detailed(metrics)
 
     if metrics.files_by_complexity:
         files_table = Table(title="Files by Complexity")
@@ -262,6 +270,14 @@ def _display_complexity_delta(
         "Maintainability (file avg)",
         f"[{mi_color}]{delta.avg_mi_change:+.2f}[/{mi_color}]",
         mi_baseline if has_baseline else None,
+    )
+    
+    # Token Deltas
+    token_color = "red" if delta.total_tokens_change > 0 else "green" if delta.total_tokens_change < 0 else "yellow"
+    changes_table.add_row(
+        "Total Tokens",
+        f"[{token_color}]{delta.total_tokens_change:+d}[/{token_color}]",
+        "" if has_baseline else None,
     )
 
     file_color = "green" if delta.net_files_change < 0 else "red" if delta.net_files_change > 0 else "yellow"
@@ -399,10 +415,8 @@ def _display_context_coverage(coverage: ContextCoverage) -> None:
 
     if coverage.blind_spots:
         console.print(f"\n[yellow]Potential blind spots ({len(coverage.blind_spots)} files):[/yellow]")
-        for blind_spot in coverage.blind_spots[:5]:
+        for blind_spot in coverage.blind_spots:
             console.print(f"  • {blind_spot}")
-        if len(coverage.blind_spots) > 5:
-            console.print(f"  ... and {len(coverage.blind_spots) - 5} more")
 
 
 def _format_coverage_ratio(read: int, total: int) -> str:
@@ -733,19 +747,35 @@ def _get_impact_color(category: ImpactCategory) -> str:
 def display_current_impact_analysis(analysis: CurrentChangesAnalysis) -> None:
     """Display uncommitted changes impact analysis with Rich formatting."""
     console.print("\n[bold]Uncommitted Changes Impact Analysis[/bold]")
+
     console.print(f"Repository: {analysis.repository_path}")
 
-    console.print(f"\n[bold]Changed Files ({len(analysis.changed_files)}):[/bold]")
-    for f in analysis.changed_files[:5]:
-        console.print(f"  [dim]- {f}[/dim]")
-    if len(analysis.changed_files) > 5:
-        console.print(f"  [dim]... and {len(analysis.changed_files) - 5} more[/dim]")
+    # Dropped list of changed files as requested by user to reduce noise
 
     display_baseline_comparison(
         baseline=analysis.baseline,
         assessment=analysis.assessment,
         title="Uncommitted Changes Impact",
     )
+
+
+
+    console.print("\n[bold]Token Impact:[/bold]")
+    token_table = Table(show_header=True)
+    token_table.add_column("Metric", style="cyan")
+    token_table.add_column("Value", justify="right")
+    
+    # Calculate delta for just the uncommitted changes if needed, but delta is in the baseline comparison table usually?
+    # No, baseline comparison table shows complexity/effort/MI deltas.
+    # We want to show raw token counts here as well.
+    
+    token_table.add_row("Tokens in Edited Files", _format_token_count(analysis.changed_files_tokens))
+    token_table.add_row("Tokens in Blind Spots", _format_token_count(analysis.blind_spot_tokens))
+    token_table.add_row(
+        "Complete Picture Context Size", 
+        f"[bold]{_format_token_count(analysis.complete_picture_context_size)}[/bold]"
+    )
+    console.print(token_table)
 
     console.print("\n[bold]Current Code Quality:[/bold]")
     quality_table = Table(show_header=True)
@@ -780,25 +810,94 @@ def display_current_impact_analysis(analysis: CurrentChangesAnalysis) -> None:
     dep_style = "red" if metrics.deprecation_count > 0 else "green"
     quality_table.add_row("Deprecations", f"[{dep_style}]{metrics.deprecation_count}[/{dep_style}]")
 
-    smell_color = "red" if metrics.orphan_comment_count > 0 else "green"
-    quality_table.add_row("Orphan Comments", f"[{smell_color}]{metrics.orphan_comment_count}[/{smell_color}]")
-
-    smell_color = "red" if metrics.untracked_todo_count > 0 else "green"
-    quality_table.add_row("Untracked TODOs", f"[{smell_color}]{metrics.untracked_todo_count}[/{smell_color}]")
-
-    smell_color = "red" if metrics.inline_import_count > 0 else "green"
-    quality_table.add_row("Inline Imports", f"[{smell_color}]{metrics.inline_import_count}[/{smell_color}]")
-
-    smell_color = "red" if metrics.dict_get_with_default_count > 0 else "green"
-    quality_table.add_row(".get() w/ Defaults", f"[{smell_color}]{metrics.dict_get_with_default_count}[/{smell_color}]")
-
-    smell_color = "red" if metrics.hasattr_getattr_count > 0 else "green"
-    quality_table.add_row("hasattr/getattr", f"[{smell_color}]{metrics.hasattr_getattr_count}[/{smell_color}]")
-
-    smell_color = "red" if metrics.nonempty_init_count > 0 else "green"
-    quality_table.add_row("Non-empty __init__", f"[{smell_color}]{metrics.nonempty_init_count}[/{smell_color}]")
-
     console.print(quality_table)
+
+    # Coverage for Edited Files
+    if analysis.filtered_coverage:
+        console.print("\n[bold]Code Coverage for Edited Files:[/bold]")
+        cov_table = Table(show_header=True)
+        cov_table.add_column("File", style="cyan")
+        cov_table.add_column("Coverage", justify="right")
+
+        for fname in sorted(analysis.filtered_coverage.keys()):
+            pct = analysis.filtered_coverage[fname]
+            color = "green" if pct >= 80 else "yellow" if pct >= 50 else "red"
+            cov_table.add_row(fname, f"[{color}]{pct:.1f}%[/{color}]")
+        console.print(cov_table)
+
+    if analysis.blind_spots:
+        console.print(f"\n[yellow]Potential blind spots ({len(analysis.blind_spots)} files):[/yellow]")
+        # Show all blind spots as requested
+        for blind_spot in analysis.blind_spots:
+            console.print(f"  • {blind_spot}")
+
+    # Display detailed code smells for changed files only
+    filter_set = set(analysis.changed_files) if analysis.changed_files else None
+    _display_code_smells_detailed(metrics, filter_files=filter_set)
+
+
+def _display_code_smells_detailed(metrics, filter_files: set[str] | None = None) -> None:
+    """Display a detailed table of code smells with complete file lists.
+
+    Args:
+        metrics: The metrics object containing code smell data.
+        filter_files: Optional set of file paths (relative). If provided, only
+                     code smells in these files will be displayed.
+    """
+
+    # helper to filter and check if we have smells
+    def get_filtered_files(files: list[str]) -> list[str]:
+        if not filter_files:
+            return files
+        return [f for f in files if f in filter_files]
+
+    # Check if we have any smells to display after filtering
+    has_smells = False
+
+    # We need to compute filtered lists first to know if we should show the table
+    orphan_files = get_filtered_files(metrics.orphan_comment_files)
+    todo_files = get_filtered_files(metrics.untracked_todo_files)
+    import_files = get_filtered_files(metrics.inline_import_files)
+    get_files = get_filtered_files(metrics.dict_get_with_default_files)
+    getattr_files = get_filtered_files(metrics.hasattr_getattr_files)
+    init_files = get_filtered_files(metrics.nonempty_init_files)
+
+    if orphan_files or todo_files or import_files or get_files or getattr_files or init_files:
+        has_smells = True
+
+    if not has_smells:
+        return
+
+    console.print("\n[bold]Code Smells Details:[/bold]")
+    if filter_files:
+        console.print("[dim]Showing smells for changed files only[/dim]")
+
+    table = Table(show_header=True, show_lines=True)
+    table.add_column("Smell Type", style="cyan", width=20)
+    table.add_column("Count", justify="right", width=8)
+    table.add_column("Affected Files", style="dim")
+
+    def add_smell_row(label: str, files: list[str]) -> None:
+        count = len(files)
+        if count == 0:
+            return
+
+        color = "red"
+        count_str = f"[{color}]{count}[/{color}]"
+
+        # Sort files for consistent display
+        files_display = "\n".join(sorted(files))
+
+        table.add_row(label, count_str, files_display)
+
+    add_smell_row("Orphan Comments", orphan_files)
+    add_smell_row("Untracked TODOs", todo_files)
+    add_smell_row("Inline Imports", import_files)
+    add_smell_row(".get() w/ Defaults", get_files)
+    add_smell_row("hasattr/getattr", getattr_files)
+    add_smell_row("Non-empty __init__", init_files)
+
+    console.print(table)
 
 
 def display_baseline_comparison(

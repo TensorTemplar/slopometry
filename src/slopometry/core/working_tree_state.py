@@ -4,6 +4,8 @@ import hashlib
 import subprocess
 from pathlib import Path
 
+from slopometry.core.git_tracker import GitTracker
+
 
 class WorkingTreeStateCalculator:
     """Calculates unique identifiers for working tree states including uncommitted changes."""
@@ -43,51 +45,13 @@ class WorkingTreeStateCalculator:
         return hashlib.sha256(combined.encode("utf-8")).hexdigest()[:16]
 
     def _get_python_files(self) -> list[Path]:
-        """Get all Python files in the working directory that radon would analyze.
+        """Get all Python files in the working directory that would be analyzed.
 
         Returns:
             List of Python file paths
         """
-        python_files = []
-
-        try:
-            for py_file in self.working_directory.rglob("*.py"):
-                if self._should_include_file(py_file):
-                    python_files.append(py_file)
-        except (OSError, PermissionError):
-            pass
-
-        return python_files
-
-    def _should_include_file(self, file_path: Path) -> bool:
-        """Check if a Python file should be included in analysis.
-
-        Args:
-            file_path: Path to the Python file
-
-        Returns:
-            True if file should be included in complexity analysis
-        """
-        exclude_patterns = {
-            "__pycache__",
-            ".git",
-            ".pytest_cache",
-            ".mypy_cache",
-            ".tox",
-            "node_modules",
-            ".venv",
-            "venv",
-            "env",
-            "build",
-            "dist",
-            ".eggs",
-        }
-
-        for part in file_path.parts:
-            if part in exclude_patterns:
-                return False
-
-        return True
+        tracker = GitTracker(self.working_directory)
+        return tracker.get_tracked_python_files()
 
     def get_current_commit_sha(self) -> str | None:
         """Get current git commit SHA for the working directory.

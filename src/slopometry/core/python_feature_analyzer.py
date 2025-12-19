@@ -4,11 +4,12 @@ import ast
 import io
 import re
 import tokenize
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import NamedTuple
 
 
-class FeatureStats(NamedTuple):
+@dataclass
+class FeatureStats:
     """Container for feature statistics."""
 
     functions_count: int = 0
@@ -28,6 +29,13 @@ class FeatureStats(NamedTuple):
     dict_get_with_default_count: int = 0
     hasattr_getattr_count: int = 0
     nonempty_init_count: int = 0
+
+    orphan_comment_files: set[str] = field(default_factory=set)
+    untracked_todo_files: set[str] = field(default_factory=set)
+    inline_import_files: set[str] = field(default_factory=set)
+    dict_get_with_default_files: set[str] = field(default_factory=set)
+    hasattr_getattr_files: set[str] = field(default_factory=set)
+    nonempty_init_files: set[str] = field(default_factory=set)
 
 
 class PythonFeatureAnalyzer:
@@ -50,6 +58,9 @@ class PythonFeatureAnalyzer:
         python_files = tracker.get_tracked_python_files()
 
         for file_path in python_files:
+            if not file_path.exists():
+                continue
+
             try:
                 stats = self._analyze_file(file_path)
                 aggregated = self._merge_stats(aggregated, stats)
@@ -73,6 +84,7 @@ class PythonFeatureAnalyzer:
         is_test_file = file_path.name.startswith("test_") or "/tests/" in str(file_path)
         orphan_comments, untracked_todos = self._analyze_comments(content, is_test_file)
         nonempty_init = 1 if self._is_nonempty_init(file_path, tree) else 0
+        path_str = str(file_path)
 
         return FeatureStats(
             functions_count=ast_stats.functions_count,
@@ -92,6 +104,12 @@ class PythonFeatureAnalyzer:
             dict_get_with_default_count=ast_stats.dict_get_with_default_count,
             hasattr_getattr_count=ast_stats.hasattr_getattr_count,
             nonempty_init_count=nonempty_init,
+            orphan_comment_files={path_str} if orphan_comments > 0 else set(),
+            untracked_todo_files={path_str} if untracked_todos > 0 else set(),
+            inline_import_files={path_str} if ast_stats.inline_import_count > 0 else set(),
+            dict_get_with_default_files={path_str} if ast_stats.dict_get_with_default_count > 0 else set(),
+            hasattr_getattr_files={path_str} if ast_stats.hasattr_getattr_count > 0 else set(),
+            nonempty_init_files={path_str} if nonempty_init > 0 else set(),
         )
 
     def _is_nonempty_init(self, file_path: Path, tree: ast.Module) -> bool:
@@ -168,7 +186,7 @@ class PythonFeatureAnalyzer:
                             untracked_todos += 1
                     elif not has_url and not is_justification and not is_test_file:
                         orphan_comments += 1
-        except tokenize.TokenizeError:
+        except tokenize.TokenError:
             pass
 
         return orphan_comments, untracked_todos
@@ -193,6 +211,12 @@ class PythonFeatureAnalyzer:
             dict_get_with_default_count=s1.dict_get_with_default_count + s2.dict_get_with_default_count,
             hasattr_getattr_count=s1.hasattr_getattr_count + s2.hasattr_getattr_count,
             nonempty_init_count=s1.nonempty_init_count + s2.nonempty_init_count,
+            orphan_comment_files=s1.orphan_comment_files | s2.orphan_comment_files,
+            untracked_todo_files=s1.untracked_todo_files | s2.untracked_todo_files,
+            inline_import_files=s1.inline_import_files | s2.inline_import_files,
+            dict_get_with_default_files=s1.dict_get_with_default_files | s2.dict_get_with_default_files,
+            hasattr_getattr_files=s1.hasattr_getattr_files | s2.hasattr_getattr_files,
+            nonempty_init_files=s1.nonempty_init_files | s2.nonempty_init_files,
         )
 
 

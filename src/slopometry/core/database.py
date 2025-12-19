@@ -773,6 +773,25 @@ class EventDatabase:
                         current_extended.total_files_analyzed = current_basic.total_files_analyzed
                         current_extended.files_by_complexity = current_basic.files_by_complexity
 
+                        complexity_delta.orphan_comment_change = (
+                            current_extended.orphan_comment_count - baseline_extended.orphan_comment_count
+                        )
+                        complexity_delta.untracked_todo_change = (
+                            current_extended.untracked_todo_count - baseline_extended.untracked_todo_count
+                        )
+                        complexity_delta.inline_import_change = (
+                            current_extended.inline_import_count - baseline_extended.inline_import_count
+                        )
+                        complexity_delta.dict_get_with_default_change = (
+                            current_extended.dict_get_with_default_count - baseline_extended.dict_get_with_default_count
+                        )
+                        complexity_delta.hasattr_getattr_change = (
+                            current_extended.hasattr_getattr_count - baseline_extended.hasattr_getattr_count
+                        )
+                        complexity_delta.nonempty_init_change = (
+                            current_extended.nonempty_init_count - baseline_extended.nonempty_init_count
+                        )
+
                         shutil.rmtree(baseline_dir, ignore_errors=True)
                     except Exception:
                         if baseline_dir:

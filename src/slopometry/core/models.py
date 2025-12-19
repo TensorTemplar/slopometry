@@ -123,6 +123,15 @@ class ComplexityMetrics(BaseModel):
         default_factory=dict, description="Files that failed to parse: {filepath: error_message}"
     )
 
+    # Token metrics
+    total_tokens: int = 0
+    average_tokens: float = 0.0
+    max_tokens: int = 0
+    min_tokens: int = 0
+    files_by_token_count: dict[str, int] = Field(
+        default_factory=dict, description="Mapping of filename to token count"
+    )
+
 
 class ComplexityDelta(BaseModel):
     """Complexity change comparison between two versions."""
@@ -141,7 +150,11 @@ class ComplexityDelta(BaseModel):
     total_difficulty_change: float = 0.0
     total_effort_change: float = 0.0
     total_mi_change: float = 0.0
+
     avg_mi_change: float = 0.0
+
+    total_tokens_change: int = 0
+    avg_tokens_change: float = 0.0
 
     type_hint_coverage_change: float = 0.0
     docstring_coverage_change: float = 0.0
@@ -441,6 +454,13 @@ class ExtendedComplexityMetrics(ComplexityMetrics):
         default=0, description="__init__.py files with implementation code (beyond imports/__all__)"
     )
 
+    orphan_comment_files: list[str] = Field(default_factory=list, description="Files with orphan comments")
+    untracked_todo_files: list[str] = Field(default_factory=list, description="Files with untracked TODOs")
+    inline_import_files: list[str] = Field(default_factory=list, description="Files with inline imports")
+    dict_get_with_default_files: list[str] = Field(default_factory=list, description="Files with .get() defaults")
+    hasattr_getattr_files: list[str] = Field(default_factory=list, description="Files with hasattr/getattr")
+    nonempty_init_files: list[str] = Field(default_factory=list, description="Files with nonempty __init__")
+
 
 class ExperimentRun(BaseModel):
     """Represents a single experiment run."""
@@ -684,6 +704,18 @@ class CurrentChangesAnalysis(BaseModel):
 
     assessment: ImpactAssessment
     baseline: RepoBaseline
+
+    blind_spots: list[str] = Field(
+        default_factory=list, description="Files dependent on changed files but not in changed set"
+    )
+    filtered_coverage: dict[str, float] | None = Field(default=None, description="Coverage % for changed files")
+
+    # Token impact metrics
+    blind_spot_tokens: int = Field(default=0, description="Total tokens in blind spot files")
+    changed_files_tokens: int = Field(default=0, description="Total tokens in changed files")
+    complete_picture_context_size: int = Field(
+        default=0, description="Sum of tokens in changed files + blind spots"
+    )
 
 
 class FileCoverageStatus(BaseModel):

@@ -1,5 +1,6 @@
 """Tests for summoner/cli/commands.py."""
 
+import os
 import subprocess
 from pathlib import Path
 
@@ -27,13 +28,18 @@ def test_analyze_commits__fails_gracefully_when_insufficient_commits(tmp_path: P
     runner = CliRunner()
 
     # Initialize a git repo with just 1 commit
-    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmp_path, check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, check=True, capture_output=True)
+    env = os.environ.copy()
+    env["HOME"] = str(tmp_path)
+
+    subprocess.run(["git", "init"], cwd=tmp_path, env=env, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@test.com"], cwd=tmp_path, env=env, check=True, capture_output=True
+    )
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, env=env, check=True, capture_output=True)
 
     (tmp_path / "foo").touch()
-    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True, capture_output=True)
-    subprocess.run(["git", "commit", "-m", "Initial"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, env=env, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "Initial"], cwd=tmp_path, env=env, check=True, capture_output=True)
 
     # Run analyze-commits which defaults to HEAD~10 -> HEAD
     result = runner.invoke(summoner, ["analyze-commits", "--repo-path", str(tmp_path)])
