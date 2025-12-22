@@ -128,9 +128,7 @@ class ComplexityMetrics(BaseModel):
     average_tokens: float = 0.0
     max_tokens: int = 0
     min_tokens: int = 0
-    files_by_token_count: dict[str, int] = Field(
-        default_factory=dict, description="Mapping of filename to token count"
-    )
+    files_by_token_count: dict[str, int] = Field(default_factory=dict, description="Mapping of filename to token count")
 
 
 class ComplexityDelta(BaseModel):
@@ -169,6 +167,10 @@ class ComplexityDelta(BaseModel):
     dict_get_with_default_change: int = 0
     hasattr_getattr_change: int = 0
     nonempty_init_change: int = 0
+    test_skip_change: int = 0
+    swallowed_exception_change: int = 0
+    type_ignore_change: int = 0
+    dynamic_execution_change: int = 0
 
 
 class TodoItem(BaseModel):
@@ -453,6 +455,12 @@ class ExtendedComplexityMetrics(ComplexityMetrics):
     nonempty_init_count: int = Field(
         default=0, description="__init__.py files with implementation code (beyond imports/__all__)"
     )
+    test_skip_count: int = Field(default=0, description="Test skip calls/decorators (pytest.skip, unittest.skip)")
+    swallowed_exception_count: int = Field(
+        default=0, description="Exception handlers with only pass/continue/empty body"
+    )
+    type_ignore_count: int = Field(default=0, description="# type: ignore comments (suppressing type checker)")
+    dynamic_execution_count: int = Field(default=0, description="Dynamic code execution (eval, exec, compile)")
 
     orphan_comment_files: list[str] = Field(default_factory=list, description="Files with orphan comments")
     untracked_todo_files: list[str] = Field(default_factory=list, description="Files with untracked TODOs")
@@ -460,6 +468,10 @@ class ExtendedComplexityMetrics(ComplexityMetrics):
     dict_get_with_default_files: list[str] = Field(default_factory=list, description="Files with .get() defaults")
     hasattr_getattr_files: list[str] = Field(default_factory=list, description="Files with hasattr/getattr")
     nonempty_init_files: list[str] = Field(default_factory=list, description="Files with nonempty __init__")
+    test_skip_files: list[str] = Field(default_factory=list, description="Files with test skips")
+    swallowed_exception_files: list[str] = Field(default_factory=list, description="Files with swallowed exceptions")
+    type_ignore_files: list[str] = Field(default_factory=list, description="Files with type: ignore")
+    dynamic_execution_files: list[str] = Field(default_factory=list, description="Files with eval/exec/compile")
 
 
 class ExperimentRun(BaseModel):
@@ -713,9 +725,7 @@ class CurrentChangesAnalysis(BaseModel):
     # Token impact metrics
     blind_spot_tokens: int = Field(default=0, description="Total tokens in blind spot files")
     changed_files_tokens: int = Field(default=0, description="Total tokens in changed files")
-    complete_picture_context_size: int = Field(
-        default=0, description="Sum of tokens in changed files + blind spots"
-    )
+    complete_picture_context_size: int = Field(default=0, description="Sum of tokens in changed files + blind spots")
 
 
 class FileCoverageStatus(BaseModel):

@@ -194,6 +194,20 @@ def _display_complexity_metrics(stats: SessionStatistics) -> None:
     smell_color = "red" if metrics.nonempty_init_count > 0 else "green"
     overview_table.add_row("  Non-empty __init__", f"[{smell_color}]{metrics.nonempty_init_count}[/{smell_color}]")
 
+    smell_color = "red" if metrics.test_skip_count > 0 else "green"
+    overview_table.add_row("  Test Skips", f"[{smell_color}]{metrics.test_skip_count}[/{smell_color}]")
+
+    smell_color = "red" if metrics.swallowed_exception_count > 0 else "green"
+    overview_table.add_row(
+        "  Swallowed Exceptions", f"[{smell_color}]{metrics.swallowed_exception_count}[/{smell_color}]"
+    )
+
+    smell_color = "red" if metrics.type_ignore_count > 0 else "green"
+    overview_table.add_row("  Type Ignores", f"[{smell_color}]{metrics.type_ignore_count}[/{smell_color}]")
+
+    smell_color = "red" if metrics.dynamic_execution_count > 0 else "green"
+    overview_table.add_row("  Dynamic Execution", f"[{smell_color}]{metrics.dynamic_execution_count}[/{smell_color}]")
+
     console.print(overview_table)
 
     # Display detailed code smells
@@ -271,7 +285,7 @@ def _display_complexity_delta(
         f"[{mi_color}]{delta.avg_mi_change:+.2f}[/{mi_color}]",
         mi_baseline if has_baseline else None,
     )
-    
+
     # Token Deltas
     token_color = "red" if delta.total_tokens_change > 0 else "green" if delta.total_tokens_change < 0 else "yellow"
     changes_table.add_row(
@@ -758,22 +772,19 @@ def display_current_impact_analysis(analysis: CurrentChangesAnalysis) -> None:
         title="Uncommitted Changes Impact",
     )
 
-
-
     console.print("\n[bold]Token Impact:[/bold]")
     token_table = Table(show_header=True)
     token_table.add_column("Metric", style="cyan")
     token_table.add_column("Value", justify="right")
-    
+
     # Calculate delta for just the uncommitted changes if needed, but delta is in the baseline comparison table usually?
     # No, baseline comparison table shows complexity/effort/MI deltas.
     # We want to show raw token counts here as well.
-    
+
     token_table.add_row("Tokens in Edited Files", _format_token_count(analysis.changed_files_tokens))
     token_table.add_row("Tokens in Blind Spots", _format_token_count(analysis.blind_spot_tokens))
     token_table.add_row(
-        "Complete Picture Context Size", 
-        f"[bold]{_format_token_count(analysis.complete_picture_context_size)}[/bold]"
+        "Complete Picture Context Size", f"[bold]{_format_token_count(analysis.complete_picture_context_size)}[/bold]"
     )
     console.print(token_table)
 
@@ -861,8 +872,23 @@ def _display_code_smells_detailed(metrics, filter_files: set[str] | None = None)
     get_files = get_filtered_files(metrics.dict_get_with_default_files)
     getattr_files = get_filtered_files(metrics.hasattr_getattr_files)
     init_files = get_filtered_files(metrics.nonempty_init_files)
+    test_skip_files = get_filtered_files(metrics.test_skip_files)
+    swallowed_exception_files = get_filtered_files(metrics.swallowed_exception_files)
+    type_ignore_files = get_filtered_files(metrics.type_ignore_files)
+    dynamic_execution_files = get_filtered_files(metrics.dynamic_execution_files)
 
-    if orphan_files or todo_files or import_files or get_files or getattr_files or init_files:
+    if (
+        orphan_files
+        or todo_files
+        or import_files
+        or get_files
+        or getattr_files
+        or init_files
+        or test_skip_files
+        or swallowed_exception_files
+        or type_ignore_files
+        or dynamic_execution_files
+    ):
         has_smells = True
 
     if not has_smells:
@@ -896,6 +922,10 @@ def _display_code_smells_detailed(metrics, filter_files: set[str] | None = None)
     add_smell_row(".get() w/ Defaults", get_files)
     add_smell_row("hasattr/getattr", getattr_files)
     add_smell_row("Non-empty __init__", init_files)
+    add_smell_row("Test Skips", test_skip_files)
+    add_smell_row("Swallowed Exceptions", swallowed_exception_files)
+    add_smell_row("Type Ignores", type_ignore_files)
+    add_smell_row("Dynamic Execution", dynamic_execution_files)
 
     console.print(table)
 

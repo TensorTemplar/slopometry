@@ -79,16 +79,16 @@ class CurrentImpactService:
                     # We need to access the internal coverage data if possible or relies on what CoverageResult exposes
                     # CoverageResult has 'file_coverage' dict
                     if hasattr(cov_result, "file_coverage") and cov_result.file_coverage:
-                         if file_path in cov_result.file_coverage:
-                             filtered_coverage[file_path] = cov_result.file_coverage[file_path]
+                        if file_path in cov_result.file_coverage:
+                            filtered_coverage[file_path] = cov_result.file_coverage[file_path]
         except Exception:
             # Coverage analysis is optional
             pass
-        
+
         # Calculate token impact
         blind_spot_tokens = 0
         changed_files_tokens = 0
-        
+
         # Helper to get token count for a file path
         def get_token_count(path_str: str) -> int:
             # path_str is relative
@@ -96,10 +96,10 @@ class CurrentImpactService:
 
         for file_path in changed_files:
             changed_files_tokens += get_token_count(file_path)
-            
+
         for file_path in blind_spots:
             blind_spot_tokens += get_token_count(file_path)
-            
+
         complete_picture_context_size = changed_files_tokens + blind_spot_tokens
 
         return CurrentChangesAnalysis(
@@ -112,7 +112,6 @@ class CurrentImpactService:
             baseline=baseline,
             blind_spots=blind_spots,
             filtered_coverage=filtered_coverage,
-            
             blind_spot_tokens=blind_spot_tokens,
             changed_files_tokens=changed_files_tokens,
             complete_picture_context_size=complete_picture_context_size,

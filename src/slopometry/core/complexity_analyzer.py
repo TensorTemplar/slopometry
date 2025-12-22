@@ -68,7 +68,7 @@ class ComplexityAnalyzer:
 
         tracker = GitTracker(directory)
         python_files = tracker.get_tracked_python_files()
-        
+
         # Initialize tokenizer
         try:
             encoder = tiktoken.get_encoding("o200k_base")
@@ -78,7 +78,7 @@ class ComplexityAnalyzer:
 
         files_by_complexity = {}
         all_complexities = []
-        
+
         files_by_token_count = {}
         all_token_counts = []
 
@@ -95,7 +95,7 @@ class ComplexityAnalyzer:
                 relative_path = self._get_relative_path(file_path, directory)
                 files_by_complexity[relative_path] = file_complexity
                 all_complexities.append(file_complexity)
-                
+
                 # Count tokens
                 token_count = len(encoder.encode(content))
                 files_by_token_count[relative_path] = token_count
@@ -106,14 +106,14 @@ class ComplexityAnalyzer:
 
         total_files = len(all_complexities)
         total_complexity = sum(all_complexities)
-        
+
         total_tokens = sum(all_token_counts)
 
         if total_files > 0:
             average_complexity = total_complexity / total_files
             max_complexity = max(all_complexities)
             min_complexity = min(all_complexities)
-            
+
             average_tokens = total_tokens / total_files
             max_tokens = max(all_token_counts)
             min_tokens = min(all_token_counts)
@@ -121,7 +121,7 @@ class ComplexityAnalyzer:
             average_complexity = 0.0
             max_complexity = 0
             min_complexity = 0
-            
+
             average_tokens = 0.0
             max_tokens = 0
             min_tokens = 0
@@ -133,7 +133,6 @@ class ComplexityAnalyzer:
             max_complexity=max_complexity,
             min_complexity=min_complexity,
             files_by_complexity=files_by_complexity,
-            
             total_tokens=total_tokens,
             average_tokens=average_tokens,
             max_tokens=max_tokens,
@@ -246,7 +245,7 @@ class ComplexityAnalyzer:
             delta.total_effort_change = current_metrics.total_effort - baseline_metrics.total_effort
             delta.avg_mi_change = current_metrics.average_mi - baseline_metrics.average_mi
             delta.total_mi_change = current_metrics.total_mi - baseline_metrics.total_mi
-            
+
             delta.total_tokens_change = current_metrics.total_tokens - baseline_metrics.total_tokens
             delta.avg_tokens_change = current_metrics.average_tokens - baseline_metrics.average_tokens
 
@@ -271,6 +270,14 @@ class ComplexityAnalyzer:
                 current_metrics.hasattr_getattr_count - baseline_metrics.hasattr_getattr_count
             )
             delta.nonempty_init_change = current_metrics.nonempty_init_count - baseline_metrics.nonempty_init_count
+            delta.test_skip_change = current_metrics.test_skip_count - baseline_metrics.test_skip_count
+            delta.swallowed_exception_change = (
+                current_metrics.swallowed_exception_count - baseline_metrics.swallowed_exception_count
+            )
+            delta.type_ignore_change = current_metrics.type_ignore_count - baseline_metrics.type_ignore_count
+            delta.dynamic_execution_change = (
+                current_metrics.dynamic_execution_count - baseline_metrics.dynamic_execution_count
+            )
 
         return delta
 
@@ -325,7 +332,7 @@ class ComplexityAnalyzer:
         mi_file_count = 0
 
         import tiktoken
-         
+
         # Initialize tokenizer
         try:
             encoder = tiktoken.get_encoding("o200k_base")
@@ -359,7 +366,7 @@ class ComplexityAnalyzer:
                 mi_score = metrics_lib.mi_visit(content, multi=False)
                 total_mi += mi_score
                 mi_file_count += 1
-                
+
                 # Count tokens
                 token_count = len(encoder.encode(content))
                 files_by_token_count[relative_path] = token_count
@@ -379,7 +386,7 @@ class ComplexityAnalyzer:
         average_complexity = total_complexity / total_files if total_files > 0 else 0.0
         max_complexity = max(all_complexities) if all_complexities else 0
         min_complexity = min(all_complexities) if all_complexities else 0
-        
+
         total_tokens = sum(all_token_counts)
         average_tokens = total_tokens / total_files if total_files > 0 else 0.0
         max_tokens = max(all_token_counts) if all_token_counts else 0
@@ -417,13 +424,11 @@ class ComplexityAnalyzer:
             average_difficulty=average_difficulty,
             total_mi=total_mi,
             average_mi=average_mi,
-            
             total_tokens=total_tokens,
             average_tokens=average_tokens,
             max_tokens=max_tokens,
             min_tokens=min_tokens,
             files_by_token_count=files_by_token_count,
-            
             type_hint_coverage=type_hint_coverage,
             docstring_coverage=docstring_coverage,
             deprecation_count=feature_stats.deprecations_count,
@@ -438,6 +443,10 @@ class ComplexityAnalyzer:
             dict_get_with_default_count=feature_stats.dict_get_with_default_count,
             hasattr_getattr_count=feature_stats.hasattr_getattr_count,
             nonempty_init_count=feature_stats.nonempty_init_count,
+            test_skip_count=feature_stats.test_skip_count,
+            swallowed_exception_count=feature_stats.swallowed_exception_count,
+            type_ignore_count=feature_stats.type_ignore_count,
+            dynamic_execution_count=feature_stats.dynamic_execution_count,
             orphan_comment_files=sorted(
                 [self._get_relative_path(p, target_dir) for p in feature_stats.orphan_comment_files]
             ),
@@ -455,5 +464,13 @@ class ComplexityAnalyzer:
             ),
             nonempty_init_files=sorted(
                 [self._get_relative_path(p, target_dir) for p in feature_stats.nonempty_init_files]
+            ),
+            test_skip_files=sorted([self._get_relative_path(p, target_dir) for p in feature_stats.test_skip_files]),
+            swallowed_exception_files=sorted(
+                [self._get_relative_path(p, target_dir) for p in feature_stats.swallowed_exception_files]
+            ),
+            type_ignore_files=sorted([self._get_relative_path(p, target_dir) for p in feature_stats.type_ignore_files]),
+            dynamic_execution_files=sorted(
+                [self._get_relative_path(p, target_dir) for p in feature_stats.dynamic_execution_files]
             ),
         )
