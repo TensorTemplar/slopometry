@@ -4,11 +4,12 @@ import ast
 import io
 import re
 import tokenize
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import NamedTuple
 
 
-class FeatureStats(NamedTuple):
+@dataclass
+class FeatureStats:
     """Container for feature statistics."""
 
     functions_count: int = 0
@@ -28,6 +29,21 @@ class FeatureStats(NamedTuple):
     dict_get_with_default_count: int = 0
     hasattr_getattr_count: int = 0
     nonempty_init_count: int = 0
+    test_skip_count: int = 0
+    swallowed_exception_count: int = 0
+    type_ignore_count: int = 0
+    dynamic_execution_count: int = 0
+
+    orphan_comment_files: set[str] = field(default_factory=set)
+    untracked_todo_files: set[str] = field(default_factory=set)
+    inline_import_files: set[str] = field(default_factory=set)
+    dict_get_with_default_files: set[str] = field(default_factory=set)
+    hasattr_getattr_files: set[str] = field(default_factory=set)
+    nonempty_init_files: set[str] = field(default_factory=set)
+    test_skip_files: set[str] = field(default_factory=set)
+    swallowed_exception_files: set[str] = field(default_factory=set)
+    type_ignore_files: set[str] = field(default_factory=set)
+    dynamic_execution_files: set[str] = field(default_factory=set)
 
 
 class PythonFeatureAnalyzer:
@@ -50,6 +66,9 @@ class PythonFeatureAnalyzer:
         python_files = tracker.get_tracked_python_files()
 
         for file_path in python_files:
+            if not file_path.exists():
+                continue
+
             try:
                 stats = self._analyze_file(file_path)
                 aggregated = self._merge_stats(aggregated, stats)
@@ -71,8 +90,9 @@ class PythonFeatureAnalyzer:
         ast_stats = visitor.stats
 
         is_test_file = file_path.name.startswith("test_") or "/tests/" in str(file_path)
-        orphan_comments, untracked_todos = self._analyze_comments(content, is_test_file)
+        orphan_comments, untracked_todos, type_ignores = self._analyze_comments(content, is_test_file)
         nonempty_init = 1 if self._is_nonempty_init(file_path, tree) else 0
+        path_str = str(file_path)
 
         return FeatureStats(
             functions_count=ast_stats.functions_count,
@@ -92,6 +112,20 @@ class PythonFeatureAnalyzer:
             dict_get_with_default_count=ast_stats.dict_get_with_default_count,
             hasattr_getattr_count=ast_stats.hasattr_getattr_count,
             nonempty_init_count=nonempty_init,
+            test_skip_count=ast_stats.test_skip_count,
+            swallowed_exception_count=ast_stats.swallowed_exception_count,
+            type_ignore_count=type_ignores,
+            dynamic_execution_count=ast_stats.dynamic_execution_count,
+            orphan_comment_files={path_str} if orphan_comments > 0 else set(),
+            untracked_todo_files={path_str} if untracked_todos > 0 else set(),
+            inline_import_files={path_str} if ast_stats.inline_import_count > 0 else set(),
+            dict_get_with_default_files={path_str} if ast_stats.dict_get_with_default_count > 0 else set(),
+            hasattr_getattr_files={path_str} if ast_stats.hasattr_getattr_count > 0 else set(),
+            nonempty_init_files={path_str} if nonempty_init > 0 else set(),
+            test_skip_files={path_str} if ast_stats.test_skip_count > 0 else set(),
+            swallowed_exception_files={path_str} if ast_stats.swallowed_exception_count > 0 else set(),
+            type_ignore_files={path_str} if type_ignores > 0 else set(),
+            dynamic_execution_files={path_str} if ast_stats.dynamic_execution_count > 0 else set(),
         )
 
     def _is_nonempty_init(self, file_path: Path, tree: ast.Module) -> bool:
@@ -131,7 +165,7 @@ class PythonFeatureAnalyzer:
 
         return False
 
-    def _analyze_comments(self, content: str, is_test_file: bool = False) -> tuple[int, int]:
+    def _analyze_comments(self, content: str, is_test_file: bool = False) -> tuple[int, int, int]:
         """Analyze comments in source code using tokenize.
 
         Args:
@@ -139,10 +173,11 @@ class PythonFeatureAnalyzer:
             is_test_file: If True, skip orphan comment detection (tests need explanatory comments)
 
         Returns:
-            Tuple of (orphan_comment_count, untracked_todo_count)
+            Tuple of (orphan_comment_count, untracked_todo_count, type_ignore_count)
         """
         orphan_comments = 0
         untracked_todos = 0
+        type_ignores = 0
 
         todo_pattern = re.compile(r"\b(TODO|FIXME|XXX|HACK)\b", re.IGNORECASE)
         url_pattern = re.compile(r"https?://")
@@ -151,6 +186,7 @@ class PythonFeatureAnalyzer:
             r"#\s*(NOTE|REASON|WARNING|WORKAROUND|IMPORTANT|CAVEAT|HACK|NB|PERF|SAFETY|COMPAT):",
             re.IGNORECASE,
         )
+        type_ignore_pattern = re.compile(r"#\s*type:\s*ignore")
 
         try:
             tokens = tokenize.generate_tokens(io.StringIO(content).readline)
@@ -161,17 +197,20 @@ class PythonFeatureAnalyzer:
                     is_todo = bool(todo_pattern.search(comment_text))
                     has_url = bool(url_pattern.search(comment_text))
                     is_justification = bool(justification_pattern.search(comment_text))
+                    is_type_ignore = bool(type_ignore_pattern.search(comment_text))
 
-                    if is_todo:
+                    if is_type_ignore:
+                        type_ignores += 1
+                    elif is_todo:
                         has_ticket = bool(ticket_pattern.search(comment_text))
                         if not has_ticket and not has_url:
                             untracked_todos += 1
                     elif not has_url and not is_justification and not is_test_file:
                         orphan_comments += 1
-        except tokenize.TokenizeError:
+        except tokenize.TokenError:
             pass
 
-        return orphan_comments, untracked_todos
+        return orphan_comments, untracked_todos, type_ignores
 
     def _merge_stats(self, s1: FeatureStats, s2: FeatureStats) -> FeatureStats:
         """Merge two stats objects."""
@@ -193,6 +232,20 @@ class PythonFeatureAnalyzer:
             dict_get_with_default_count=s1.dict_get_with_default_count + s2.dict_get_with_default_count,
             hasattr_getattr_count=s1.hasattr_getattr_count + s2.hasattr_getattr_count,
             nonempty_init_count=s1.nonempty_init_count + s2.nonempty_init_count,
+            test_skip_count=s1.test_skip_count + s2.test_skip_count,
+            swallowed_exception_count=s1.swallowed_exception_count + s2.swallowed_exception_count,
+            type_ignore_count=s1.type_ignore_count + s2.type_ignore_count,
+            dynamic_execution_count=s1.dynamic_execution_count + s2.dynamic_execution_count,
+            orphan_comment_files=s1.orphan_comment_files | s2.orphan_comment_files,
+            untracked_todo_files=s1.untracked_todo_files | s2.untracked_todo_files,
+            inline_import_files=s1.inline_import_files | s2.inline_import_files,
+            dict_get_with_default_files=s1.dict_get_with_default_files | s2.dict_get_with_default_files,
+            hasattr_getattr_files=s1.hasattr_getattr_files | s2.hasattr_getattr_files,
+            nonempty_init_files=s1.nonempty_init_files | s2.nonempty_init_files,
+            test_skip_files=s1.test_skip_files | s2.test_skip_files,
+            swallowed_exception_files=s1.swallowed_exception_files | s2.swallowed_exception_files,
+            type_ignore_files=s1.type_ignore_files | s2.type_ignore_files,
+            dynamic_execution_files=s1.dynamic_execution_files | s2.dynamic_execution_files,
         )
 
 
@@ -216,6 +269,9 @@ class FeatureVisitor(ast.NodeVisitor):
         self._scope_depth = 0
         self.dict_get_with_default = 0
         self.hasattr_getattr_calls = 0
+        self.test_skips = 0
+        self.swallowed_exceptions = 0
+        self.dynamic_executions = 0
 
     @property
     def stats(self) -> FeatureStats:
@@ -234,6 +290,9 @@ class FeatureVisitor(ast.NodeVisitor):
             inline_import_count=self.inline_imports,
             dict_get_with_default_count=self.dict_get_with_default,
             hasattr_getattr_count=self.hasattr_getattr_calls,
+            test_skip_count=self.test_skips,
+            swallowed_exception_count=self.swallowed_exceptions,
+            dynamic_execution_count=self.dynamic_executions,
         )
 
     def _collect_type_names(self, node: ast.AST | None) -> None:
@@ -308,6 +367,8 @@ class FeatureVisitor(ast.NodeVisitor):
         for decorator in node.decorator_list:
             if self._is_deprecated_decorator(decorator):
                 self.deprecations += 1
+            if self._is_test_skip_decorator(decorator):
+                self.test_skips += 1
 
         self._scope_depth += 1
         self.generic_visit(node)
@@ -318,6 +379,8 @@ class FeatureVisitor(ast.NodeVisitor):
         for decorator in node.decorator_list:
             if self._is_deprecated_decorator(decorator):
                 self.deprecations += 1
+            if self._is_test_skip_decorator(decorator):
+                self.test_skips += 1
         self._scope_depth += 1
         self.generic_visit(node)
         self._scope_depth -= 1
@@ -357,7 +420,7 @@ class FeatureVisitor(ast.NodeVisitor):
         self._scope_depth -= 1
 
     def visit_Call(self, node: ast.Call) -> None:
-        """Check for warnings.warn, .get() with defaults, and hasattr/getattr calls."""
+        """Check for warnings.warn, .get() with defaults, hasattr/getattr, test skips, and dynamic execution."""
         if self._is_warnings_warn(node.func):
             if len(node.args) > 1:
                 category = node.args[1]
@@ -375,6 +438,12 @@ class FeatureVisitor(ast.NodeVisitor):
         elif isinstance(node.func, ast.Name):
             if node.func.id in ("hasattr", "getattr"):
                 self.hasattr_getattr_calls += 1
+
+        if self._is_test_skip_call(node):
+            self.test_skips += 1
+
+        if self._is_dynamic_execution_call(node):
+            self.dynamic_executions += 1
 
         self.generic_visit(node)
 
@@ -406,6 +475,41 @@ class FeatureVisitor(ast.NodeVisitor):
             return "DeprecationWarning" in node.attr or "PendingDeprecationWarning" in node.attr
         return False
 
+    def _is_test_skip_call(self, node: ast.Call) -> bool:
+        """Check if call is pytest.skip/skipif (not unittest, which is decorator-only)."""
+        func = node.func
+        if isinstance(func, ast.Attribute):
+            if func.attr in ("skip", "skipif"):
+                if isinstance(func.value, ast.Name):
+                    # Only pytest - unittest.skip is handled as decorator only
+                    # to avoid double-counting @unittest.skip("reason")
+                    return func.value.id == "pytest"
+        return False
+
+    def _is_test_skip_decorator(self, node: ast.AST) -> bool:
+        """Check if decorator is @pytest.mark.skip/skipif or @unittest.skip/skipIf."""
+        if isinstance(node, ast.Call):
+            return self._is_test_skip_decorator(node.func)
+
+        if isinstance(node, ast.Attribute):
+            # @pytest.mark.skip or @pytest.mark.skipif
+            if node.attr in ("skip", "skipif"):
+                if isinstance(node.value, ast.Attribute) and node.value.attr == "mark":
+                    if isinstance(node.value.value, ast.Name) and node.value.value.id == "pytest":
+                        return True
+            # @unittest.skip or @unittest.skipIf
+            if node.attr in ("skip", "skipIf"):
+                if isinstance(node.value, ast.Name) and node.value.id == "unittest":
+                    return True
+        return False
+
+    def _is_dynamic_execution_call(self, node: ast.Call) -> bool:
+        """Check for eval/exec/compile calls."""
+        func = node.func
+        if isinstance(func, ast.Name):
+            return func.id in ("eval", "exec", "compile")
+        return False
+
     def visit_If(self, node: ast.If) -> None:
         """Track TYPE_CHECKING blocks to exclude their imports."""
         if self._is_type_checking_guard(node):
@@ -414,6 +518,23 @@ class FeatureVisitor(ast.NodeVisitor):
             self._in_type_checking_block = False
         else:
             self.generic_visit(node)
+
+    def visit_Try(self, node: ast.Try) -> None:
+        """Detect swallowed exceptions (except blocks with only pass/continue/empty)."""
+        for handler in node.handlers:
+            if self._is_swallowed_exception(handler):
+                self.swallowed_exceptions += 1
+        self.generic_visit(node)
+
+    def _is_swallowed_exception(self, handler: ast.ExceptHandler) -> bool:
+        """Check if exception handler just swallows (pass/continue/empty body)."""
+        if not handler.body:
+            return True
+        if len(handler.body) == 1:
+            stmt = handler.body[0]
+            if isinstance(stmt, ast.Pass | ast.Continue):
+                return True
+        return False
 
     def visit_Import(self, node: ast.Import) -> None:
         """Track inline imports (not at module level, not in TYPE_CHECKING)."""

@@ -5,6 +5,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from slopometry.core.git_tracker import GitTracker
+
 
 class WorkingTreeExtractor:
     """Extracts working tree state (uncommitted changes) for complexity analysis."""
@@ -88,24 +90,16 @@ class WorkingTreeExtractor:
 
     def _copy_python_files_to_temp(self, temp_dir: Path) -> None:
         """Copy all Python files from the working directory to temp dir."""
-        for py_file in self.repo_path.rglob("*.py"):
-            relative_path = py_file.relative_to(self.repo_path)
-            parts = relative_path.parts
+        tracker = GitTracker(self.repo_path)
+        tracked_files = tracker.get_tracked_python_files()
 
-            skip_dirs = {
-                ".git",
-                ".tox",
-                ".venv",
-                "venv",
-                "__pycache__",
-                ".mypy_cache",
-                ".pytest_cache",
-                "node_modules",
-                "dist",
-                "build",
-                ".eggs",
-            }
-            if any(part.startswith(".") or part in skip_dirs for part in parts[:-1]):
+        for py_file in tracked_files:
+            if not py_file.exists():
+                continue
+
+            try:
+                relative_path = py_file.relative_to(self.repo_path)
+            except ValueError:
                 continue
 
             dest_path = temp_dir / relative_path

@@ -4,6 +4,7 @@ import ast
 import json
 from pathlib import Path
 
+from slopometry.core.git_tracker import GitTracker
 from slopometry.core.models import ContextCoverage, FileCoverageStatus
 
 
@@ -53,6 +54,30 @@ class ContextCoverageAnalyzer:
             file_coverage=file_coverage,
             blind_spots=sorted(all_blind_spots),
         )
+
+    def get_affected_dependents(self, changed_files: set[str]) -> list[str]:
+        """Identify files that depend on the changed files (potential blind spots).
+
+        Args:
+            changed_files: Set of relative file paths that were modified
+
+        Returns:
+            List of unique file paths that import the changed files
+        """
+        self._build_import_graph()
+        affected = set()
+
+        for file_path in changed_files:
+            # Files that import the changed file
+            dependents = self._reverse_import_graph.get(file_path, set())
+            affected.update(dependents)
+
+            # Tests related to the changed file
+            tests = self._find_test_files(file_path)
+            affected.update(tests)
+
+        # Remove files that are already in the changed set (we know we're editing them)
+        return sorted(list(affected - changed_files))
 
     def _extract_file_events(self, transcript_path: Path) -> tuple[set[str], set[str], dict[str, int], dict[str, int]]:
         """Extract Read and Edit file paths from transcript with their sequence numbers.
@@ -152,8 +177,6 @@ class ContextCoverageAnalyzer:
 
     def _build_import_graph(self) -> None:
         """Build import graph for all Python files in working directory."""
-        from slopometry.core.git_tracker import GitTracker
-
         tracker = GitTracker(self.working_directory)
         python_files = tracker.get_tracked_python_files()
 
@@ -258,20 +281,26 @@ class ContextCoverageAnalyzer:
             f"test_{source_name}.py",
         ]
 
+        tracker = GitTracker(self.working_directory)
+        tracked_files = tracker.get_tracked_python_files()
+
         test_files = []
-        for pattern in patterns:
-            test_path = self.working_directory / pattern
-            if test_path.exists():
-                test_files.append(pattern)
+        for file_path in tracked_files:
+            try:
+                rel_path = str(file_path.relative_to(self.working_directory))
+            except ValueError:
+                continue
 
-        tests_dir = self.working_directory / "tests"
-        if tests_dir.exists():
-            for test_file in tests_dir.glob(f"*{source_name}*.py"):
-                rel_path = str(test_file.relative_to(self.working_directory))
-                if rel_path not in test_files:
-                    test_files.append(rel_path)
+            # Check exact pattern matches
+            if rel_path in patterns:
+                test_files.append(rel_path)
+                continue
 
-        return test_files
+            # Fuzzy match in tests/ directory
+            if rel_path.startswith("tests/") and f"test_{source_name}" in rel_path and rel_path not in test_files:
+                test_files.append(rel_path)
+
+        return sorted(test_files)
 
     def _compute_file_coverage(
         self,

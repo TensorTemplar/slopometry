@@ -102,20 +102,30 @@ class TestCoverageAnalyzerDB:
     """Tests for parsing .coverage SQLite database using real fixture."""
 
     def test_analyze_coverage__parses_real_db_fixture(self, tmp_path: Path) -> None:
-        """Test parsing real .coverage database from this repository."""
-        fixture_db = FIXTURES_DIR / ".coverage"
-        if not fixture_db.exists():
-            pytest.skip(".coverage fixture not found")
+        """Test parsing .coverage database by generating one dynamically."""
+        # Create a python file to cover
+        source_file = tmp_path / "foo.py"
+        source_file.write_text("def foo():\n    return 1\n\nfoo()\n")
 
-        shutil.copy(fixture_db, tmp_path / ".coverage")
+        # Generate coverage data using subprocess to avoid conflicts with pytest-cov
+        import subprocess
+        import sys
+
+        # We need to run coverage in a way that generates the .coverage file in tmp_path
+        subprocess.run(
+            [sys.executable, "-m", "coverage", "run", "--data-file=.coverage", "foo.py"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+        )
 
         analyzer = CoverageAnalyzer(tmp_path)
         result = analyzer.analyze_coverage()
 
         assert result.coverage_available is True
         assert result.source_file == ".coverage"
-        assert 25.0 <= result.total_coverage_percent <= 50.0
-        assert result.files_analyzed > 0
+        assert result.total_coverage_percent == 100.0
+        assert result.files_analyzed == 1
 
     def test_analyze_coverage__handles_corrupt_db(self, tmp_path: Path) -> None:
         """Test graceful handling when .coverage file is corrupt."""

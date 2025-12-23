@@ -7,6 +7,7 @@ from pathlib import Path
 
 from slopometry.core.database import EventDatabase, SessionManager
 from slopometry.core.git_tracker import GitTracker
+from slopometry.core.lock import SlopometryLock
 from slopometry.core.models import (
     ComplexityDelta,
     ContextCoverage,
@@ -103,6 +104,19 @@ def handle_hook(event_type_override: HookEventType | None = None) -> int:
     Args:
         event_type_override: Optional override for the event type, used when called via specific hook entrypoints
     """
+    # Acquire lock to prevent overlapping hook executions
+    lock = SlopometryLock()
+    with lock.acquire() as acquired:
+        if not acquired:
+            if settings.debug_mode:
+                print("Slopometry: Could not acquire lock, skipping hook execution.", file=sys.stderr)
+            return 0
+
+        return _handle_hook_internal(event_type_override)
+
+
+def _handle_hook_internal(event_type_override: HookEventType | None = None) -> int:
+    """Internal hook handler logic (extracted for locking support)."""
     try:
         stdin_input = sys.stdin.read().strip()
         if not stdin_input:
@@ -211,16 +225,14 @@ def handle_stop_event(session_id: str, parsed_input: "StopInput | SubagentStopIn
 
         current_metrics, delta = db.calculate_extended_complexity_metrics(stats.working_directory)
 
-        # NOTE: Complexity metrics are computed on-demand from session statistics.
-        # Storing them separately would enable historical analysis but adds storage overhead.
-
         if not settings.enable_complexity_feedback:
             return 0
 
         if not delta or not current_metrics:
             return 0
 
-        if abs(delta.total_complexity_change) < 5 and not delta.files_added and not delta.files_removed:
+        metrics_unchanged = abs(delta.total_complexity_change) < 5 and not delta.files_added and not delta.files_removed
+        if metrics_unchanged:
             return 0
 
         baseline_feedback = ""
@@ -388,10 +400,74 @@ def format_complexity_feedback(
     lines.append(f"   • str Type Usage: {current_metrics.str_type_percentage:.1f}%")
 
     lines.append("")
+    lines.append("")
     lines.append("**Code Smells**:")
-    lines.append(f"   • Orphan Comments: {current_metrics.orphan_comment_count}")
-    lines.append(f"   • Untracked TODOs: {current_metrics.untracked_todo_count}")
-    lines.append(f"   • Inline Imports: {current_metrics.inline_import_count}")
+
+    def fmt_smell(label: str, count: int, change: int, files: list[str] | None = None) -> str:
+        base_msg = ""
+        if change > 0:
+            base_msg = f"   • {label}: {count} (+{change})"
+        elif change < 0:
+            base_msg = f"   • {label}: {count} ({change})"
+        else:
+            base_msg = f"   • {label}: {count}"
+
+        if files and count > 0:
+            file_list = ", ".join(files[:3])
+            remaining = len(files) - 3
+            if remaining > 0:
+                return f"{base_msg} [{file_list}, ... +{remaining}]"
+            return f"{base_msg} [{file_list}]"
+        return base_msg
+
+    lines.append(
+        fmt_smell(
+            "Orphan Comments - verify if redundant",
+            current_metrics.orphan_comment_count,
+            delta.orphan_comment_change,
+            current_metrics.orphan_comment_files,
+        )
+    )
+    lines.append(
+        fmt_smell(
+            "Untracked TODOs",
+            current_metrics.untracked_todo_count,
+            delta.untracked_todo_change,
+            current_metrics.untracked_todo_files,
+        )
+    )
+    lines.append(
+        fmt_smell(
+            "Inline Imports - verify if they can be moved to the top",
+            current_metrics.inline_import_count,
+            delta.inline_import_change,
+            current_metrics.inline_import_files,
+        )
+    )
+    lines.append(
+        fmt_smell(
+            ".get() with default - may indicate a silent failure",
+            current_metrics.dict_get_with_default_count,
+            delta.dict_get_with_default_change,
+            current_metrics.dict_get_with_default_files,
+        )
+    )
+    lines.append(
+        fmt_smell(
+            "Dynamic Attr inspection - may indicate a domain modeling gap, i.e. missing BaseModel",
+            current_metrics.hasattr_getattr_count,
+            delta.hasattr_getattr_change,
+            current_metrics.hasattr_getattr_files,
+        )
+    )
+    lines.append(
+        fmt_smell(
+            "Logic in __init__ - consider if redundant re-exports can be removed",
+            current_metrics.nonempty_init_count,
+            delta.nonempty_init_change,
+            current_metrics.nonempty_init_files,
+        )
+    )
 
     if delta.files_changed:
         lines.append("")
@@ -410,7 +486,26 @@ def format_complexity_feedback(
         lines.append(context_feedback)
 
     lines.append("")
-    if delta.total_complexity_change > 20:
+
+    # Check for smell increases
+    smell_increases = []
+    if delta.orphan_comment_change > 0:
+        smell_increases.append("orphan comments")
+    if delta.untracked_todo_change > 0:
+        smell_increases.append("untracked TODOs")
+    if delta.inline_import_change > 0:
+        smell_increases.append("inline imports")
+    if delta.dict_get_with_default_change > 0:
+        smell_increases.append("unsafe dict.get()")
+    if delta.hasattr_getattr_change > 0:
+        smell_increases.append("dynamic attributes")
+    if delta.nonempty_init_change > 0:
+        smell_increases.append("logic in __init__.py")
+
+    if smell_increases:
+        lines.append(f"**⚠️  Quality Alert**: New code smells introduced: {', '.join(smell_increases)}.")
+        lines.append("Please review the 'Code Smells' section above and address these issues before stopping.")
+    elif delta.total_complexity_change > 20:
         lines.append("**Consider**: Breaking down complex functions or refactoring to reduce cognitive load.")
     elif delta.total_complexity_change > 0:
         lines.append("**Note**: Slight complexity increase. Monitor for future refactoring opportunities.")

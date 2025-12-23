@@ -92,6 +92,9 @@ class Settings(BaseSettings):
 
     user_story_agents: list[str] = ["o3", "claude-opus-4", "gemini-2.5-pro"]
 
+    # Galen Rate feature flag - shows NGMI alert when below 1 Galen productivity target
+    enable_working_at_microsoft: bool = False
+
     @field_validator("database_path", mode="before")
     @classmethod
     def validate_database_path(cls, v: str | Path | None) -> Path | None:

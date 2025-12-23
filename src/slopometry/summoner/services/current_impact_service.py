@@ -8,6 +8,7 @@ from slopometry.core.complexity_analyzer import ComplexityAnalyzer
 from slopometry.core.models import (
     ComplexityDelta,
     CurrentChangesAnalysis,
+    GalenMetrics,
     RepoBaseline,
 )
 from slopometry.core.working_tree_extractor import WorkingTreeExtractor
@@ -58,6 +59,53 @@ class CurrentImpactService:
 
         assessment = self.impact_calculator.calculate_impact(current_delta, baseline)
 
+        from slopometry.core.context_coverage_analyzer import ContextCoverageAnalyzer
+
+        coverage_analyzer = ContextCoverageAnalyzer(repo_path)
+        blind_spots = coverage_analyzer.get_affected_dependents(set(changed_files))
+
+        filtered_coverage = None
+        filtered_coverage = None
+        try:
+            from slopometry.core.coverage_analyzer import CoverageAnalyzer
+
+            cov_analyzer = CoverageAnalyzer(repo_path)
+            cov_result = cov_analyzer.analyze_coverage()
+
+            if cov_result.coverage_available:
+                filtered_coverage = {}
+                for file_path in changed_files:
+                    # Coverage keys are usually absolute paths or relative to root
+                    # Try both
+                    # We need to access the internal coverage data if possible or relies on what CoverageResult exposes
+                    # CoverageResult has 'file_coverage' dict
+                    if hasattr(cov_result, "file_coverage") and cov_result.file_coverage:
+                        if file_path in cov_result.file_coverage:
+                            filtered_coverage[file_path] = cov_result.file_coverage[file_path]
+        except Exception:
+            # Coverage analysis is optional
+            pass
+
+        # Calculate token impact
+        blind_spot_tokens = 0
+        changed_files_tokens = 0
+
+        # Helper to get token count for a file path
+        def get_token_count(path_str: str) -> int:
+            # path_str is relative
+            return current_metrics.files_by_token_count.get(path_str, 0)
+
+        for file_path in changed_files:
+            changed_files_tokens += get_token_count(file_path)
+
+        for file_path in blind_spots:
+            blind_spot_tokens += get_token_count(file_path)
+
+        complete_picture_context_size = changed_files_tokens + blind_spot_tokens
+
+        # Calculate Galen metrics based on commit history token growth
+        galen_metrics = self._calculate_galen_metrics(baseline, current_metrics)
+
         return CurrentChangesAnalysis(
             repository_path=str(repo_path),
             analysis_timestamp=datetime.now(),
@@ -66,7 +114,41 @@ class CurrentImpactService:
             baseline_metrics=baseline_metrics,
             assessment=assessment,
             baseline=baseline,
+            blind_spots=blind_spots,
+            filtered_coverage=filtered_coverage,
+            blind_spot_tokens=blind_spot_tokens,
+            changed_files_tokens=changed_files_tokens,
+            complete_picture_context_size=complete_picture_context_size,
+            galen_metrics=galen_metrics,
         )
+
+    def _calculate_galen_metrics(
+        self,
+        baseline: RepoBaseline,
+        current_metrics,
+    ) -> GalenMetrics | None:
+        """Calculate Galen productivity metrics from commit history token growth.
+
+        Uses the baseline's commit date range and oldest commit token count
+        to calculate the token productivity rate (Galen Rate).
+
+        Galen Rate = (current_tokens - oldest_commit_tokens) / period_days / GALEN_TOKENS_PER_DAY
+        """
+        if not baseline.oldest_commit_date or not baseline.newest_commit_date:
+            return None
+
+        if baseline.oldest_commit_tokens is None:
+            return None
+
+        time_delta = baseline.newest_commit_date - baseline.oldest_commit_date
+        period_days = time_delta.total_seconds() / 86400
+
+        if period_days <= 0:
+            return None
+
+        tokens_changed = current_metrics.total_tokens - baseline.oldest_commit_tokens
+
+        return GalenMetrics.calculate(tokens_changed=tokens_changed, period_days=period_days)
 
     def _compute_delta(
         self,

@@ -18,6 +18,14 @@ from slopometry.core.models import (
 
 
 @dataclass
+class CommitInfo:
+    """Commit SHA and timestamp."""
+
+    sha: str
+    timestamp: datetime
+
+
+@dataclass
 class CommitDelta:
     """Metrics delta between two consecutive commits."""
 
@@ -80,12 +88,13 @@ class BaselineService:
         if len(commits) < 2:
             return None
 
-        head_sha = commits[0]
+        head_commit = commits[0]
 
         analyzer = ComplexityAnalyzer(working_directory=repo_path)
         current_metrics = analyzer.analyze_extended_complexity()
 
-        commit_pairs = [(commits[i + 1], commits[i]) for i in range(len(commits) - 1)]
+        # Create pairs using SHAs only for delta computation
+        commit_pairs = [(commits[i + 1].sha, commits[i].sha) for i in range(len(commits) - 1)]
 
         deltas = self._compute_deltas_parallel(repo_path, commit_pairs, max_workers)
 
@@ -96,21 +105,32 @@ class BaselineService:
         effort_deltas = [d.effort_delta for d in deltas]
         mi_deltas = [d.mi_delta for d in deltas]
 
+        # commits are in reverse chronological order (newest first, oldest last)
+        newest_commit_date = commits[0].timestamp
+        oldest_commit_date = commits[-1].timestamp
+
+        oldest_commit_tokens = self._get_commit_token_count(
+            repo_path, commits[-1].sha, analyzer
+        )
+
         return RepoBaseline(
             repository_path=str(repo_path),
             computed_at=datetime.now(),
-            head_commit_sha=head_sha,
+            head_commit_sha=head_commit.sha,
             total_commits_analyzed=len(deltas),
             cc_delta_stats=self._compute_stats("cc_delta", cc_deltas),
             effort_delta_stats=self._compute_stats("effort_delta", effort_deltas),
             mi_delta_stats=self._compute_stats("mi_delta", mi_deltas),
             current_metrics=current_metrics,
+            oldest_commit_date=oldest_commit_date,
+            newest_commit_date=newest_commit_date,
+            oldest_commit_tokens=oldest_commit_tokens,
         )
 
-    def _get_all_commits(self, repo_path: Path) -> list[str]:
-        """Get all commit SHAs in topological order (newest first)."""
+    def _get_all_commits(self, repo_path: Path) -> list[CommitInfo]:
+        """Get all commits with timestamps in topological order (newest first)."""
         result = subprocess.run(
-            ["git", "rev-list", "--topo-order", "HEAD"],
+            ["git", "log", "--format=%H %ct", "--topo-order", "HEAD"],
             cwd=repo_path,
             capture_output=True,
             text=True,
@@ -120,10 +140,19 @@ class BaselineService:
         if result.returncode != 0:
             return []
 
-        commits = result.stdout.strip().split("\n")
-        valid_commits = [c.strip() for c in commits if c.strip()]
+        commits = []
+        for line in result.stdout.strip().split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split(" ", 1)
+            if len(parts) == 2:
+                sha, timestamp_str = parts
+                timestamp = datetime.fromtimestamp(int(timestamp_str))
+                commits.append(CommitInfo(sha=sha, timestamp=timestamp))
+
         # PERF: Limit to last 100 commits to avoid slow analysis on large repos
-        return valid_commits[:100]
+        return commits[:100]
 
     def _compute_deltas_parallel(
         self,
@@ -186,6 +215,34 @@ class BaselineService:
                 shutil.rmtree(parent_dir, ignore_errors=True)
             if child_dir:
                 shutil.rmtree(child_dir, ignore_errors=True)
+
+    def _get_commit_token_count(
+        self, repo_path: Path, commit_sha: str, analyzer: ComplexityAnalyzer
+    ) -> int | None:
+        """Get total token count for a specific commit.
+
+        Args:
+            repo_path: Path to the repository
+            commit_sha: The commit SHA to analyze
+            analyzer: ComplexityAnalyzer instance
+
+        Returns:
+            Total token count or None if analysis fails
+        """
+        git_tracker = GitTracker(repo_path)
+        commit_dir = git_tracker.extract_files_from_commit(commit_sha)
+
+        if not commit_dir:
+            return None
+
+        try:
+            metrics = analyzer.analyze_extended_complexity(commit_dir)
+            return metrics.total_tokens
+        except Exception:
+            return None
+        finally:
+            if commit_dir:
+                shutil.rmtree(commit_dir, ignore_errors=True)
 
     def _compute_stats(self, metric_name: str, values: list[float] | list[int]) -> HistoricalMetricStats:
         """Compute statistical summary for a list of values."""

@@ -362,7 +362,7 @@ def foo():
     return x
 """
         analyzer = PythonFeatureAnalyzer()
-        orphan_count, untracked_todos = analyzer._analyze_comments(code)
+        orphan_count, untracked_todos, _ = analyzer._analyze_comments(code)
 
         assert orphan_count == 2
         assert untracked_todos == 0
@@ -378,7 +378,7 @@ def foo():
     pass
 """
         analyzer = PythonFeatureAnalyzer()
-        orphan_count, untracked_todos = analyzer._analyze_comments(code)
+        orphan_count, untracked_todos, _ = analyzer._analyze_comments(code)
 
         assert orphan_count == 0
         # All are untracked since they have no ticket refs or URLs
@@ -393,7 +393,7 @@ def foo():
     pass
 """
         analyzer = PythonFeatureAnalyzer()
-        orphan_count, untracked_todos = analyzer._analyze_comments(code)
+        orphan_count, untracked_todos, _ = analyzer._analyze_comments(code)
 
         assert orphan_count == 0
         assert untracked_todos == 0
@@ -407,7 +407,7 @@ def foo():
     pass
 """
         analyzer = PythonFeatureAnalyzer()
-        orphan_count, untracked_todos = analyzer._analyze_comments(code)
+        orphan_count, untracked_todos, _ = analyzer._analyze_comments(code)
 
         assert untracked_todos == 2
 
@@ -420,7 +420,7 @@ def foo():
     pass
 """
         analyzer = PythonFeatureAnalyzer()
-        orphan_count, untracked_todos = analyzer._analyze_comments(code)
+        orphan_count, untracked_todos, _ = analyzer._analyze_comments(code)
 
         assert untracked_todos == 0
 
@@ -433,7 +433,7 @@ def foo():
     pass
 """
         analyzer = PythonFeatureAnalyzer()
-        orphan_count, untracked_todos = analyzer._analyze_comments(code)
+        orphan_count, untracked_todos, _ = analyzer._analyze_comments(code)
 
         assert untracked_todos == 0
 
@@ -446,7 +446,7 @@ def foo():
     pass
 """
         analyzer = PythonFeatureAnalyzer()
-        orphan_count, untracked_todos = analyzer._analyze_comments(code)
+        orphan_count, untracked_todos, _ = analyzer._analyze_comments(code)
 
         assert untracked_todos == 0
 
@@ -462,7 +462,7 @@ def foo():
     pass
 """
         analyzer = PythonFeatureAnalyzer()
-        orphan_count, untracked_todos = analyzer._analyze_comments(code)
+        orphan_count, untracked_todos, _ = analyzer._analyze_comments(code)
 
         assert orphan_count == 2  # Module comment + "Regular comment"
         assert untracked_todos == 1  # Only "TODO: untracked todo"
@@ -613,3 +613,238 @@ class TestFeatureStatsMergeCodeSmells:
         assert merged.orphan_comment_count == 15
         assert merged.untracked_todo_count == 4
         assert merged.inline_import_count == 6
+
+
+class TestTestSkipDetection:
+    """Tests for pytest and unittest skip detection."""
+
+    def test_visit_call__detects_pytest_skip_call(self) -> None:
+        """Test detection of pytest.skip() calls."""
+        code = """
+def test_foo():
+    pytest.skip("not ready")
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.test_skips == 1
+
+    def test_visit_call__detects_pytest_skipif_call(self) -> None:
+        """Test detection of pytest.skipif() calls."""
+        code = """
+def test_foo():
+    pytest.skipif(True, reason="not ready")
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.test_skips == 1
+
+    def test_visit_functiondef__detects_pytest_mark_skip_decorator(self) -> None:
+        """Test detection of @pytest.mark.skip decorator."""
+        code = """
+@pytest.mark.skip(reason="not ready")
+def test_foo():
+    pass
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.test_skips == 1
+
+    def test_visit_functiondef__detects_pytest_mark_skipif_decorator(self) -> None:
+        """Test detection of @pytest.mark.skipif decorator."""
+        code = """
+@pytest.mark.skipif(True, reason="not ready")
+def test_foo():
+    pass
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.test_skips == 1
+
+    def test_visit_functiondef__detects_unittest_skip_decorator(self) -> None:
+        """Test detection of @unittest.skip decorator."""
+        code = """
+@unittest.skip("not ready")
+def test_foo(self):
+    pass
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.test_skips == 1
+
+    def test_visit_call__unittest_skip_call_not_detected_to_avoid_double_count(self) -> None:
+        """unittest.skip() as a call is not detected (only as decorator) to avoid double-counting."""
+        code = """
+def test_foo(self):
+    unittest.skip("not ready")
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        # unittest.skip is handled as decorator only, not as call
+        assert visitor.test_skips == 0
+
+
+class TestSwallowedExceptionDetection:
+    """Tests for swallowed exception detection."""
+
+    def test_visit_try__detects_pass_in_except(self) -> None:
+        """Test detection of except block with only pass."""
+        code = """
+try:
+    risky()
+except Exception:
+    pass
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.swallowed_exceptions == 1
+
+    def test_visit_try__detects_continue_in_except(self) -> None:
+        """Test detection of except block with only continue."""
+        code = """
+for item in items:
+    try:
+        process(item)
+    except Exception:
+        continue
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.swallowed_exceptions == 1
+
+    def test_visit_try__ignores_proper_exception_handling(self) -> None:
+        """Test that proper exception handling is not flagged."""
+        code = """
+try:
+    risky()
+except Exception as e:
+    logger.error(f"Error: {e}")
+    raise
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.swallowed_exceptions == 0
+
+    def test_visit_try__ignores_except_with_multiple_statements(self) -> None:
+        """Test that except block with multiple statements is not flagged."""
+        code = """
+try:
+    risky()
+except Exception:
+    log_error()
+    pass
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.swallowed_exceptions == 0
+
+
+class TestTypeIgnoreDetection:
+    """Tests for type: ignore comment detection."""
+
+    def test_analyze_comments__detects_type_ignore(self) -> None:
+        """Test detection of # type: ignore comments."""
+        code = """
+def foo(x):  # type: ignore
+    return x
+"""
+        analyzer = PythonFeatureAnalyzer()
+        _, _, type_ignores = analyzer._analyze_comments(code)
+
+        assert type_ignores == 1
+
+    def test_analyze_comments__detects_type_ignore_with_code(self) -> None:
+        """Test detection of # type: ignore[code] comments."""
+        code = """
+y = untyped_func()  # type: ignore[no-untyped-call]
+"""
+        analyzer = PythonFeatureAnalyzer()
+        _, _, type_ignores = analyzer._analyze_comments(code)
+
+        assert type_ignores == 1
+
+    def test_analyze_comments__multiple_type_ignores(self) -> None:
+        """Test counting multiple type: ignore comments."""
+        code = """
+def foo(x):  # type: ignore
+    return x
+
+y = untyped_func()  # type: ignore[no-untyped-call]
+"""
+        analyzer = PythonFeatureAnalyzer()
+        _, _, type_ignores = analyzer._analyze_comments(code)
+
+        assert type_ignores == 2
+
+
+class TestDynamicExecutionDetection:
+    """Tests for eval/exec/compile detection."""
+
+    def test_visit_call__detects_eval(self) -> None:
+        """Test detection of eval() calls."""
+        code = """
+def foo():
+    result = eval("1 + 1")
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.dynamic_executions == 1
+
+    def test_visit_call__detects_exec(self) -> None:
+        """Test detection of exec() calls."""
+        code = """
+def foo():
+    exec("x = 1")
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.dynamic_executions == 1
+
+    def test_visit_call__detects_compile(self) -> None:
+        """Test detection of compile() calls."""
+        code = """
+def foo():
+    code_obj = compile("x = 1", "<string>", "exec")
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.dynamic_executions == 1
+
+    def test_visit_call__counts_multiple_dynamic_executions(self) -> None:
+        """Test counting multiple dynamic execution calls."""
+        code = """
+def foo():
+    eval("1")
+    exec("x = 1")
+    compile("y = 2", "<string>", "exec")
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.dynamic_executions == 3

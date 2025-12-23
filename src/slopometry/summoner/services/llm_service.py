@@ -24,9 +24,9 @@ class LLMService:
     def __init__(self, db: EventDatabase | None = None):
         self.db = db or EventDatabase()
         self.agent_map = {
-            "o3": user_story_agent,
+            "gpt-5.1-2025-11-13": user_story_agent,
             "claude-opus-4": cluade,
-            "gemini-2.5-pro": gemini,
+            "gemini-3.5-pro": gemini,
         }
 
     def generate_user_stories_from_commits(

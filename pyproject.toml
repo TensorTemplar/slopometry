@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "slopometry"
-version = "20251211-5"
-description = "Claude Code session tracker / experiment runner"
+version = "20251223-1"
+description = "Opinionated code quality metrics for code agents and humans"
 readme = "README.md"
 requires-python = ">=3.13"
 authors = [
@@ -31,12 +31,13 @@ dependencies = [
     "sqlite-utils>=3.0",
     "radon>=6.0.1",
     "toml>=0.10.2",
-    "pydantic-ai>=0.4.2",
+    "pydantic-ai>=1.33.0",
     "pandas>=2.0.0",
     "pyarrow>=14.0.0",
     "datasets>=2.14.0",
     "huggingface-hub>=0.20.0",
     "coverage>=7.0.0",
+    "tiktoken>=0.7.0",
 ]
 
 [project.urls]

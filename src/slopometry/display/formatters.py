@@ -6,6 +6,7 @@ from rich.table import Table
 from slopometry.core.models import (
     ContextCoverage,
     CurrentChangesAnalysis,
+    GalenMetrics,
     ImpactAssessment,
     ImpactCategory,
     PlanEvolution,
@@ -15,6 +16,75 @@ from slopometry.core.models import (
 )
 
 console = Console()
+
+
+def _calculate_galen_metrics_from_baseline(
+    baseline: RepoBaseline | None, current_tokens: int | None
+) -> GalenMetrics | None:
+    """Calculate Galen metrics from commit history token growth.
+
+    Uses the baseline's commit date range and oldest commit token count
+    to calculate productivity over the analyzed commit period.
+    """
+    if baseline is None:
+        return None
+
+    if not baseline.oldest_commit_date or not baseline.newest_commit_date:
+        return None
+
+    if baseline.oldest_commit_tokens is None or current_tokens is None:
+        return None
+
+    time_delta = baseline.newest_commit_date - baseline.oldest_commit_date
+    period_days = time_delta.total_seconds() / 86400
+
+    if period_days <= 0:
+        return None
+
+    tokens_changed = current_tokens - baseline.oldest_commit_tokens
+
+    return GalenMetrics.calculate(tokens_changed=tokens_changed, period_days=period_days)
+
+
+def _display_microsoft_ngmi_alert(galen_metrics: GalenMetrics) -> None:
+    """Display the Microsoft NGMI alert header when below 1 Galen productivity.
+
+    Shows a prominent alert with the Galen Rate and whether the developer is
+    on track to hit 1 Galen (1M tokens/month) by end of month.
+    """
+    from datetime import datetime
+
+    rate = galen_metrics.galen_rate
+    rate_color = "green" if rate >= 1.0 else "yellow" if rate >= 0.5 else "red"
+
+    now = datetime.now()
+    days_remaining = 30 - now.day
+
+    tokens_per_day = galen_metrics.tokens_per_day
+    projected_monthly = tokens_per_day * 30
+
+    console.print()
+    console.print("[bold]" + "=" * 60 + "[/bold]")
+
+    if rate >= 1.0:
+        console.print(f"[green bold]GALEN RATE: {rate:.2f} Galens - You're on track![/green bold]")
+        console.print(f"[green]Projected: ~{projected_monthly/1_000_000:.2f}M tokens/month[/green]")
+    else:
+        tokens_needed = galen_metrics.tokens_per_day_to_reach_one_galen or 0
+        console.print(f"[{rate_color} bold]GALEN RATE: {rate:.2f} Galens[/{rate_color} bold]")
+        console.print(f"[yellow]Need +{tokens_needed:,.0f} tokens/day to hit 1 Galen[/yellow]")
+
+        # Check if NGMI
+        if days_remaining > 0:
+            tokens_still_needed = 1_000_000 - (projected_monthly * (now.day / 30))
+            if tokens_still_needed > tokens_per_day * days_remaining:
+                console.print("[red bold]You're NGMI![/red bold]")
+            else:
+                console.print(f"[yellow]{days_remaining} days left this month - pick up the pace![/yellow]")
+        else:
+            console.print("[red bold]Month is over - you're NGMI![/red bold]")
+
+    console.print("[bold]" + "=" * 60 + "[/bold]")
 
 
 def display_session_summary(
@@ -31,6 +101,16 @@ def display_session_summary(
         baseline: Optional repository baseline for comparison
         assessment: Optional impact assessment computed from baseline
     """
+    # Calculate Galen metrics from commit history (not session duration)
+    current_tokens = stats.complexity_metrics.total_tokens if stats.complexity_metrics else None
+    baseline_galen_metrics = _calculate_galen_metrics_from_baseline(baseline, current_tokens)
+
+    # Show Microsoft NGMI alert if feature flag is enabled
+    from slopometry.core.settings import settings
+
+    if settings.enable_working_at_microsoft and baseline_galen_metrics:
+        _display_microsoft_ngmi_alert(baseline_galen_metrics)
+
     console.print(f"\n[bold]Session Statistics: {session_id}[/bold]")
     console.print(f"Start: {stats.start_time.strftime('%Y-%m-%d %H:%M:%S')}")
 
@@ -62,7 +142,7 @@ def display_session_summary(
         _display_git_metrics(stats)
 
     if stats.complexity_metrics and stats.complexity_metrics.total_files_analyzed > 0:
-        _display_complexity_metrics(stats)
+        _display_complexity_metrics(stats, galen_metrics=baseline_galen_metrics)
 
     if stats.complexity_delta:
         _display_complexity_delta(stats, baseline, assessment)
@@ -113,7 +193,9 @@ def _display_git_metrics(stats: SessionStatistics) -> None:
         console.print("[yellow]Has uncommitted changes at end[/yellow]")
 
 
-def _display_complexity_metrics(stats: SessionStatistics) -> None:
+def _display_complexity_metrics(
+    stats: SessionStatistics, galen_metrics: GalenMetrics | None = None
+) -> None:
     """Display complexity metrics section."""
     console.print("\n[bold]Complexity Metrics[/bold]")
 
@@ -137,6 +219,11 @@ def _display_complexity_metrics(stats: SessionStatistics) -> None:
     overview_table.add_row("[bold]Maintainability Index[/bold]", "")
     overview_table.add_row("  Total MI", f"{metrics.total_mi:.1f}")
     overview_table.add_row("  File average MI", f"{metrics.average_mi:.1f} (higher is better)")
+
+    overview_table.add_row("[bold]Token Usage[/bold]", "")
+    overview_table.add_row("  Total Tokens", _format_token_count(metrics.total_tokens))
+    overview_table.add_row("  Average Tokens", f"{metrics.average_tokens:.1f}")
+    overview_table.add_row("  Max Tokens", str(metrics.max_tokens))
 
     overview_table.add_row("[bold]Python Quality[/bold]", "")
     overview_table.add_row("  Type Hint Coverage", f"{metrics.type_hint_coverage:.1f}%")
@@ -189,7 +276,28 @@ def _display_complexity_metrics(stats: SessionStatistics) -> None:
     smell_color = "red" if metrics.nonempty_init_count > 0 else "green"
     overview_table.add_row("  Non-empty __init__", f"[{smell_color}]{metrics.nonempty_init_count}[/{smell_color}]")
 
+    smell_color = "red" if metrics.test_skip_count > 0 else "green"
+    overview_table.add_row("  Test Skips", f"[{smell_color}]{metrics.test_skip_count}[/{smell_color}]")
+
+    smell_color = "red" if metrics.swallowed_exception_count > 0 else "green"
+    overview_table.add_row(
+        "  Swallowed Exceptions", f"[{smell_color}]{metrics.swallowed_exception_count}[/{smell_color}]"
+    )
+
+    smell_color = "red" if metrics.type_ignore_count > 0 else "green"
+    overview_table.add_row("  Type Ignores", f"[{smell_color}]{metrics.type_ignore_count}[/{smell_color}]")
+
+    smell_color = "red" if metrics.dynamic_execution_count > 0 else "green"
+    overview_table.add_row("  Dynamic Execution", f"[{smell_color}]{metrics.dynamic_execution_count}[/{smell_color}]")
+
     console.print(overview_table)
+
+    # Display Galen Rate if available
+    if galen_metrics:
+        _display_galen_rate(galen_metrics)
+
+    # Display detailed code smells
+    _display_code_smells_detailed(metrics)
 
     if metrics.files_by_complexity:
         files_table = Table(title="Files by Complexity")
@@ -262,6 +370,14 @@ def _display_complexity_delta(
         "Maintainability (file avg)",
         f"[{mi_color}]{delta.avg_mi_change:+.2f}[/{mi_color}]",
         mi_baseline if has_baseline else None,
+    )
+
+    # Token Deltas
+    token_color = "red" if delta.total_tokens_change > 0 else "green" if delta.total_tokens_change < 0 else "yellow"
+    changes_table.add_row(
+        "Total Tokens",
+        f"[{token_color}]{delta.total_tokens_change:+d}[/{token_color}]",
+        "" if has_baseline else None,
     )
 
     file_color = "green" if delta.net_files_change < 0 else "red" if delta.net_files_change > 0 else "yellow"
@@ -340,6 +456,46 @@ def _format_token_count(tokens: int) -> str:
         return f"~{tokens}"
 
 
+def _display_galen_rate(galen_metrics: GalenMetrics, title: str = "Galen Rate") -> None:
+    """Display Galen Rate metrics with color coding.
+
+    1 Galen = 1 million code tokens per developer per month.
+    Based on Microsoft's C++ to Rust migration productivity benchmark.
+
+    Color scheme:
+      - >= 1.0 Galens: green (on track or ahead)
+      - 0.5 - 1.0 Galens: yellow (making progress)
+      - < 0.5 Galens: red (falling behind)
+    """
+    console.print(f"\n[bold]{title}:[/bold]")
+    galen_table = Table(show_header=True)
+    galen_table.add_column("Metric", style="cyan")
+    galen_table.add_column("Value", justify="right")
+
+    # Token delta (can be negative if removing code)
+    sign = "+" if galen_metrics.tokens_changed >= 0 else ""
+    galen_table.add_row("Token Delta", f"{sign}{galen_metrics.tokens_changed:,}")
+
+    # Analysis period
+    if galen_metrics.period_days >= 1:
+        galen_table.add_row("Analysis Period", f"{galen_metrics.period_days:.1f} days")
+    else:
+        hours = galen_metrics.period_days * 24
+        galen_table.add_row("Analysis Period", f"{hours:.1f} hours")
+
+    # Galen Rate with color
+    rate = galen_metrics.galen_rate
+    rate_color = "green" if rate >= 1.0 else "yellow" if rate >= 0.5 else "red"
+    galen_table.add_row("Galen Rate", f"[{rate_color}]{rate:.2f} Galens[/{rate_color}]")
+
+    # Tokens needed per day (only if below 1 Galen)
+    if galen_metrics.tokens_per_day_to_reach_one_galen is not None:
+        needed = galen_metrics.tokens_per_day_to_reach_one_galen
+        galen_table.add_row("Tokens/day to 1 Galen", f"[yellow]+{needed:,.0f}/day needed[/yellow]")
+
+    console.print(galen_table)
+
+
 def _display_work_summary(evolution: PlanEvolution) -> None:
     """Display compact work summary with task completion and work style."""
     console.print(
@@ -399,10 +555,8 @@ def _display_context_coverage(coverage: ContextCoverage) -> None:
 
     if coverage.blind_spots:
         console.print(f"\n[yellow]Potential blind spots ({len(coverage.blind_spots)} files):[/yellow]")
-        for blind_spot in coverage.blind_spots[:5]:
+        for blind_spot in coverage.blind_spots:
             console.print(f"  • {blind_spot}")
-        if len(coverage.blind_spots) > 5:
-            console.print(f"  ... and {len(coverage.blind_spots) - 5} more")
 
 
 def _format_coverage_ratio(read: int, total: int) -> str:
@@ -733,19 +887,36 @@ def _get_impact_color(category: ImpactCategory) -> str:
 def display_current_impact_analysis(analysis: CurrentChangesAnalysis) -> None:
     """Display uncommitted changes impact analysis with Rich formatting."""
     console.print("\n[bold]Uncommitted Changes Impact Analysis[/bold]")
+
     console.print(f"Repository: {analysis.repository_path}")
 
-    console.print(f"\n[bold]Changed Files ({len(analysis.changed_files)}):[/bold]")
-    for f in analysis.changed_files[:5]:
-        console.print(f"  [dim]- {f}[/dim]")
-    if len(analysis.changed_files) > 5:
-        console.print(f"  [dim]... and {len(analysis.changed_files) - 5} more[/dim]")
+    # Dropped list of changed files as requested by user to reduce noise
 
     display_baseline_comparison(
         baseline=analysis.baseline,
         assessment=analysis.assessment,
         title="Uncommitted Changes Impact",
     )
+
+    console.print("\n[bold]Token Impact:[/bold]")
+    token_table = Table(show_header=True)
+    token_table.add_column("Metric", style="cyan")
+    token_table.add_column("Value", justify="right")
+
+    # Calculate delta for just the uncommitted changes if needed, but delta is in the baseline comparison table usually?
+    # No, baseline comparison table shows complexity/effort/MI deltas.
+    # We want to show raw token counts here as well.
+
+    token_table.add_row("Tokens in Edited Files", _format_token_count(analysis.changed_files_tokens))
+    token_table.add_row("Tokens in Blind Spots", _format_token_count(analysis.blind_spot_tokens))
+    token_table.add_row(
+        "Complete Picture Context Size", f"[bold]{_format_token_count(analysis.complete_picture_context_size)}[/bold]"
+    )
+    console.print(token_table)
+
+    # Display Galen Rate metrics
+    if analysis.galen_metrics:
+        _display_galen_rate(analysis.galen_metrics)
 
     console.print("\n[bold]Current Code Quality:[/bold]")
     quality_table = Table(show_header=True)
@@ -780,25 +951,113 @@ def display_current_impact_analysis(analysis: CurrentChangesAnalysis) -> None:
     dep_style = "red" if metrics.deprecation_count > 0 else "green"
     quality_table.add_row("Deprecations", f"[{dep_style}]{metrics.deprecation_count}[/{dep_style}]")
 
-    smell_color = "red" if metrics.orphan_comment_count > 0 else "green"
-    quality_table.add_row("Orphan Comments", f"[{smell_color}]{metrics.orphan_comment_count}[/{smell_color}]")
-
-    smell_color = "red" if metrics.untracked_todo_count > 0 else "green"
-    quality_table.add_row("Untracked TODOs", f"[{smell_color}]{metrics.untracked_todo_count}[/{smell_color}]")
-
-    smell_color = "red" if metrics.inline_import_count > 0 else "green"
-    quality_table.add_row("Inline Imports", f"[{smell_color}]{metrics.inline_import_count}[/{smell_color}]")
-
-    smell_color = "red" if metrics.dict_get_with_default_count > 0 else "green"
-    quality_table.add_row(".get() w/ Defaults", f"[{smell_color}]{metrics.dict_get_with_default_count}[/{smell_color}]")
-
-    smell_color = "red" if metrics.hasattr_getattr_count > 0 else "green"
-    quality_table.add_row("hasattr/getattr", f"[{smell_color}]{metrics.hasattr_getattr_count}[/{smell_color}]")
-
-    smell_color = "red" if metrics.nonempty_init_count > 0 else "green"
-    quality_table.add_row("Non-empty __init__", f"[{smell_color}]{metrics.nonempty_init_count}[/{smell_color}]")
-
     console.print(quality_table)
+
+    # Coverage for Edited Files
+    if analysis.filtered_coverage:
+        console.print("\n[bold]Code Coverage for Edited Files:[/bold]")
+        cov_table = Table(show_header=True)
+        cov_table.add_column("File", style="cyan")
+        cov_table.add_column("Coverage", justify="right")
+
+        for fname in sorted(analysis.filtered_coverage.keys()):
+            pct = analysis.filtered_coverage[fname]
+            color = "green" if pct >= 80 else "yellow" if pct >= 50 else "red"
+            cov_table.add_row(fname, f"[{color}]{pct:.1f}%[/{color}]")
+        console.print(cov_table)
+
+    if analysis.blind_spots:
+        console.print(f"\n[yellow]Potential blind spots ({len(analysis.blind_spots)} files):[/yellow]")
+        # Show all blind spots as requested
+        for blind_spot in analysis.blind_spots:
+            console.print(f"  • {blind_spot}")
+
+    # Display detailed code smells for changed files only
+    filter_set = set(analysis.changed_files) if analysis.changed_files else None
+    _display_code_smells_detailed(metrics, filter_files=filter_set)
+
+
+def _display_code_smells_detailed(metrics, filter_files: set[str] | None = None) -> None:
+    """Display a detailed table of code smells with complete file lists.
+
+    Args:
+        metrics: The metrics object containing code smell data.
+        filter_files: Optional set of file paths (relative). If provided, only
+                     code smells in these files will be displayed.
+    """
+
+    # helper to filter and check if we have smells
+    def get_filtered_files(files: list[str]) -> list[str]:
+        if not filter_files:
+            return files
+        return [f for f in files if f in filter_files]
+
+    # Check if we have any smells to display after filtering
+    has_smells = False
+
+    # We need to compute filtered lists first to know if we should show the table
+    orphan_files = get_filtered_files(metrics.orphan_comment_files)
+    todo_files = get_filtered_files(metrics.untracked_todo_files)
+    import_files = get_filtered_files(metrics.inline_import_files)
+    get_files = get_filtered_files(metrics.dict_get_with_default_files)
+    getattr_files = get_filtered_files(metrics.hasattr_getattr_files)
+    init_files = get_filtered_files(metrics.nonempty_init_files)
+    test_skip_files = get_filtered_files(metrics.test_skip_files)
+    swallowed_exception_files = get_filtered_files(metrics.swallowed_exception_files)
+    type_ignore_files = get_filtered_files(metrics.type_ignore_files)
+    dynamic_execution_files = get_filtered_files(metrics.dynamic_execution_files)
+
+    if (
+        orphan_files
+        or todo_files
+        or import_files
+        or get_files
+        or getattr_files
+        or init_files
+        or test_skip_files
+        or swallowed_exception_files
+        or type_ignore_files
+        or dynamic_execution_files
+    ):
+        has_smells = True
+
+    if not has_smells:
+        return
+
+    console.print("\n[bold]Code Smells Details:[/bold]")
+    if filter_files:
+        console.print("[dim]Showing smells for changed files only[/dim]")
+
+    table = Table(show_header=True, show_lines=True)
+    table.add_column("Smell Type", style="cyan", width=20)
+    table.add_column("Count", justify="right", width=8)
+    table.add_column("Affected Files", style="dim")
+
+    def add_smell_row(label: str, files: list[str]) -> None:
+        count = len(files)
+        if count == 0:
+            return
+
+        color = "red"
+        count_str = f"[{color}]{count}[/{color}]"
+
+        # Sort files for consistent display
+        files_display = "\n".join(sorted(files))
+
+        table.add_row(label, count_str, files_display)
+
+    add_smell_row("Orphan Comments", orphan_files)
+    add_smell_row("Untracked TODOs", todo_files)
+    add_smell_row("Inline Imports", import_files)
+    add_smell_row(".get() w/ Defaults", get_files)
+    add_smell_row("hasattr/getattr", getattr_files)
+    add_smell_row("Non-empty __init__", init_files)
+    add_smell_row("Test Skips", test_skip_files)
+    add_smell_row("Swallowed Exceptions", swallowed_exception_files)
+    add_smell_row("Type Ignores", type_ignore_files)
+    add_smell_row("Dynamic Execution", dynamic_execution_files)
+
+    console.print(table)
 
 
 def display_baseline_comparison(
