@@ -1541,7 +1541,8 @@ class EventDatabase:
                        cc_delta_mean, cc_delta_std, cc_delta_median, cc_delta_min, cc_delta_max, cc_delta_trend,
                        effort_delta_mean, effort_delta_std, effort_delta_median, effort_delta_min, effort_delta_max, effort_delta_trend,
                        mi_delta_mean, mi_delta_std, mi_delta_median, mi_delta_min, mi_delta_max, mi_delta_trend,
-                       current_metrics_json
+                       current_metrics_json,
+                       oldest_commit_date, newest_commit_date, oldest_commit_tokens
                 FROM repo_baselines
                 WHERE repository_path = ? AND head_commit_sha = ?
                 """,
@@ -1587,6 +1588,9 @@ class EventDatabase:
                     trend_coefficient=row[21],
                 ),
                 current_metrics=ExtendedComplexityMetrics.model_validate_json(row[22]),
+                oldest_commit_date=datetime.fromisoformat(row[23]) if row[23] else None,
+                newest_commit_date=datetime.fromisoformat(row[24]) if row[24] else None,
+                oldest_commit_tokens=row[25],
             )
 
     def save_baseline(self, baseline: RepoBaseline) -> None:
@@ -1599,8 +1603,9 @@ class EventDatabase:
                     cc_delta_mean, cc_delta_std, cc_delta_median, cc_delta_min, cc_delta_max, cc_delta_trend,
                     effort_delta_mean, effort_delta_std, effort_delta_median, effort_delta_min, effort_delta_max, effort_delta_trend,
                     mi_delta_mean, mi_delta_std, mi_delta_median, mi_delta_min, mi_delta_max, mi_delta_trend,
-                    current_metrics_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    current_metrics_json,
+                    oldest_commit_date, newest_commit_date, oldest_commit_tokens
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     baseline.repository_path,
@@ -1626,6 +1631,9 @@ class EventDatabase:
                     baseline.mi_delta_stats.max_value,
                     baseline.mi_delta_stats.trend_coefficient,
                     baseline.current_metrics.model_dump_json(),
+                    baseline.oldest_commit_date.isoformat() if baseline.oldest_commit_date else None,
+                    baseline.newest_commit_date.isoformat() if baseline.newest_commit_date else None,
+                    baseline.oldest_commit_tokens,
                 ),
             )
             conn.commit()

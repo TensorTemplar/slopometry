@@ -654,6 +654,56 @@ class HistoricalMetricStats(BaseModel):
         default=0.0, description="Linear regression slope indicating improvement/degradation trend"
     )
 
+GALEN_TOKENS_PER_MONTH = 1_000_000
+GALEN_TOKENS_PER_DAY = GALEN_TOKENS_PER_MONTH / 30  # ~33,333 tokens/day
+
+
+class GalenMetrics(BaseModel):
+    """Developer productivity metrics based on code token throughput.
+
+    Named after Galen Hunt at Microsoft, who calculated that rewriting C++ to Rust
+    requires approximately 1 million tokens per developer per month.
+
+    1 Galen = 1 million code tokens per developer per month.
+    Based on Microsoft's calculation for C++ to Rust migration effort.
+    """
+
+    tokens_changed: int = Field(description="Net tokens changed during the period")
+    period_days: float = Field(description="Duration of the analysis period in days")
+    tokens_per_day: float = Field(description="Average tokens changed per day")
+    galen_rate: float = Field(description="Productivity rate (1.0 = on track for 1M tokens/month)")
+    tokens_per_day_to_reach_one_galen: float | None = Field(
+        default=None,
+        description="Additional tokens/day needed to reach 1 Galen (None if already >= 1 Galen)",
+    )
+
+    @classmethod
+    def calculate(cls, tokens_changed: int, period_days: float) -> "GalenMetrics":
+        """Calculate Galen metrics from token change and time period."""
+        if period_days <= 0:
+            return cls(
+                tokens_changed=tokens_changed,
+                period_days=0.0,
+                tokens_per_day=0.0,
+                galen_rate=0.0,
+                tokens_per_day_to_reach_one_galen=GALEN_TOKENS_PER_DAY,
+            )
+
+        tokens_per_day = abs(tokens_changed) / period_days
+        galen_rate = tokens_per_day / GALEN_TOKENS_PER_DAY
+
+        tokens_needed = None
+        if galen_rate < 1.0:
+            tokens_needed = GALEN_TOKENS_PER_DAY - tokens_per_day
+
+        return cls(
+            tokens_changed=tokens_changed,
+            period_days=period_days,
+            tokens_per_day=tokens_per_day,
+            galen_rate=galen_rate,
+            tokens_per_day_to_reach_one_galen=tokens_needed,
+        )
+
 
 class RepoBaseline(BaseModel):
     """Baseline statistics computed from entire repository history."""
@@ -668,6 +718,17 @@ class RepoBaseline(BaseModel):
     mi_delta_stats: HistoricalMetricStats = Field(description="Maintainability index delta statistics")
 
     current_metrics: ExtendedComplexityMetrics = Field(description="Metrics at HEAD commit")
+
+    # Date range and token metrics for Galen Rate calculation
+    oldest_commit_date: datetime | None = Field(
+        default=None, description="Timestamp of the oldest commit in the analysis"
+    )
+    newest_commit_date: datetime | None = Field(
+        default=None, description="Timestamp of the newest commit in the analysis"
+    )
+    oldest_commit_tokens: int | None = Field(
+        default=None, description="Total tokens in codebase at oldest analyzed commit"
+    )
 
 
 class ImpactAssessment(BaseModel):
@@ -726,6 +787,10 @@ class CurrentChangesAnalysis(BaseModel):
     blind_spot_tokens: int = Field(default=0, description="Total tokens in blind spot files")
     changed_files_tokens: int = Field(default=0, description="Total tokens in changed files")
     complete_picture_context_size: int = Field(default=0, description="Sum of tokens in changed files + blind spots")
+
+    galen_metrics: GalenMetrics | None = Field(
+        default=None, description="Developer productivity metrics based on token throughput"
+    )
 
 
 class FileCoverageStatus(BaseModel):

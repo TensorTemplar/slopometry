@@ -170,6 +170,40 @@ class Migration004AddCalculatorVersion(Migration):
         # Cache manager enforces version validation in code instead.
 
 
+class Migration005AddGalenRateColumns(Migration):
+    """Add Galen Rate columns to repo_baselines for token productivity tracking."""
+
+    @property
+    def version(self) -> str:
+        return "005"
+
+    @property
+    def description(self) -> str:
+        return "Add oldest_commit_date, newest_commit_date, oldest_commit_tokens to repo_baselines"
+
+    def up(self, conn: sqlite3.Connection) -> None:
+        """Add Galen Rate columns to repo_baselines."""
+        # Check if table exists first (it's created by EventDatabase, not migrations)
+        cursor = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='repo_baselines'"
+        )
+        if not cursor.fetchone():
+            return  # Table doesn't exist yet, skip migration
+
+        columns = [
+            ("oldest_commit_date", "TEXT"),
+            ("newest_commit_date", "TEXT"),
+            ("oldest_commit_tokens", "INTEGER"),
+        ]
+
+        for column_name, column_type in columns:
+            try:
+                conn.execute(f"ALTER TABLE repo_baselines ADD COLUMN {column_name} {column_type}")
+            except sqlite3.OperationalError as e:
+                if "duplicate column name" not in str(e).lower():
+                    raise
+
+
 class MigrationRunner:
     """Manages database migrations."""
 
@@ -180,6 +214,7 @@ class MigrationRunner:
             Migration002AddCodeQualityCache(),
             Migration003AddWorkingTreeHash(),
             Migration004AddCalculatorVersion(),
+            Migration005AddGalenRateColumns(),
         ]
 
     @contextmanager

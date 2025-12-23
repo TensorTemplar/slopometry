@@ -8,6 +8,7 @@ from slopometry.core.complexity_analyzer import ComplexityAnalyzer
 from slopometry.core.models import (
     ComplexityDelta,
     CurrentChangesAnalysis,
+    GalenMetrics,
     RepoBaseline,
 )
 from slopometry.core.working_tree_extractor import WorkingTreeExtractor
@@ -102,6 +103,9 @@ class CurrentImpactService:
 
         complete_picture_context_size = changed_files_tokens + blind_spot_tokens
 
+        # Calculate Galen metrics based on commit history token growth
+        galen_metrics = self._calculate_galen_metrics(baseline, current_metrics)
+
         return CurrentChangesAnalysis(
             repository_path=str(repo_path),
             analysis_timestamp=datetime.now(),
@@ -115,7 +119,36 @@ class CurrentImpactService:
             blind_spot_tokens=blind_spot_tokens,
             changed_files_tokens=changed_files_tokens,
             complete_picture_context_size=complete_picture_context_size,
+            galen_metrics=galen_metrics,
         )
+
+    def _calculate_galen_metrics(
+        self,
+        baseline: RepoBaseline,
+        current_metrics,
+    ) -> GalenMetrics | None:
+        """Calculate Galen productivity metrics from commit history token growth.
+
+        Uses the baseline's commit date range and oldest commit token count
+        to calculate the token productivity rate (Galen Rate).
+
+        Galen Rate = (current_tokens - oldest_commit_tokens) / period_days / GALEN_TOKENS_PER_DAY
+        """
+        if not baseline.oldest_commit_date or not baseline.newest_commit_date:
+            return None
+
+        if baseline.oldest_commit_tokens is None:
+            return None
+
+        time_delta = baseline.newest_commit_date - baseline.oldest_commit_date
+        period_days = time_delta.total_seconds() / 86400
+
+        if period_days <= 0:
+            return None
+
+        tokens_changed = current_metrics.total_tokens - baseline.oldest_commit_tokens
+
+        return GalenMetrics.calculate(tokens_changed=tokens_changed, period_days=period_days)
 
     def _compute_delta(
         self,

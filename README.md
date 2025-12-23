@@ -5,7 +5,7 @@ A tool that lurks in the shadows, tracks and analyzes Claude Code sessions provi
 ![slopometry-logo](assets/slopometry-logo.jpg)  
 
 
-## Customer testimonials
+# Customer testimonials
 
 ### Claude Sonnet 4
 ![claude sonnet feedback](assets/sonnet.png)  
@@ -25,7 +25,70 @@ A tool that lurks in the shadows, tracks and analyzes Claude Code sessions provi
 *"Let's slop up all the things."*
 — sherbie, opinionated SDET
 
-## Installation
+# Features
+
+**NEWS:** 
+
+**December 2025: for microsoft employees we now support the Galen metric (Python only for now).**
+
+Set `SLOPOMETRY_ENABLE_WORKING_AT_MICROSOFT=true slopometry latest` or edit your .env to get encouraging messages approved by HR!
+
+Please stop contacting us with your cries for mercy - this is between you and your unsafe (memory) management.  
+
+![galen rate](assets/galen_rate.png)
+
+![galen details](assets/galen_details.png)  
+
+
+### Eyeball progress based on overall session-vibes
+
+```bash
+slopometry latest
+```
+<details>
+
+Will show some metrics since the session start of the newest `claude code` session
+
+![session statistics](assets/session-stat.png)  
+
+![complexity metrics (CC)](assets/cc.png)  
+
+
+### Dumb practices are now explicit and quantifiable!
+
+![code_smells1](assets/code_smells1.png)
+
+![code_smells2](assets/code_smells2.png)
+
+### Measure your negative improvement since session start*!
+
+![session_delta](assets/session_delta.png)
+
+*just got lucky here, plz ignore
+
+### Measure agent blind spots when vibe editing files before reading!
+
+![blind_spots](assets/blind_spots.png)
+
+
+### Preserve incriminating evidence!
+
+![evidence](assets/evidence.png)
+**legal disclaimer**: transcripts are totally not for any kind of distillation, but merley for personal entertainment purposes
+
+Any many more undocumented features. Which worked just fine on my machine at some point!
+
+</details>
+
+# Limitations
+
+Runtime: Almost all metrics are trend-relative and the first run will do a long code analysis before caching, but if you consider using this tool, you are comfortable with waiting for agents anyway.
+
+Compat: This software was tested mainly on Linux with Python codebases. There are plans to support Rust at some point but not any kind of cursed C++ or other unserious languages like that. I heard someone ran it on MacOS successful once but we met the person on twitter, so YMMV.
+
+Seriously, please do not open PRs with support for any kind of unserious languages. Just fork and pretend you made it. We are ok with that. Thank you.
+
+# Installation
 
 Both Anthropic models and MiniMax-M2 are fully supported as the `claude code` drivers.  
 To setup MiniMax-M2 instead of Sonnet, check out [this guide](https://platform.minimax.io/docs/guides/text-ai-coding-tools)
@@ -71,10 +134,13 @@ claude
 
 # View tracked sessions and code delta vs. the previous commit or branch parent
 slopometry solo ls
-slopometry solo show <session_id>
+slopometry solo show <session_id> 
 
 # Alias for latest session, same as solo show <session_id>
 slopometry latest
+
+# Analyze the last 100 commits for trend analysis caching vs. current changes (can take a while)
+slopometry summoner current-impact
 
 # Save session artifacts (transcript, plans, todos) to .slopometry/<session_id>/
 slopometry solo save-transcript  # latest
@@ -114,13 +180,13 @@ uv tool install git+https://github.com/TensorTemplar/slopometry.git
 cd slopometry
 git pull
 uv tool uninstall slopometry
-uv tool install .  --refresh
+uv tool install . --reinstall
 
 # Note: After upgrading, you may need to reinstall hooks if the default config changed
 slopometry install
 ```
 
-## Configuration
+# Configuration
 
 Slopometry can be configured using environment variables or a `.env` file:
 
@@ -144,88 +210,6 @@ curl -o ~/.config/slopometry/.env https://raw.githubusercontent.com/TensorTempla
 # Edit ~/.config/slopometry/.env with your preferences
 ```
 
-## Features
-
-### Amplify your vibe coding session with some useful metrics
-
-```bash
-slopometry latest
-```
-<details>
-Will show some metrics since the session start of the newest `claude code` session
-
-![session statistics](assets/session-stat.png)  
-
-![complexity metrics (CC)](assets/cc.png)  
-
-![plan evolution](assets/plan-evolution.png)  
-
-</details>
-
-## Here be powerusers
-
-### Use Agents to create user-stories for full-rewrites from existing features
-
-1. configure a openai-compatible llm gateway or your life will be hard (litellm works)
-
-<details>
-set llm values in .env
-
-```bash
-SLOPOMETRY_USER_STORY_AGENTS=["o3", "claude-opus-4", "gemini-2.5-pro"]
-SLOPOMETRY_LLM_PROXY_URL=http://proxy-url
-SLOPOMETRY_LLM_PROXY_API_KEY=sk-whatever
-```
-</details>
-
-2. chose how many commits back you want to go, ideally you should go back to a clean, atomic feature boundary
-
-```bash
-slopometry summoner userstorify --base-commit HEAD~2 --head-commit HEAD
-```
-
-If the vibes are not good update your `.env` with `SLOPOMETRY_INTERACTIVE_RATING_ENABLED=True`
-Otherwise ratings are hardcoded to 3/5
-
-![userstorify](assets/userstorify.png)
-
-3. Analyze the same commit range for a future baseline
-
-![analyze-commits](assets/analyze-commits.png)
-
-NOTE: these are all saved to a local sqlite and can be exported later
-
-### Dataset Collection & Export
-
-Slopometry will automatically store stats, git diffs and AI-generated user stories as training data locally,
-but you can also export it to parquet or huggingface for future training or sharing.
-
-HF uploads are auto-tagged with `slopometry` and the type of dataset, e.g. `userstorify` or `analyze-commits`
-
-<details>
-```bash
-# Generate user stories using multiple AI models (o3, claude-opus-4, gemini-2.5-pro) - requires extra settings
-slopometry summoner userstorify --base-commit HEAD~5 --head-commit HEAD
-
-# View collected data
-slopometry summoner dataset-stats
-slopometry summoner dataset-entries --limit 10
-
-# Export to Parquet format
-slopometry summoner dataset-export --output my_dataset.parquet
-
-# Export and upload to Hugging Face
-slopometry summoner dataset-export --upload-to-hf --hf-repo username/dataset-name
-```
-
-**Configuration for dataset features:**
-- `SLOPOMETRY_INTERACTIVE_RATING_ENABLED=true` - Enable human rating of generated user stories
-- `SLOPOMETRY_HF_TOKEN=your_token` - Hugging Face API token for uploads
-- `SLOPOMETRY_HF_DEFAULT_REPO=username/repo-name` - Default HF repository
-- `SLOPOMETRY_LLM_PROXY_URL=http://localhost:8000` - LLM gateway URL
-- `SLOPOMETRY_LLM_PROXY_API_KEY=your_key` - LLM gateway API key
-
-</details>
 
 ### Development Installation
 
@@ -233,38 +217,8 @@ slopometry summoner dataset-export --upload-to-hf --hf-repo username/dataset-nam
 git clone https://github.com/TensorTemplar/slopometry
 cd slopometry
 uv sync --extra dev
+uv run pytest
 ```
-
-### Installation Management
-- `slopometry install [--global|--local]` - Install tracking hooks
-- `slopometry uninstall [--global|--local]` - Remove tracking hooks
-- `slopometry status` - Check installation status
-
-### Session Analysis  
-- `slopometry solo ls [--limit N]` - List recent sessions
-- `slopometry solo show <session-id>` - Show detailed session statistics
-- `slopometry latest` - Show latest session statistics
-- `slopometry solo save-transcript [session-id]` - Save Claude Code transcript to .slopometry/ directory and git add it (defaults to latest session)
-- `slopometry solo migrations` - Show database migration status
-
-### Dataset Generation & Export
-- `slopometry summoner userstorify [--base-commit] [--head-commit]` - Generate user stories using multiple AI models
-- `slopometry summoner dataset-entries [--limit N]` - View recent dataset entries
-- `slopometry summoner dataset-stats` - Show dataset statistics
-- `slopometry summoner dataset-export [--output] [--upload-to-hf] [--hf-repo]` - Export to Parquet and optionally upload to Hugging Face
-
-### Experiment & Analysis
-- `slopometry summoner analyze-commits [--base-commit] [--head-commit]` - Analyze complexity evolution
-- `slopometry summoner run-experiments [--commits N] [--max-workers N]` - Run parallel experiments
-- `slopometry summoner list-features [--limit N]` - List detected feature boundaries from merge commits
-
-### Complexity Analysis Configuration
-Configure complexity analysis via environment variables:
-- `SLOPOMETRY_ENABLE_COMPLEXITY_ANALYSIS=true` - Collect complexity metrics (default: `true`)
-- `SLOPOMETRY_ENABLE_COMPLEXITY_FEEDBACK=false` - Provide feedback to Claude (default: `false`)
-
-Recommended: Keep analysis enabled for data collection, disable feedback for uninterrupted workflow.
-
 
 Customize via `.env` file or environment variables:
 
@@ -278,19 +232,23 @@ Customize via `.env` file or environment variables:
 - `SLOPOMETRY_ENABLE_COMPLEXITY_ANALYSIS`: Collect complexity metrics (default: `true`)
 - `SLOPOMETRY_ENABLE_COMPLEXITY_FEEDBACK`: Provide feedback to Claude (default: `false`)
 
-## Architecture
+# Cite
 
-- `models.py`: Pydantic models for events and statistics
-- `database.py`: SQLite storage with session management
-- `hook_handler.py`: Script invoked by Claude Code for each hook event
-- `cli.py`: Click-based CLI interface with install/uninstall commands
-- `settings.py`: Configuration management with uv compatibility
+```
+@misc{slopometry,
+  title = {Slopometry: Opinionated code quality metrics for code agents and humans},
+  year = {2025},
+  author = {TensorTemplar},
+  publisher = {GitHub},
+  howpublished = {\url{https://github.com/TensorTemplar/slopometry}}
+}
+```
 
-## Roadmap
+# Roadmap
 
 [x] - Actually make a package so people can install this   
 [ ] - Add hindsight-justified user stories with acceptance criteria based off of future commits  
 [x] - Add plan evolution log based on claude's todo shenenigans   
-[ ] - Use [NFP-CLI](https://tensortemplar.substack.com/p/humans-are-no-longer-embodied-amortization) (TM) training objective over plans with complexity metrics informing a process reward, while doing huge subtree rollouts just to win an argument on the internet  
-[ ] - Add LLM-as-judge feedback over style guide as policy  
+[ ] - Finish git worktree-based [NFP-CLI](https://tensortemplar.substack.com/p/humans-are-no-longer-embodied-amortization) (TM) training objective implementation so complexity metrics can be used as additional process reward for training code agents
+[ ] - Extend stop hook feedback with LLM-as-Judge to support guiding agents based on smells and style guide  
 [ ] - Not go bankrupt from having to maintain open source in my free time, no wait...

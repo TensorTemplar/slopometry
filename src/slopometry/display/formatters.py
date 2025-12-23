@@ -6,6 +6,7 @@ from rich.table import Table
 from slopometry.core.models import (
     ContextCoverage,
     CurrentChangesAnalysis,
+    GalenMetrics,
     ImpactAssessment,
     ImpactCategory,
     PlanEvolution,
@@ -15,6 +16,75 @@ from slopometry.core.models import (
 )
 
 console = Console()
+
+
+def _calculate_galen_metrics_from_baseline(
+    baseline: RepoBaseline | None, current_tokens: int | None
+) -> GalenMetrics | None:
+    """Calculate Galen metrics from commit history token growth.
+
+    Uses the baseline's commit date range and oldest commit token count
+    to calculate productivity over the analyzed commit period.
+    """
+    if baseline is None:
+        return None
+
+    if not baseline.oldest_commit_date or not baseline.newest_commit_date:
+        return None
+
+    if baseline.oldest_commit_tokens is None or current_tokens is None:
+        return None
+
+    time_delta = baseline.newest_commit_date - baseline.oldest_commit_date
+    period_days = time_delta.total_seconds() / 86400
+
+    if period_days <= 0:
+        return None
+
+    tokens_changed = current_tokens - baseline.oldest_commit_tokens
+
+    return GalenMetrics.calculate(tokens_changed=tokens_changed, period_days=period_days)
+
+
+def _display_microsoft_ngmi_alert(galen_metrics: GalenMetrics) -> None:
+    """Display the Microsoft NGMI alert header when below 1 Galen productivity.
+
+    Shows a prominent alert with the Galen Rate and whether the developer is
+    on track to hit 1 Galen (1M tokens/month) by end of month.
+    """
+    from datetime import datetime
+
+    rate = galen_metrics.galen_rate
+    rate_color = "green" if rate >= 1.0 else "yellow" if rate >= 0.5 else "red"
+
+    now = datetime.now()
+    days_remaining = 30 - now.day
+
+    tokens_per_day = galen_metrics.tokens_per_day
+    projected_monthly = tokens_per_day * 30
+
+    console.print()
+    console.print("[bold]" + "=" * 60 + "[/bold]")
+
+    if rate >= 1.0:
+        console.print(f"[green bold]GALEN RATE: {rate:.2f} Galens - You're on track![/green bold]")
+        console.print(f"[green]Projected: ~{projected_monthly/1_000_000:.2f}M tokens/month[/green]")
+    else:
+        tokens_needed = galen_metrics.tokens_per_day_to_reach_one_galen or 0
+        console.print(f"[{rate_color} bold]GALEN RATE: {rate:.2f} Galens[/{rate_color} bold]")
+        console.print(f"[yellow]Need +{tokens_needed:,.0f} tokens/day to hit 1 Galen[/yellow]")
+
+        # Check if NGMI
+        if days_remaining > 0:
+            tokens_still_needed = 1_000_000 - (projected_monthly * (now.day / 30))
+            if tokens_still_needed > tokens_per_day * days_remaining:
+                console.print("[red bold]You're NGMI![/red bold]")
+            else:
+                console.print(f"[yellow]{days_remaining} days left this month - pick up the pace![/yellow]")
+        else:
+            console.print("[red bold]Month is over - you're NGMI![/red bold]")
+
+    console.print("[bold]" + "=" * 60 + "[/bold]")
 
 
 def display_session_summary(
@@ -31,6 +101,16 @@ def display_session_summary(
         baseline: Optional repository baseline for comparison
         assessment: Optional impact assessment computed from baseline
     """
+    # Calculate Galen metrics from commit history (not session duration)
+    current_tokens = stats.complexity_metrics.total_tokens if stats.complexity_metrics else None
+    baseline_galen_metrics = _calculate_galen_metrics_from_baseline(baseline, current_tokens)
+
+    # Show Microsoft NGMI alert if feature flag is enabled
+    from slopometry.core.settings import settings
+
+    if settings.enable_working_at_microsoft and baseline_galen_metrics:
+        _display_microsoft_ngmi_alert(baseline_galen_metrics)
+
     console.print(f"\n[bold]Session Statistics: {session_id}[/bold]")
     console.print(f"Start: {stats.start_time.strftime('%Y-%m-%d %H:%M:%S')}")
 
@@ -62,7 +142,7 @@ def display_session_summary(
         _display_git_metrics(stats)
 
     if stats.complexity_metrics and stats.complexity_metrics.total_files_analyzed > 0:
-        _display_complexity_metrics(stats)
+        _display_complexity_metrics(stats, galen_metrics=baseline_galen_metrics)
 
     if stats.complexity_delta:
         _display_complexity_delta(stats, baseline, assessment)
@@ -113,7 +193,9 @@ def _display_git_metrics(stats: SessionStatistics) -> None:
         console.print("[yellow]Has uncommitted changes at end[/yellow]")
 
 
-def _display_complexity_metrics(stats: SessionStatistics) -> None:
+def _display_complexity_metrics(
+    stats: SessionStatistics, galen_metrics: GalenMetrics | None = None
+) -> None:
     """Display complexity metrics section."""
     console.print("\n[bold]Complexity Metrics[/bold]")
 
@@ -209,6 +291,10 @@ def _display_complexity_metrics(stats: SessionStatistics) -> None:
     overview_table.add_row("  Dynamic Execution", f"[{smell_color}]{metrics.dynamic_execution_count}[/{smell_color}]")
 
     console.print(overview_table)
+
+    # Display Galen Rate if available
+    if galen_metrics:
+        _display_galen_rate(galen_metrics)
 
     # Display detailed code smells
     _display_code_smells_detailed(metrics)
@@ -368,6 +454,46 @@ def _format_token_count(tokens: int) -> str:
         return f"~{tokens / 1_000:.0f}K"
     else:
         return f"~{tokens}"
+
+
+def _display_galen_rate(galen_metrics: GalenMetrics, title: str = "Galen Rate") -> None:
+    """Display Galen Rate metrics with color coding.
+
+    1 Galen = 1 million code tokens per developer per month.
+    Based on Microsoft's C++ to Rust migration productivity benchmark.
+
+    Color scheme:
+      - >= 1.0 Galens: green (on track or ahead)
+      - 0.5 - 1.0 Galens: yellow (making progress)
+      - < 0.5 Galens: red (falling behind)
+    """
+    console.print(f"\n[bold]{title}:[/bold]")
+    galen_table = Table(show_header=True)
+    galen_table.add_column("Metric", style="cyan")
+    galen_table.add_column("Value", justify="right")
+
+    # Token delta (can be negative if removing code)
+    sign = "+" if galen_metrics.tokens_changed >= 0 else ""
+    galen_table.add_row("Token Delta", f"{sign}{galen_metrics.tokens_changed:,}")
+
+    # Analysis period
+    if galen_metrics.period_days >= 1:
+        galen_table.add_row("Analysis Period", f"{galen_metrics.period_days:.1f} days")
+    else:
+        hours = galen_metrics.period_days * 24
+        galen_table.add_row("Analysis Period", f"{hours:.1f} hours")
+
+    # Galen Rate with color
+    rate = galen_metrics.galen_rate
+    rate_color = "green" if rate >= 1.0 else "yellow" if rate >= 0.5 else "red"
+    galen_table.add_row("Galen Rate", f"[{rate_color}]{rate:.2f} Galens[/{rate_color}]")
+
+    # Tokens needed per day (only if below 1 Galen)
+    if galen_metrics.tokens_per_day_to_reach_one_galen is not None:
+        needed = galen_metrics.tokens_per_day_to_reach_one_galen
+        galen_table.add_row("Tokens/day to 1 Galen", f"[yellow]+{needed:,.0f}/day needed[/yellow]")
+
+    console.print(galen_table)
 
 
 def _display_work_summary(evolution: PlanEvolution) -> None:
@@ -787,6 +913,10 @@ def display_current_impact_analysis(analysis: CurrentChangesAnalysis) -> None:
         "Complete Picture Context Size", f"[bold]{_format_token_count(analysis.complete_picture_context_size)}[/bold]"
     )
     console.print(token_table)
+
+    # Display Galen Rate metrics
+    if analysis.galen_metrics:
+        _display_galen_rate(analysis.galen_metrics)
 
     console.print("\n[bold]Current Code Quality:[/bold]")
     quality_table = Table(show_header=True)
