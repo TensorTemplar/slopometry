@@ -72,16 +72,11 @@ class CurrentImpactService:
             cov_analyzer = CoverageAnalyzer(repo_path)
             cov_result = cov_analyzer.analyze_coverage()
 
-            if cov_result.coverage_available:
+            if cov_result.coverage_available and cov_result.file_coverage:
                 filtered_coverage = {}
                 for file_path in changed_files:
-                    # Coverage keys are usually absolute paths or relative to root
-                    # Try both
-                    # We need to access the internal coverage data if possible or relies on what CoverageResult exposes
-                    # CoverageResult has 'file_coverage' dict
-                    if hasattr(cov_result, "file_coverage") and cov_result.file_coverage:
-                        if file_path in cov_result.file_coverage:
-                            filtered_coverage[file_path] = cov_result.file_coverage[file_path]
+                    if file_path in cov_result.file_coverage:
+                        filtered_coverage[file_path] = cov_result.file_coverage[file_path]
         except Exception:
             # Coverage analysis is optional
             pass

@@ -123,7 +123,6 @@ class ComplexityMetrics(BaseModel):
         default_factory=dict, description="Files that failed to parse: {filepath: error_message}"
     )
 
-    # Token metrics
     total_tokens: int = 0
     average_tokens: float = 0.0
     max_tokens: int = 0
@@ -654,6 +653,7 @@ class HistoricalMetricStats(BaseModel):
         default=0.0, description="Linear regression slope indicating improvement/degradation trend"
     )
 
+
 GALEN_TOKENS_PER_MONTH = 1_000_000
 GALEN_TOKENS_PER_DAY = GALEN_TOKENS_PER_MONTH / 30  # ~33,333 tokens/day
 
@@ -706,16 +706,21 @@ class GalenMetrics(BaseModel):
 
 
 class RepoBaseline(BaseModel):
-    """Baseline statistics computed from entire repository history."""
+    """Baseline statistics computed from entire repository history.
+
+    Delta statistics use TOTAL metrics (sums across all files), not averages.
+    This allows correct comparison even when baseline is computed from only
+    changed files per commit (an optimization that works because sums are additive).
+    """
 
     repository_path: str = Field(description="Absolute path to the repository")
     computed_at: datetime = Field(default_factory=datetime.now)
     head_commit_sha: str = Field(description="HEAD commit when baseline was computed")
     total_commits_analyzed: int = Field(description="Number of commits in baseline calculation")
 
-    cc_delta_stats: HistoricalMetricStats = Field(description="Cyclomatic complexity delta statistics")
-    effort_delta_stats: HistoricalMetricStats = Field(description="Halstead effort delta statistics")
-    mi_delta_stats: HistoricalMetricStats = Field(description="Maintainability index delta statistics")
+    cc_delta_stats: HistoricalMetricStats = Field(description="Total CC delta statistics per commit")
+    effort_delta_stats: HistoricalMetricStats = Field(description="Total Effort delta statistics per commit")
+    mi_delta_stats: HistoricalMetricStats = Field(description="Total MI delta statistics per commit")
 
     current_metrics: ExtendedComplexityMetrics = Field(description="Metrics at HEAD commit")
 
@@ -743,9 +748,9 @@ class ImpactAssessment(BaseModel):
     )
     impact_category: ImpactCategory = Field(description="Categorical assessment of impact")
 
-    cc_delta: float = Field(description="Raw CC change from staged files")
-    effort_delta: float = Field(description="Raw Effort change from staged files")
-    mi_delta: float = Field(description="Raw MI change from staged files")
+    cc_delta: float = Field(description="Total CC change (sum across all files)")
+    effort_delta: float = Field(description="Total Effort change (sum across all files)")
+    mi_delta: float = Field(description="Total MI change (sum across all files)")
 
 
 class StagedChangesAnalysis(BaseModel):

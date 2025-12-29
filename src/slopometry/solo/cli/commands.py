@@ -94,8 +94,14 @@ def list_sessions(limit: int) -> None:
 
 @solo.command()
 @click.argument("session_id", shell_complete=complete_session_id)
-def show(session_id: str) -> None:
+@click.option("--smell-details", is_flag=True, help="Show files affected by each code smell")
+@click.option("--file-details", is_flag=True, help="Show full file lists in delta sections")
+def show(session_id: str, smell_details: bool, file_details: bool) -> None:
     """Show detailed statistics for a session."""
+    import time
+
+    start_time = time.perf_counter()
+
     session_service = SessionService()
     stats = session_service.get_session_statistics(session_id)
 
@@ -105,12 +111,29 @@ def show(session_id: str) -> None:
 
     # Compute baseline if we have complexity delta
     baseline, assessment = _compute_session_baseline(stats)
-    display_session_summary(stats, session_id, baseline, assessment)
+    display_session_summary(
+        stats,
+        session_id,
+        baseline,
+        assessment,
+        show_smell_files=smell_details,
+        show_file_details=file_details,
+    )
+
+    elapsed = time.perf_counter() - start_time
+    if elapsed > 5:
+        console.print(f"\n[dim]Analysis completed in {elapsed:.1f}s[/dim]")
 
 
 @click.command()
-def latest() -> None:
+@click.option("--smell-details", is_flag=True, help="Show files affected by each code smell")
+@click.option("--file-details", is_flag=True, help="Show full file lists in delta sections")
+def latest(smell_details: bool, file_details: bool) -> None:
     """Show detailed statistics for the most recent session."""
+    import time
+
+    start_time = time.perf_counter()
+
     session_service = SessionService()
     most_recent = session_service.get_most_recent_session()
 
@@ -139,7 +162,18 @@ def latest() -> None:
 
         # Compute baseline if we have complexity delta
         baseline, assessment = _compute_session_baseline(stats)
-        display_session_summary(stats, most_recent, baseline, assessment)
+        display_session_summary(
+            stats,
+            most_recent,
+            baseline,
+            assessment,
+            show_smell_files=smell_details,
+            show_file_details=file_details,
+        )
+
+        elapsed = time.perf_counter() - start_time
+        if elapsed > 5:
+            console.print(f"\n[dim]Analysis completed in {elapsed:.1f}s[/dim]")
 
 
 def _compute_session_baseline(stats):
@@ -151,6 +185,8 @@ def _compute_session_baseline(stats):
     if not stats.complexity_delta:
         return None, None
 
+    from slopometry.core.database import EventDatabase
+    from slopometry.core.git_tracker import GitTracker
     from slopometry.summoner.services.baseline_service import BaselineService
     from slopometry.summoner.services.impact_calculator import ImpactCalculator
 
@@ -158,7 +194,17 @@ def _compute_session_baseline(stats):
     if not working_dir or not working_dir.exists():
         return None, None
 
-    baseline_service = BaselineService()
+    # Check if baseline is cached - if not, show a hint
+    db = EventDatabase()
+    git_tracker = GitTracker(working_dir)
+    head_sha = git_tracker._get_current_commit_sha()
+
+    cached_baseline = db.get_cached_baseline(str(working_dir.resolve()), head_sha) if head_sha else None
+
+    if not cached_baseline:
+        console.print("[dim]Computing repository baseline (first run may take a while)...[/dim]")
+
+    baseline_service = BaselineService(db=db)
     baseline = baseline_service.get_or_compute_baseline(working_dir)
 
     if not baseline:

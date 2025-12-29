@@ -1,5 +1,6 @@
 """Git state tracking for Claude Code sessions."""
 
+import shutil
 import subprocess
 import tarfile
 import tempfile
@@ -251,6 +252,73 @@ class GitTracker:
             return temp_dir
 
         except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError, tarfile.TarError):
+            return None
+
+    def get_changed_python_files(self, parent_sha: str, child_sha: str) -> list[str]:
+        """Get list of Python files that changed between two commits.
+
+        Args:
+            parent_sha: Parent commit SHA
+            child_sha: Child commit SHA
+
+        Returns:
+            List of changed Python file paths (relative to repo root)
+        """
+        try:
+            result = subprocess.run(
+                ["git", "diff", "--name-only", "--diff-filter=ACMR", parent_sha, child_sha, "--", "*.py"],
+                cwd=self.working_dir,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+            if result.returncode != 0:
+                return []
+
+            return [f.strip() for f in result.stdout.strip().split("\n") if f.strip()]
+        except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError):
+            return []
+
+    def extract_specific_files_from_commit(self, commit_ref: str, file_paths: list[str]) -> Path | None:
+        """Extract specific files from a commit to a temporary directory.
+
+        Args:
+            commit_ref: Git commit reference
+            file_paths: List of file paths to extract
+
+        Returns:
+            Path to temporary directory containing extracted files, or None if failed
+        """
+        if not file_paths:
+            return None
+
+        try:
+            temp_dir = Path(tempfile.mkdtemp(prefix="slopometry_delta_"))
+
+            for file_path in file_paths:
+                try:
+                    result = subprocess.run(
+                        ["git", "show", f"{commit_ref}:{file_path}"],
+                        cwd=self.working_dir,
+                        capture_output=True,
+                        timeout=10,
+                    )
+
+                    if result.returncode == 0:
+                        dest_path = temp_dir / file_path
+                        dest_path.parent.mkdir(parents=True, exist_ok=True)
+                        dest_path.write_bytes(result.stdout)
+                except (subprocess.TimeoutExpired, subprocess.SubprocessError):
+                    continue
+
+            if not any(temp_dir.rglob("*.py")):
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                return None
+
+            return temp_dir
+
+        except (subprocess.SubprocessError, OSError):
             return None
 
     def has_previous_commit(self) -> bool:

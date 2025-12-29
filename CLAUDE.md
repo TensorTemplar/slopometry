@@ -161,8 +161,8 @@ The experiment tracking feature includes:
 - CLI scores: 1.0 = perfect match, <0 = overshooting target (prevents overfitting)
 - Database handles duplicate analysis runs gracefully
   
-## Upstream Hook docs  
-available in `./claude-hooks-doc.md`  
+## Upstream Hook docs
+available in `./docs/claude-hooks-doc.md`  
 
 ## Development guidelines  
 

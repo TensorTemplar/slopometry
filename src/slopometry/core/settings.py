@@ -4,7 +4,7 @@ import os
 import sys
 from pathlib import Path
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -92,8 +92,16 @@ class Settings(BaseSettings):
 
     user_story_agents: list[str] = ["o3", "claude-opus-4", "gemini-2.5-pro"]
 
-    # Galen Rate feature flag - shows NGMI alert when below 1 Galen productivity target
-    enable_working_at_microsoft: bool = False
+    enable_working_at_microsoft: bool = Field(
+        default=False, description="Galen Rate feature flag - shows NGMI alert when below 1 Galen productivity target"
+    )
+
+    parallel_file_threshold: int = Field(
+        default=10, description="Minimum number of files before using parallel processing"
+    )
+    max_parallel_workers: int = Field(default=6, description="Maximum worker processes (conservative for RAM usage)")
+
+    baseline_max_commits: int = Field(default=100, description="Maximum commits to analyze for baseline computation")
 
     @field_validator("database_path", mode="before")
     @classmethod

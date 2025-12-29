@@ -184,9 +184,7 @@ class Migration005AddGalenRateColumns(Migration):
     def up(self, conn: sqlite3.Connection) -> None:
         """Add Galen Rate columns to repo_baselines."""
         # Check if table exists first (it's created by EventDatabase, not migrations)
-        cursor = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='repo_baselines'"
-        )
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='repo_baselines'")
         if not cursor.fetchone():
             return  # Table doesn't exist yet, skip migration
 

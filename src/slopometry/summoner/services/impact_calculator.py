@@ -39,9 +39,9 @@ class ImpactCalculator:
         Returns:
             ImpactAssessment with Z-scores and composite score
         """
-        cc_delta = staged_delta.avg_complexity_change
-        effort_delta = staged_delta.avg_effort_change
-        mi_delta = staged_delta.avg_mi_change
+        cc_delta = staged_delta.total_complexity_change
+        effort_delta = staged_delta.total_effort_change
+        mi_delta = staged_delta.total_mi_change
 
         cc_z = self._safe_z_score(
             cc_delta,
