@@ -18,7 +18,7 @@ A tool that lurks in the shadows, tracks and analyzes Claude Code sessions provi
 — C. Opus, overpaid, infrequent contributor
 
 ### TensorTemplar
-*"Previously i had to READ CODE and DECIDE WHEN TO RUN SLASH COMMANDS MYSELF, but now i just periodically prompt 'Cmon, claude, you know what you did...'"*  
+*"Previously I had to READ CODE and DECIDE WHEN TO RUN SLASH COMMANDS MYSELF, but now I just periodically prompt 'Cmon, claude, you know what you did...'"*  
 — TensorTemplar, insignificant idea person for this tool
 
 ### sherbie
@@ -74,9 +74,9 @@ Will show some metrics since the session start of the newest `claude code` sessi
 ### Preserve incriminating evidence!
 
 ![evidence](assets/evidence.png)
-**legal disclaimer**: transcripts are totally not for any kind of distillation, but merley for personal entertainment purposes
+**legal disclaimer**: transcripts are totally not for any kind of distillation, but merely for personal entertainment purposes
 
-Any many more undocumented features. Which worked just fine on my machine at some point!
+And many more undocumented features. Which worked just fine on my machine at some point!
 
 </details>
 
@@ -91,7 +91,7 @@ Seriously, please do not open PRs with support for any kind of unserious languag
 # Installation
 
 Both Anthropic models and MiniMax-M2 are fully supported as the `claude code` drivers.  
-To setup MiniMax-M2 instead of Sonnet, check out [this guide](https://platform.minimax.io/docs/guides/text-ai-coding-tools)
+To setup MiniMax-M2 instead of Sonnet, check out [this guide](docs/text-ai-coding-tools.md)
 
 ### Install claude code (needs an account or api key)
 
@@ -169,17 +169,13 @@ The command will show you the exact instructions to add to your shell configurat
 
 ## Upgrading
 
-### Upgrade the uv tool
-
 ```bash
-# Uninstall and reinstall to get the latest version
-uv tool uninstall slopometry
-uv tool install git+https://github.com/TensorTemplar/slopometry.git
+# Upgrade from git
+uv tool install --reinstall git+https://github.com/TensorTemplar/slopometry.git
 
 # Or if installed from local directory
 cd slopometry
 git pull
-uv tool uninstall slopometry
 uv tool install . --reinstall
 
 # Note: After upgrading, you may need to reinstall hooks if the default config changed
@@ -248,7 +244,7 @@ Customize via `.env` file or environment variables:
 
 [x] - Actually make a package so people can install this   
 [ ] - Add hindsight-justified user stories with acceptance criteria based off of future commits  
-[x] - Add plan evolution log based on claude's todo shenenigans   
+[x] - Add plan evolution log based on claude's todo shenanigans   
 [ ] - Finish git worktree-based [NFP-CLI](https://tensortemplar.substack.com/p/humans-are-no-longer-embodied-amortization) (TM) training objective implementation so complexity metrics can be used as additional process reward for training code agents
 [ ] - Extend stop hook feedback with LLM-as-Judge to support guiding agents based on smells and style guide  
 [ ] - Not go bankrupt from having to maintain open source in my free time, no wait...

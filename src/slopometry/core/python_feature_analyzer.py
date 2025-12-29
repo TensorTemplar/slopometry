@@ -2,10 +2,18 @@
 
 import ast
 import io
+import logging
+import os
 import re
+import time
 import tokenize
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from slopometry.core.settings import settings
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -46,6 +54,132 @@ class FeatureStats:
     dynamic_execution_files: set[str] = field(default_factory=set)
 
 
+def _analyze_single_file_features(file_path: Path) -> FeatureStats | None:
+    """Analyze a single Python file for feature statistics.
+
+    Module-level function required for ProcessPoolExecutor pickling.
+    """
+    try:
+        content = file_path.read_text(encoding="utf-8")
+        tree = ast.parse(content)
+    except Exception:
+        return None
+
+    visitor = FeatureVisitor()
+    visitor.visit(tree)
+    ast_stats = visitor.stats
+
+    is_test_file = file_path.name.startswith("test_") or "/tests/" in str(file_path)
+    orphan_comments, untracked_todos, type_ignores = _analyze_comments_standalone(content, is_test_file)
+    nonempty_init = 1 if _is_nonempty_init_standalone(file_path, tree) else 0
+    path_str = str(file_path)
+
+    return FeatureStats(
+        functions_count=ast_stats.functions_count,
+        classes_count=ast_stats.classes_count,
+        docstrings_count=ast_stats.docstrings_count,
+        args_count=ast_stats.args_count,
+        annotated_args_count=ast_stats.annotated_args_count,
+        returns_count=ast_stats.returns_count,
+        annotated_returns_count=ast_stats.annotated_returns_count,
+        total_type_references=ast_stats.total_type_references,
+        any_type_count=ast_stats.any_type_count,
+        str_type_count=ast_stats.str_type_count,
+        deprecations_count=ast_stats.deprecations_count,
+        orphan_comment_count=orphan_comments,
+        untracked_todo_count=untracked_todos,
+        inline_import_count=ast_stats.inline_import_count,
+        dict_get_with_default_count=ast_stats.dict_get_with_default_count,
+        hasattr_getattr_count=ast_stats.hasattr_getattr_count,
+        nonempty_init_count=nonempty_init,
+        test_skip_count=ast_stats.test_skip_count,
+        swallowed_exception_count=ast_stats.swallowed_exception_count,
+        type_ignore_count=type_ignores,
+        dynamic_execution_count=ast_stats.dynamic_execution_count,
+        orphan_comment_files={path_str} if orphan_comments > 0 else set(),
+        untracked_todo_files={path_str} if untracked_todos > 0 else set(),
+        inline_import_files={path_str} if ast_stats.inline_import_count > 0 else set(),
+        dict_get_with_default_files={path_str} if ast_stats.dict_get_with_default_count > 0 else set(),
+        hasattr_getattr_files={path_str} if ast_stats.hasattr_getattr_count > 0 else set(),
+        nonempty_init_files={path_str} if nonempty_init > 0 else set(),
+        test_skip_files={path_str} if ast_stats.test_skip_count > 0 else set(),
+        swallowed_exception_files={path_str} if ast_stats.swallowed_exception_count > 0 else set(),
+        type_ignore_files={path_str} if type_ignores > 0 else set(),
+        dynamic_execution_files={path_str} if ast_stats.dynamic_execution_count > 0 else set(),
+    )
+
+
+def _analyze_comments_standalone(content: str, is_test_file: bool = False) -> tuple[int, int, int]:
+    """Analyze comments in source code using tokenize.
+
+    Standalone version for parallel processing.
+    """
+    orphan_comments = 0
+    untracked_todos = 0
+    type_ignores = 0
+
+    todo_pattern = re.compile(r"\b(TODO|FIXME|XXX|HACK)\b", re.IGNORECASE)
+    url_pattern = re.compile(r"https?://")
+    ticket_pattern = re.compile(r"([A-Z]+-\d+|#\d+)")
+    justification_pattern = re.compile(
+        r"#\s*(NOTE|REASON|WARNING|WORKAROUND|IMPORTANT|CAVEAT|HACK|NB|PERF|SAFETY|COMPAT):",
+        re.IGNORECASE,
+    )
+    type_ignore_pattern = re.compile(r"#\s*type:\s*ignore")
+
+    try:
+        tokens = tokenize.generate_tokens(io.StringIO(content).readline)
+        for tok in tokens:
+            if tok.type == tokenize.COMMENT:
+                comment_text = tok.string
+
+                is_todo = bool(todo_pattern.search(comment_text))
+                has_url = bool(url_pattern.search(comment_text))
+                is_justification = bool(justification_pattern.search(comment_text))
+                is_type_ignore = bool(type_ignore_pattern.search(comment_text))
+
+                if is_type_ignore:
+                    type_ignores += 1
+                elif is_todo:
+                    has_ticket = bool(ticket_pattern.search(comment_text))
+                    if not has_ticket and not has_url:
+                        untracked_todos += 1
+                elif not has_url and not is_justification and not is_test_file:
+                    orphan_comments += 1
+    except tokenize.TokenError:
+        pass
+
+    return orphan_comments, untracked_todos, type_ignores
+
+
+def _is_nonempty_init_standalone(file_path: Path, tree: ast.Module) -> bool:
+    """Check if file is __init__.py with implementation code.
+
+    Standalone version for parallel processing.
+    """
+    if file_path.name != "__init__.py":
+        return False
+
+    for node in tree.body:
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
+            if isinstance(node.value.value, str):
+                continue
+
+        if isinstance(node, ast.Import | ast.ImportFrom):
+            continue
+
+        if isinstance(node, ast.Pass):
+            continue
+
+        if isinstance(node, ast.Assign):
+            if any(isinstance(target, ast.Name) and target.id == "__all__" for target in node.targets):
+                continue
+
+        return True
+
+    return False
+
+
 class PythonFeatureAnalyzer:
     """Analyzes Python files for language feature usage."""
 
@@ -58,24 +192,59 @@ class PythonFeatureAnalyzer:
         Returns:
             Aggregated FeatureStats
         """
-        aggregated = FeatureStats()
-
         from slopometry.core.git_tracker import GitTracker
 
         tracker = GitTracker(directory)
-        python_files = tracker.get_tracked_python_files()
+        python_files = [f for f in tracker.get_tracked_python_files() if f.exists()]
 
-        for file_path in python_files:
-            if not file_path.exists():
-                continue
+        start_total = time.perf_counter()
 
-            try:
-                stats = self._analyze_file(file_path)
+        # Use parallel processing for large file sets
+        if len(python_files) >= settings.parallel_file_threshold:
+            results = self._analyze_files_parallel(python_files)
+        else:
+            results = [_analyze_single_file_features(fp) for fp in python_files]
+
+        # Aggregate results
+        aggregated = FeatureStats()
+        for stats in results:
+            if stats is not None:
                 aggregated = self._merge_stats(aggregated, stats)
-            except (SyntaxError, UnicodeDecodeError, OSError):
-                continue
+
+        elapsed = time.perf_counter() - start_total
+        mode = "parallel" if len(python_files) >= settings.parallel_file_threshold else "sequential"
+        logger.debug(f"Feature analysis ({mode}): {len(python_files)} files in {elapsed:.2f}s")
 
         return aggregated
+
+    def _analyze_files_parallel(self, files: list[Path], max_workers: int | None = None) -> list[FeatureStats | None]:
+        """Analyze files in parallel using ProcessPoolExecutor.
+
+        Args:
+            files: List of Python file paths to analyze
+            max_workers: Maximum number of worker processes (default from settings)
+
+        Returns:
+            List of FeatureStats objects
+        """
+        if max_workers is None:
+            max_workers = min(os.cpu_count() or 4, settings.max_parallel_workers)
+
+        results: list[FeatureStats | None] = []
+
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(_analyze_single_file_features, fp): fp for fp in files}
+
+            for future in as_completed(futures):
+                try:
+                    result = future.result(timeout=60)
+                    results.append(result)
+                except Exception as e:
+                    file_path = futures[future]
+                    logger.warning(f"Failed to analyze features for {file_path}: {e}")
+                    results.append(None)
+
+        return results
 
     def _analyze_file(self, file_path: Path) -> FeatureStats:
         """Analyze a single Python file."""

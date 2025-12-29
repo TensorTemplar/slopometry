@@ -10,9 +10,7 @@ class TestGalenMetricsCalculations:
 
     def test_calculate__exactly_one_galen(self):
         """1M tokens over 30 days should equal exactly 1 Galen."""
-        metrics = GalenMetrics.calculate(
-            tokens_changed=GALEN_TOKENS_PER_MONTH, period_days=30.0
-        )
+        metrics = GalenMetrics.calculate(tokens_changed=GALEN_TOKENS_PER_MONTH, period_days=30.0)
 
         assert metrics.tokens_changed == GALEN_TOKENS_PER_MONTH
         assert metrics.period_days == 30.0
@@ -27,9 +25,7 @@ class TestGalenMetricsCalculations:
         assert metrics.galen_rate == pytest.approx(0.5, rel=0.01)
         assert metrics.tokens_per_day_to_reach_one_galen is not None
         # Need ~16,667 more tokens/day to reach 1 Galen
-        assert metrics.tokens_per_day_to_reach_one_galen == pytest.approx(
-            GALEN_TOKENS_PER_DAY / 2, rel=0.01
-        )
+        assert metrics.tokens_per_day_to_reach_one_galen == pytest.approx(GALEN_TOKENS_PER_DAY / 2, rel=0.01)
 
     def test_calculate__double_galen(self):
         """2M tokens over 30 days should equal 2 Galens."""

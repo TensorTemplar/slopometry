@@ -1,5 +1,6 @@
 """Baseline computation service for staged-impact analysis."""
 
+import logging
 import shutil
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -15,6 +16,9 @@ from slopometry.core.models import (
     HistoricalMetricStats,
     RepoBaseline,
 )
+from slopometry.core.settings import settings
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -93,7 +97,6 @@ class BaselineService:
         analyzer = ComplexityAnalyzer(working_directory=repo_path)
         current_metrics = analyzer.analyze_extended_complexity()
 
-        # Create pairs using SHAs only for delta computation
         commit_pairs = [(commits[i + 1].sha, commits[i].sha) for i in range(len(commits) - 1)]
 
         deltas = self._compute_deltas_parallel(repo_path, commit_pairs, max_workers)
@@ -109,9 +112,7 @@ class BaselineService:
         newest_commit_date = commits[0].timestamp
         oldest_commit_date = commits[-1].timestamp
 
-        oldest_commit_tokens = self._get_commit_token_count(
-            repo_path, commits[-1].sha, analyzer
-        )
+        oldest_commit_tokens = self._get_commit_token_count(repo_path, commits[-1].sha, analyzer)
 
         return RepoBaseline(
             repository_path=str(repo_path),
@@ -151,8 +152,8 @@ class BaselineService:
                 timestamp = datetime.fromtimestamp(int(timestamp_str))
                 commits.append(CommitInfo(sha=sha, timestamp=timestamp))
 
-        # PERF: Limit to last 100 commits to avoid slow analysis on large repos
-        return commits[:100]
+        # PERF: Limit commits to avoid slow analysis on large repos
+        return commits[: settings.baseline_max_commits]
 
     def _compute_deltas_parallel(
         self,
@@ -182,6 +183,8 @@ class BaselineService:
     def _compute_single_delta(self, repo_path: Path, parent_sha: str, child_sha: str) -> CommitDelta | None:
         """Compute metrics delta between two commits.
 
+        Only analyzes files that actually changed between commits for speed.
+
         Args:
             repo_path: Path to the repository
             parent_sha: Parent commit SHA
@@ -192,22 +195,36 @@ class BaselineService:
         """
         git_tracker = GitTracker(repo_path)
 
-        parent_dir = git_tracker.extract_files_from_commit(parent_sha)
-        child_dir = git_tracker.extract_files_from_commit(child_sha)
+        changed_files = git_tracker.get_changed_python_files(parent_sha, child_sha)
+        if not changed_files:
+            return CommitDelta(cc_delta=0.0, effort_delta=0.0, mi_delta=0.0)
+
+        parent_dir = git_tracker.extract_specific_files_from_commit(parent_sha, changed_files)
+        child_dir = git_tracker.extract_specific_files_from_commit(child_sha, changed_files)
 
         try:
-            if not parent_dir or not child_dir:
+            if not parent_dir and not child_dir:
                 return None
 
             analyzer = ComplexityAnalyzer(working_directory=repo_path)
 
-            parent_metrics = analyzer.analyze_extended_complexity(parent_dir)
-            child_metrics = analyzer.analyze_extended_complexity(child_dir)
+            parent_metrics = analyzer.analyze_extended_complexity(parent_dir) if parent_dir else None
+            child_metrics = analyzer.analyze_extended_complexity(child_dir) if child_dir else None
+
+            # NOTE: Use TOTAL metrics (not averages) because totals are additive,
+            # allowing changed-files-only analysis to yield correct whole-repo deltas.
+            parent_cc = parent_metrics.total_complexity if parent_metrics else 0
+            parent_effort = parent_metrics.total_effort if parent_metrics else 0.0
+            parent_mi = parent_metrics.total_mi if parent_metrics else 0.0
+
+            child_cc = child_metrics.total_complexity if child_metrics else 0
+            child_effort = child_metrics.total_effort if child_metrics else 0.0
+            child_mi = child_metrics.total_mi if child_metrics else 0.0
 
             return CommitDelta(
-                cc_delta=child_metrics.average_complexity - parent_metrics.average_complexity,
-                effort_delta=child_metrics.average_effort - parent_metrics.average_effort,
-                mi_delta=child_metrics.average_mi - parent_metrics.average_mi,
+                cc_delta=child_cc - parent_cc,
+                effort_delta=child_effort - parent_effort,
+                mi_delta=child_mi - parent_mi,
             )
 
         finally:
@@ -216,9 +233,7 @@ class BaselineService:
             if child_dir:
                 shutil.rmtree(child_dir, ignore_errors=True)
 
-    def _get_commit_token_count(
-        self, repo_path: Path, commit_sha: str, analyzer: ComplexityAnalyzer
-    ) -> int | None:
+    def _get_commit_token_count(self, repo_path: Path, commit_sha: str, analyzer: ComplexityAnalyzer) -> int | None:
         """Get total token count for a specific commit.
 
         Args:

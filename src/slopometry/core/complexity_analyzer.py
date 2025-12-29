@@ -1,12 +1,81 @@
 """Cognitive complexity analysis using radon."""
 
+import logging
+import os
+import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from slopometry.core.models import ComplexityDelta, ComplexityMetrics, ExtendedComplexityMetrics
 from slopometry.core.python_feature_analyzer import PythonFeatureAnalyzer
+from slopometry.core.settings import settings
+
+logger = logging.getLogger(__name__)
 
 CALCULATOR_VERSION = "2024.1.4"
+
+
+@dataclass
+class FileAnalysisResult:
+    """Result from analyzing a single file."""
+
+    path: str
+    complexity: int
+    volume: float
+    difficulty: float
+    effort: float
+    mi: float
+    tokens: int
+    error: str | None = None
+
+
+def _analyze_single_file_extended(file_path: Path) -> FileAnalysisResult | None:
+    """Analyze a single Python file for all metrics.
+
+    Module-level function required for ProcessPoolExecutor pickling.
+    Imports are inside function to avoid serialization issues.
+    """
+    import radon.complexity as cc_lib
+    import radon.metrics as metrics_lib
+    import tiktoken
+
+    try:
+        encoder = tiktoken.get_encoding("o200k_base")
+    except Exception:
+        encoder = tiktoken.get_encoding("cl100k_base")
+
+    try:
+        content = file_path.read_text(encoding="utf-8")
+
+        blocks = cc_lib.cc_visit(content)
+        complexity = sum(block.complexity for block in blocks)
+
+        hal = metrics_lib.h_visit(content)
+        mi = metrics_lib.mi_visit(content, multi=False)
+        tokens = len(encoder.encode(content, disallowed_special=()))
+
+        return FileAnalysisResult(
+            path=str(file_path),
+            complexity=complexity,
+            volume=hal.total.volume,
+            difficulty=hal.total.difficulty,
+            effort=hal.total.effort,
+            mi=mi,
+            tokens=tokens,
+        )
+    except (SyntaxError, UnicodeDecodeError, OSError, ValueError) as e:
+        return FileAnalysisResult(
+            path=str(file_path),
+            complexity=0,
+            volume=0.0,
+            difficulty=0.0,
+            effort=0.0,
+            mi=0.0,
+            tokens=0,
+            error=str(e),
+        )
 
 
 class ComplexityAnalyzer:
@@ -69,7 +138,6 @@ class ComplexityAnalyzer:
         tracker = GitTracker(directory)
         python_files = tracker.get_tracked_python_files()
 
-        # Initialize tokenizer
         try:
             encoder = tiktoken.get_encoding("o200k_base")
         except Exception:
@@ -96,8 +164,7 @@ class ComplexityAnalyzer:
                 files_by_complexity[relative_path] = file_complexity
                 all_complexities.append(file_complexity)
 
-                # Count tokens
-                token_count = len(encoder.encode(content))
+                token_count = len(encoder.encode(content, disallowed_special=()))
                 files_by_token_count[relative_path] = token_count
                 all_token_counts.append(token_count)
 
@@ -302,6 +369,37 @@ class ComplexityAnalyzer:
         except (ValueError, OSError):
             return str(file_path)
 
+    def _analyze_files_parallel(
+        self, files: list[Path], max_workers: int | None = None
+    ) -> list[FileAnalysisResult | None]:
+        """Analyze files in parallel using ProcessPoolExecutor.
+
+        Args:
+            files: List of Python file paths to analyze
+            max_workers: Maximum number of worker processes (default from settings)
+
+        Returns:
+            List of FileAnalysisResult objects
+        """
+        if max_workers is None:
+            max_workers = min(os.cpu_count() or 4, settings.max_parallel_workers)
+
+        results: list[FileAnalysisResult | None] = []
+
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(_analyze_single_file_extended, fp): fp for fp in files}
+
+            for future in as_completed(futures):
+                try:
+                    result = future.result(timeout=60)
+                    results.append(result)
+                except Exception as e:
+                    file_path = futures[future]
+                    logger.warning(f"Failed to analyze {file_path}: {e}")
+                    results.append(None)
+
+        return results
+
     def analyze_extended_complexity(self, directory: Path | None = None) -> ExtendedComplexityMetrics:
         """Analyze with CC, Halstead, and MI metrics.
 
@@ -312,17 +410,25 @@ class ComplexityAnalyzer:
             ExtendedComplexityMetrics with all radon metrics.
         """
         target_dir = directory or self.working_directory
-        import radon.complexity as cc_lib
-        import radon.metrics as metrics_lib
 
         from slopometry.core.git_tracker import GitTracker
 
         tracker = GitTracker(target_dir)
-        python_files = tracker.get_tracked_python_files()
+        python_files = [f for f in tracker.get_tracked_python_files() if f.exists()]
 
-        files_by_complexity = {}
-        all_complexities = []
-        files_with_parse_errors = {}
+        start_total = time.perf_counter()
+
+        # Use parallel processing for large file sets
+        if len(python_files) >= settings.parallel_file_threshold:
+            results = self._analyze_files_parallel(python_files)
+        else:
+            results = [_analyze_single_file_extended(fp) for fp in python_files]
+
+        files_by_complexity: dict[str, int] = {}
+        all_complexities: list[int] = []
+        files_with_parse_errors: dict[str, str] = {}
+        files_by_token_count: dict[str, int] = {}
+        all_token_counts: list[int] = []
 
         total_volume = 0.0
         total_difficulty = 0.0
@@ -331,51 +437,33 @@ class ComplexityAnalyzer:
         total_mi = 0.0
         mi_file_count = 0
 
-        import tiktoken
-
-        # Initialize tokenizer
-        try:
-            encoder = tiktoken.get_encoding("o200k_base")
-        except Exception:
-            encoder = tiktoken.get_encoding("cl100k_base")
-
-        files_by_token_count = {}
-        all_token_counts = []
-
-        for file_path in python_files:
-            if not file_path.exists():
+        for result in results:
+            if result is None:
                 continue
 
-            try:
-                content = file_path.read_text(encoding="utf-8")
+            relative_path = self._get_relative_path(result.path, target_dir)
 
-                blocks = cc_lib.cc_visit(content)
-                file_complexity = sum(block.complexity for block in blocks)
-
-                relative_path = self._get_relative_path(str(file_path), target_dir)
-                files_by_complexity[relative_path] = file_complexity
-                all_complexities.append(file_complexity)
-
-                hal = metrics_lib.h_visit(content)
-                total = hal.total
-                total_volume += total.volume
-                total_difficulty += total.difficulty
-                total_effort += total.effort
-                hal_file_count += 1
-
-                mi_score = metrics_lib.mi_visit(content, multi=False)
-                total_mi += mi_score
-                mi_file_count += 1
-
-                # Count tokens
-                token_count = len(encoder.encode(content))
-                files_by_token_count[relative_path] = token_count
-                all_token_counts.append(token_count)
-
-            except (SyntaxError, UnicodeDecodeError, OSError, ValueError) as e:
-                relative_path = self._get_relative_path(str(file_path), target_dir)
-                files_with_parse_errors[relative_path] = str(e)
+            if result.error:
+                files_with_parse_errors[relative_path] = result.error
                 continue
+
+            files_by_complexity[relative_path] = result.complexity
+            all_complexities.append(result.complexity)
+
+            total_volume += result.volume
+            total_difficulty += result.difficulty
+            total_effort += result.effort
+            hal_file_count += 1
+
+            total_mi += result.mi
+            mi_file_count += 1
+
+            files_by_token_count[relative_path] = result.tokens
+            all_token_counts.append(result.tokens)
+
+        elapsed_total = time.perf_counter() - start_total
+        mode = "parallel" if len(python_files) >= settings.parallel_file_threshold else "sequential"
+        logger.debug(f"Complexity analysis ({mode}): {len(python_files)} files in {elapsed_total:.2f}s")
 
         feature_analyzer = PythonFeatureAnalyzer()
 

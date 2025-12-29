@@ -68,7 +68,7 @@ def _display_microsoft_ngmi_alert(galen_metrics: GalenMetrics) -> None:
 
     if rate >= 1.0:
         console.print(f"[green bold]GALEN RATE: {rate:.2f} Galens - You're on track![/green bold]")
-        console.print(f"[green]Projected: ~{projected_monthly/1_000_000:.2f}M tokens/month[/green]")
+        console.print(f"[green]Projected: ~{projected_monthly / 1_000_000:.2f}M tokens/month[/green]")
     else:
         tokens_needed = galen_metrics.tokens_per_day_to_reach_one_galen or 0
         console.print(f"[{rate_color} bold]GALEN RATE: {rate:.2f} Galens[/{rate_color} bold]")
@@ -92,6 +92,8 @@ def display_session_summary(
     session_id: str,
     baseline: RepoBaseline | None = None,
     assessment: ImpactAssessment | None = None,
+    show_smell_files: bool = False,
+    show_file_details: bool = False,
 ) -> None:
     """Display comprehensive session statistics with Rich formatting.
 
@@ -100,6 +102,8 @@ def display_session_summary(
         session_id: The session identifier
         baseline: Optional repository baseline for comparison
         assessment: Optional impact assessment computed from baseline
+        show_smell_files: Show files affected by each code smell
+        show_file_details: Show full file lists in delta sections
     """
     # Calculate Galen metrics from commit history (not session duration)
     current_tokens = stats.complexity_metrics.total_tokens if stats.complexity_metrics else None
@@ -142,10 +146,10 @@ def display_session_summary(
         _display_git_metrics(stats)
 
     if stats.complexity_metrics and stats.complexity_metrics.total_files_analyzed > 0:
-        _display_complexity_metrics(stats, galen_metrics=baseline_galen_metrics)
+        _display_complexity_metrics(stats, galen_metrics=baseline_galen_metrics, show_smell_files=show_smell_files)
 
     if stats.complexity_delta:
-        _display_complexity_delta(stats, baseline, assessment)
+        _display_complexity_delta(stats, baseline, assessment, show_file_details=show_file_details)
 
     if stats.plan_evolution and stats.plan_evolution.total_plan_steps > 0:
         _display_work_summary(stats.plan_evolution)
@@ -194,7 +198,9 @@ def _display_git_metrics(stats: SessionStatistics) -> None:
 
 
 def _display_complexity_metrics(
-    stats: SessionStatistics, galen_metrics: GalenMetrics | None = None
+    stats: SessionStatistics,
+    galen_metrics: GalenMetrics | None = None,
+    show_smell_files: bool = False,
 ) -> None:
     """Display complexity metrics section."""
     console.print("\n[bold]Complexity Metrics[/bold]")
@@ -297,7 +303,26 @@ def _display_complexity_metrics(
         _display_galen_rate(galen_metrics)
 
     # Display detailed code smells
-    _display_code_smells_detailed(metrics)
+    if show_smell_files:
+        _display_code_smells_detailed(metrics)
+    else:
+        # Check if there are any smells with files to show
+        has_smell_files = any(
+            [
+                metrics.orphan_comment_files,
+                metrics.untracked_todo_files,
+                metrics.inline_import_files,
+                metrics.dict_get_with_default_files,
+                metrics.hasattr_getattr_files,
+                metrics.nonempty_init_files,
+                metrics.test_skip_files,
+                metrics.swallowed_exception_files,
+                metrics.type_ignore_files,
+                metrics.dynamic_execution_files,
+            ]
+        )
+        if has_smell_files:
+            console.print("\n[dim]Run with --smell-details to see affected files[/dim]")
 
     if metrics.files_by_complexity:
         files_table = Table(title="Files by Complexity")
@@ -326,6 +351,7 @@ def _display_complexity_delta(
     stats: SessionStatistics,
     baseline: RepoBaseline | None = None,
     assessment: ImpactAssessment | None = None,
+    show_file_details: bool = False,
 ) -> None:
     """Display complexity delta section with optional baseline comparison."""
     delta = stats.complexity_delta
@@ -396,47 +422,69 @@ def _display_complexity_delta(
             f"(score: {assessment.impact_score:+.2f})"
         )
 
-    if delta.files_added:
-        files_added_table = Table(title="Files Added")
-        files_added_table.add_column("File", style="green")
-        for file_path in delta.files_added[:10]:
-            files_added_table.add_row(file_path)
-        if len(delta.files_added) > 10:
-            files_added_table.add_row(f"... and {len(delta.files_added) - 10} more")
-        console.print(files_added_table)
+    # File lists - show in detail mode, otherwise just counts in the summary table above
+    if show_file_details:
+        if delta.files_added:
+            files_added_table = Table(title="Files Added")
+            files_added_table.add_column("File", style="green")
+            for file_path in delta.files_added[:10]:
+                files_added_table.add_row(file_path)
+            if len(delta.files_added) > 10:
+                files_added_table.add_row(f"... and {len(delta.files_added) - 10} more")
+            console.print(files_added_table)
 
-    if delta.files_removed:
-        files_removed_table = Table(title="Files Removed")
-        files_removed_table.add_column("File", style="red")
-        for file_path in delta.files_removed[:10]:
-            files_removed_table.add_row(file_path)
-        if len(delta.files_removed) > 10:
-            files_removed_table.add_row(f"... and {len(delta.files_removed) - 10} more")
-        console.print(files_removed_table)
+        if delta.files_removed:
+            files_removed_table = Table(title="Files Removed")
+            files_removed_table.add_column("File", style="red")
+            for file_path in delta.files_removed[:10]:
+                files_removed_table.add_row(file_path)
+            if len(delta.files_removed) > 10:
+                files_removed_table.add_row(f"... and {len(delta.files_removed) - 10} more")
+            console.print(files_removed_table)
 
-    if delta.files_changed:
-        sorted_changes = sorted(delta.files_changed.items(), key=lambda x: abs(x[1]), reverse=True)[:10]
+        if delta.files_changed:
+            sorted_changes = sorted(delta.files_changed.items(), key=lambda x: abs(x[1]), reverse=True)[:10]
 
-        if sorted_changes:
-            file_changes_table = Table(title="File Complexity Changes")
-            file_changes_table.add_column("File", style="cyan")
-            file_changes_table.add_column("Previous", justify="right")
-            file_changes_table.add_column("Current", justify="right")
-            file_changes_table.add_column("Change", justify="right")
+            if sorted_changes:
+                file_changes_table = Table(title="File Complexity Changes")
+                file_changes_table.add_column("File", style="cyan")
+                file_changes_table.add_column("Previous", justify="right")
+                file_changes_table.add_column("Current", justify="right")
+                file_changes_table.add_column("Change", justify="right")
 
-            for file_path, change in sorted_changes:
-                current_complexity = stats.complexity_metrics.files_by_complexity.get(file_path, 0)
-                previous_complexity = current_complexity - change
+                for file_path, change in sorted_changes:
+                    current_complexity = stats.complexity_metrics.files_by_complexity.get(file_path, 0)
+                    previous_complexity = current_complexity - change
 
-                change_color = "green" if change < 0 else "red"
-                file_changes_table.add_row(
-                    file_path,
-                    str(previous_complexity),
-                    str(current_complexity),
-                    f"[{change_color}]{change:+d}[/{change_color}]",
-                )
+                    change_color = "green" if change < 0 else "red"
+                    file_changes_table.add_row(
+                        file_path,
+                        str(previous_complexity),
+                        str(current_complexity),
+                        f"[{change_color}]{change:+d}[/{change_color}]",
+                    )
 
-            console.print(file_changes_table)
+                console.print(file_changes_table)
+    else:
+        # Compact mode: show top 3 file changes only, with hint
+        if delta.files_changed:
+            sorted_changes = sorted(delta.files_changed.items(), key=lambda x: abs(x[1]), reverse=True)[:3]
+
+            if sorted_changes:
+                file_changes_table = Table(title="Top File Complexity Changes")
+                file_changes_table.add_column("File", style="cyan")
+                file_changes_table.add_column("Change", justify="right")
+
+                for file_path, change in sorted_changes:
+                    change_color = "green" if change < 0 else "red"
+                    file_changes_table.add_row(file_path, f"[{change_color}]{change:+d}[/{change_color}]")
+
+                console.print(file_changes_table)
+
+        # Show hint if there's more data available
+        has_file_data = delta.files_added or delta.files_removed or len(delta.files_changed) > 3
+        if has_file_data:
+            console.print("\n[dim]Run with --file-details to see all file changes[/dim]")
 
 
 def _format_token_count(tokens: int) -> str:
@@ -903,10 +951,6 @@ def display_current_impact_analysis(analysis: CurrentChangesAnalysis) -> None:
     token_table.add_column("Metric", style="cyan")
     token_table.add_column("Value", justify="right")
 
-    # Calculate delta for just the uncommitted changes if needed, but delta is in the baseline comparison table usually?
-    # No, baseline comparison table shows complexity/effort/MI deltas.
-    # We want to show raw token counts here as well.
-
     token_table.add_row("Tokens in Edited Files", _format_token_count(analysis.changed_files_tokens))
     token_table.add_row("Tokens in Blind Spots", _format_token_count(analysis.blind_spot_tokens))
     token_table.add_row(
@@ -953,7 +997,6 @@ def display_current_impact_analysis(analysis: CurrentChangesAnalysis) -> None:
 
     console.print(quality_table)
 
-    # Coverage for Edited Files
     if analysis.filtered_coverage:
         console.print("\n[bold]Code Coverage for Edited Files:[/bold]")
         cov_table = Table(show_header=True)
@@ -972,7 +1015,6 @@ def display_current_impact_analysis(analysis: CurrentChangesAnalysis) -> None:
         for blind_spot in analysis.blind_spots:
             console.print(f"  • {blind_spot}")
 
-    # Display detailed code smells for changed files only
     filter_set = set(analysis.changed_files) if analysis.changed_files else None
     _display_code_smells_detailed(metrics, filter_files=filter_set)
 
@@ -986,7 +1028,6 @@ def _display_code_smells_detailed(metrics, filter_files: set[str] | None = None)
                      code smells in these files will be displayed.
     """
 
-    # helper to filter and check if we have smells
     def get_filtered_files(files: list[str]) -> list[str]:
         if not filter_files:
             return files
