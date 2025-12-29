@@ -2836,7 +2836,7 @@ wheels = [
 
 [[package]]
 name = "slopometry"
-version = "20251225.post2"
+version = "20251229.post1"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
