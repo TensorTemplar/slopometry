@@ -875,17 +875,13 @@ def _format_trend(trend_coefficient: float, lower_is_better: bool) -> str:
 
 
 def _interpret_z_score(normalized_z: float) -> str:
-    """Interpret z-score for display (positive = good after normalization)."""
-    if normalized_z > 1.5:
-        return "significantly better than avg"
-    elif normalized_z > 0.5:
-        return "better than average"
-    elif normalized_z > -0.5:
-        return "about average"
-    elif normalized_z > -1.5:
-        return "worse than average"
-    else:
-        return "significantly worse than avg"
+    """Interpret z-score for display (positive = good after normalization).
+
+    Uses verbose mode from ZScoreInterpretation for more nuanced output.
+    """
+    from slopometry.core.models import ZScoreInterpretation
+
+    return ZScoreInterpretation.from_z_score(normalized_z, verbose=True).value
 
 
 def _format_baseline_cell(z_score: float, invert: bool = False) -> str:

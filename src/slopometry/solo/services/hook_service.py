@@ -10,6 +10,12 @@ from slopometry.core.settings import settings
 class HookService:
     """Handles Claude Code hook installation and management."""
 
+    # Commands to whitelist so agents can investigate session details
+    WHITELISTED_COMMANDS = [
+        "Bash(slopometry solo:*)",
+        "Bash(slopometry solo show:*)",
+    ]
+
     def create_hook_configuration(self) -> dict:
         """Create slopometry hook configuration for Claude Code."""
         base_command = settings.hook_command.replace("hook-handler", "hook-{}")
@@ -70,6 +76,17 @@ class HookService:
 
             existing_settings["hooks"][hook_type].extend(hook_configs)
 
+        # Add slopometry commands to permissions.allow so agents can investigate
+        if "permissions" not in existing_settings:
+            existing_settings["permissions"] = {}
+        if "allow" not in existing_settings["permissions"]:
+            existing_settings["permissions"]["allow"] = []
+
+        existing_allows = set(existing_settings["permissions"]["allow"])
+        for cmd in self.WHITELISTED_COMMANDS:
+            if cmd not in existing_allows:
+                existing_settings["permissions"]["allow"].append(cmd)
+
         try:
             with open(settings_file, "w") as f:
                 json.dump(existing_settings, f, indent=2)
@@ -119,6 +136,16 @@ class HookService:
 
         if not settings_data["hooks"]:
             del settings_data["hooks"]
+
+        # Remove slopometry commands from permissions.allow
+        if "permissions" in settings_data and "allow" in settings_data["permissions"]:
+            settings_data["permissions"]["allow"] = [
+                cmd for cmd in settings_data["permissions"]["allow"] if cmd not in self.WHITELISTED_COMMANDS
+            ]
+            if not settings_data["permissions"]["allow"]:
+                del settings_data["permissions"]["allow"]
+            if not settings_data["permissions"]:
+                del settings_data["permissions"]
 
         try:
             with open(settings_file, "w") as f:

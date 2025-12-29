@@ -1,7 +1,7 @@
 """NFP (Next Feature Prediction) service for summoner features."""
 
 from slopometry.core.database import EventDatabase
-from slopometry.core.models import NextFeaturePrediction
+from slopometry.core.models import NextFeaturePrediction, NFPObjectiveDisplayData
 
 
 class NFPService:
@@ -31,21 +31,21 @@ class NFPService:
         except Exception:
             return False
 
-    def prepare_objectives_data_for_display(self, objectives: list[NextFeaturePrediction]) -> list[dict]:
+    def prepare_objectives_data_for_display(
+        self, objectives: list[NextFeaturePrediction]
+    ) -> list[NFPObjectiveDisplayData]:
         """Prepare NFP objectives data for display formatting."""
-        objectives_data = []
-        for nfp in objectives:
-            objectives_data.append(
-                {
-                    "id": nfp.id,
-                    "title": nfp.title,
-                    "commits": f"{nfp.base_commit} → {nfp.target_commit}",
-                    "story_count": nfp.story_count,
-                    "complexity": nfp.total_estimated_complexity,
-                    "created_date": nfp.created_at.strftime("%Y-%m-%d"),
-                }
+        return [
+            NFPObjectiveDisplayData(
+                id=nfp.id,
+                title=nfp.title,
+                commits=f"{nfp.base_commit} → {nfp.target_commit}",
+                story_count=nfp.story_count,
+                complexity=nfp.total_estimated_complexity,
+                created_date=nfp.created_at.strftime("%Y-%m-%d"),
             )
-        return objectives_data
+            for nfp in objectives
+        ]
 
     def get_objective_summary(self, nfp: NextFeaturePrediction | None) -> dict:
         """Get summary information for an NFP objective."""

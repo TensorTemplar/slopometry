@@ -206,7 +206,7 @@ class ContextCoverageAnalyzer:
         imports: set[str] = set()
         try:
             content = file_path.read_text(encoding="utf-8")
-            tree = ast.parse(content)
+            tree = ast.parse(content, filename=str(file_path))
         except Exception:
             return imports
 

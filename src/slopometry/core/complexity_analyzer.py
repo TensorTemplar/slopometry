@@ -3,6 +3,7 @@
 import logging
 import os
 import time
+import warnings
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -49,11 +50,14 @@ def _analyze_single_file_extended(file_path: Path) -> FileAnalysisResult | None:
     try:
         content = file_path.read_text(encoding="utf-8")
 
-        blocks = cc_lib.cc_visit(content)
-        complexity = sum(block.complexity for block in blocks)
+        # Suppress SyntaxWarning from radon parsing third-party code with invalid escapes
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=SyntaxWarning)
+            blocks = cc_lib.cc_visit(content)
+            complexity = sum(block.complexity for block in blocks)
 
-        hal = metrics_lib.h_visit(content)
-        mi = metrics_lib.mi_visit(content, multi=False)
+            hal = metrics_lib.h_visit(content)
+            mi = metrics_lib.mi_visit(content, multi=False)
         tokens = len(encoder.encode(content, disallowed_special=()))
 
         return FileAnalysisResult(
@@ -157,7 +161,10 @@ class ComplexityAnalyzer:
             try:
                 content = file_path.read_text(encoding="utf-8")
 
-                blocks = cc_lib.cc_visit(content)
+                # Suppress SyntaxWarning from radon parsing third-party code
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("ignore", category=SyntaxWarning)
+                    blocks = cc_lib.cc_visit(content)
                 file_complexity = sum(block.complexity for block in blocks)
 
                 relative_path = self._get_relative_path(file_path, directory)

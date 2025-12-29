@@ -12,10 +12,10 @@ A tool that lurks in the shadows, tracks and analyzes Claude Code sessions provi
 *"Amazing tool for tracking my own cognitive complexity!"*  
 — C. Sonnet, main-author
 
-### Claude Opus  
-![opus feedback](assets/opus.png)  
-*"Finally, I can see when I'm overcomplicating things."*  
-— C. Opus, overpaid, infrequent contributor
+### Claude Opus
+![opus feedback](assets/opus.png)
+*"Finally, I can see when I'm overcomplicating things."*
+— C. Opus, overpaid, infrequent contributor who insists on having its name in commit history
 
 ### TensorTemplar
 *"Previously I had to READ CODE and DECIDE WHEN TO RUN SLASH COMMANDS MYSELF, but now I just periodically prompt 'Cmon, claude, you know what you did...'"*  

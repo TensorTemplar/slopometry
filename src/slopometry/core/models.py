@@ -9,6 +9,32 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 
+def SmellField(
+    default: int = 0,
+    *,
+    label: str,
+    files_field: str,
+    guidance: str,
+) -> Any:
+    """Create a Field for a code smell metric with embedded metadata.
+
+    Args:
+        default: Default value (always 0 for counts)
+        label: Display label for the smell (e.g., "Orphan Comments")
+        files_field: Name of the corresponding files list field
+        guidance: Actionable message shown in feedback
+    """
+    return Field(
+        default=default,
+        description=guidance,
+        json_schema_extra={
+            "is_smell": True,
+            "label": label,
+            "files_field": files_field,
+        },
+    )
+
+
 class ProjectSource(str, Enum):
     """Source of project identification."""
 
@@ -436,30 +462,56 @@ class ExtendedComplexityMetrics(ComplexityMetrics):
         default=None, description="Source file for coverage data (e.g., 'coverage.xml')"
     )
 
-    orphan_comment_count: int = Field(
-        default=0, description="Comments outside docstrings that aren't TODOs or explanatory URLs"
+    orphan_comment_count: int = SmellField(
+        label="Orphan Comments",
+        files_field="orphan_comment_files",
+        guidance="Make sure inline code comments add meaningful information about non-obvious design tradeoffs or explain tech debt or performance implications. Consider if these could be docstrings or field descriptors instead",
     )
-    untracked_todo_count: int = Field(
-        default=0, description="TODO comments without ticket references (JIRA-123, #123) or URLs"
+    untracked_todo_count: int = SmellField(
+        label="Untracked TODOs",
+        files_field="untracked_todo_files",
+        guidance="Untracked TODOs should include ticket references (JIRA-123, #123) or URLs",
     )
-    inline_import_count: int = Field(
-        default=0, description="Import statements not at module level (excluding TYPE_CHECKING guards)"
+    inline_import_count: int = SmellField(
+        label="Inline Imports",
+        files_field="inline_import_files",
+        guidance="Verify if these can be moved to the top of the file (except TYPE_CHECKING guards)",
     )
-    dict_get_with_default_count: int = Field(
-        default=0, description=".get() calls with defaults (indicates missing typed config)"
+    dict_get_with_default_count: int = SmellField(
+        label="Modeling Gaps (.get() defaults)",
+        files_field="dict_get_with_default_files",
+        guidance="Consider if these are justified or just indicate modeling gaps - replace with Pydantic BaseSettings or BaseModel with narrower field types or raise explicit errors instead",
     )
-    hasattr_getattr_count: int = Field(
-        default=0, description="hasattr()/getattr() calls (indicates missing domain models)"
+    hasattr_getattr_count: int = SmellField(
+        label="Modeling Gaps (hasattr/getattr)",
+        files_field="hasattr_getattr_files",
+        guidance="Consider if these indicate missing domain models - replace with Pydantic BaseModel objects with explicit fields or raise explicit errors instead",
     )
-    nonempty_init_count: int = Field(
-        default=0, description="__init__.py files with implementation code (beyond imports/__all__)"
+    nonempty_init_count: int = SmellField(
+        label="Logic in __init__.py",
+        files_field="nonempty_init_files",
+        guidance="Consider if implementation code should be moved out of __init__.py files",
     )
-    test_skip_count: int = Field(default=0, description="Test skip calls/decorators (pytest.skip, unittest.skip)")
-    swallowed_exception_count: int = Field(
-        default=0, description="Exception handlers with only pass/continue/empty body"
+    test_skip_count: int = SmellField(
+        label="Test Skips",
+        files_field="test_skip_files",
+        guidance="BLOCKING: You MUST present a table with columns [Test Name | Intent] for each skip and ask user to confirm each is still valid",
     )
-    type_ignore_count: int = Field(default=0, description="# type: ignore comments (suppressing type checker)")
-    dynamic_execution_count: int = Field(default=0, description="Dynamic code execution (eval, exec, compile)")
+    swallowed_exception_count: int = SmellField(
+        label="Swallowed Exceptions",
+        files_field="swallowed_exception_files",
+        guidance="BLOCKING: You MUST present a table with columns [Location | Purpose] for each and ask user to confirm silent failure is acceptable",
+    )
+    type_ignore_count: int = SmellField(
+        label="Type Ignores",
+        files_field="type_ignore_files",
+        guidance="Review type: ignore comments - consider fixing the underlying type issue",
+    )
+    dynamic_execution_count: int = SmellField(
+        label="Dynamic Execution",
+        files_field="dynamic_execution_files",
+        guidance="Review usage of eval/exec/compile - ensure this is necessary and secure",
+    )
 
     orphan_comment_files: list[str] = Field(default_factory=list, description="Files with orphan comments")
     untracked_todo_files: list[str] = Field(default_factory=list, description="Files with untracked TODOs")
@@ -612,6 +664,38 @@ class UserStoryDisplayData(BaseModel):
     repository: str = Field(description="Repository name")
 
 
+class ExperimentDisplayData(BaseModel):
+    """Display data for experiment runs in tables."""
+
+    id: str = Field(description="Experiment ID")
+    repository_name: str = Field(description="Name of the repository")
+    commits_display: str = Field(description="Formatted commit range (e.g., 'abc123 → def456')")
+    start_time: str = Field(description="Formatted start time")
+    duration: str = Field(description="Formatted duration or 'Running...'")
+    status: str = Field(description="Current status (running, completed, failed)")
+
+
+class ProgressDisplayData(BaseModel):
+    """Display data for experiment progress rows."""
+
+    timestamp: str = Field(description="Formatted timestamp (HH:MM:SS)")
+    cli_score: str = Field(description="Formatted CLI score")
+    complexity_score: str = Field(description="Formatted complexity score")
+    halstead_score: str = Field(description="Formatted Halstead score")
+    maintainability_score: str = Field(description="Formatted maintainability score")
+
+
+class NFPObjectiveDisplayData(BaseModel):
+    """Display data for NFP objectives in tables."""
+
+    id: str = Field(description="Objective ID")
+    title: str = Field(description="Objective title")
+    commits: str = Field(description="Formatted commit range")
+    story_count: int = Field(description="Number of associated user stories")
+    complexity: int = Field(description="Complexity metric")
+    created_date: str = Field(description="Formatted creation date")
+
+
 class CodeQualityCache(BaseModel):
     """Cached code quality metrics for a specific session/repository/commit combination."""
 
@@ -736,6 +820,50 @@ class RepoBaseline(BaseModel):
     )
 
 
+class ZScoreInterpretation(str, Enum):
+    """Human-readable interpretation of Z-score values."""
+
+    MUCH_BETTER = "much better than avg"
+    BETTER = "better than avg"
+    ABOUT_AVERAGE = "about avg"
+    WORSE = "worse than avg"
+    MUCH_WORSE = "much worse than avg"
+
+    @classmethod
+    def from_z_score(cls, normalized_z: float, verbose: bool = False) -> "ZScoreInterpretation":
+        """Interpret a normalized Z-score (positive = good).
+
+        Args:
+            normalized_z: Z-score where positive values indicate improvement
+            verbose: If True, uses wider thresholds (1.5/0.5) for more nuanced output
+
+        Returns:
+            ZScoreInterpretation enum value
+        """
+        if verbose:
+            if normalized_z > 1.5:
+                return cls.MUCH_BETTER
+            elif normalized_z > 0.5:
+                return cls.BETTER
+            elif normalized_z > -0.5:
+                return cls.ABOUT_AVERAGE
+            elif normalized_z > -1.5:
+                return cls.WORSE
+            else:
+                return cls.MUCH_WORSE
+        else:
+            if normalized_z > 1.0:
+                return cls.MUCH_BETTER
+            elif normalized_z > 0.3:
+                return cls.BETTER
+            elif normalized_z > -0.3:
+                return cls.ABOUT_AVERAGE
+            elif normalized_z > -1.0:
+                return cls.WORSE
+            else:
+                return cls.MUCH_WORSE
+
+
 class ImpactAssessment(BaseModel):
     """Assessment of staged changes impact against repo baseline."""
 
@@ -751,6 +879,18 @@ class ImpactAssessment(BaseModel):
     cc_delta: float = Field(description="Total CC change (sum across all files)")
     effort_delta: float = Field(description="Total Effort change (sum across all files)")
     mi_delta: float = Field(description="Total MI change (sum across all files)")
+
+    def interpret_cc(self, verbose: bool = False) -> ZScoreInterpretation:
+        """Interpret CC z-score (lower CC is better, so invert)."""
+        return ZScoreInterpretation.from_z_score(-self.cc_z_score, verbose)
+
+    def interpret_effort(self, verbose: bool = False) -> ZScoreInterpretation:
+        """Interpret Effort z-score (lower effort is better, so invert)."""
+        return ZScoreInterpretation.from_z_score(-self.effort_z_score, verbose)
+
+    def interpret_mi(self, verbose: bool = False) -> ZScoreInterpretation:
+        """Interpret MI z-score (higher MI is better, no inversion)."""
+        return ZScoreInterpretation.from_z_score(self.mi_z_score, verbose)
 
 
 class StagedChangesAnalysis(BaseModel):

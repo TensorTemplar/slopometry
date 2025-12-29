@@ -6,14 +6,18 @@ from slopometry.core.models import (
     ImpactCategory,
     RepoBaseline,
 )
+from slopometry.core.settings import settings
 
 
 class ImpactCalculator:
-    """Calculates impact score for staged changes against baseline."""
+    """Calculates impact score for staged changes against baseline.
 
-    CC_WEIGHT = 0.40
-    HALSTEAD_WEIGHT = 0.35  # Applied to Effort
-    MI_WEIGHT = 0.25
+    MI is weighted highest (50% default) as it's already a balanced composite metric
+    that factors in CC, Volume, and LOC. This prevents raw CC/Effort from
+    dominating the score for sessions that add many files.
+
+    Weights are configurable via settings (SLOPOMETRY_IMPACT_CC_WEIGHT, etc.).
+    """
 
     def calculate_impact(
         self,
@@ -30,7 +34,7 @@ class ImpactCalculator:
         Formula:
         1. Compute Z-score for each metric delta
         2. Normalize directions (lower CC/Effort is better, higher MI is better)
-        3. Weighted composite using CLI weights
+        3. Weighted composite with MI at 50%, CC/Effort at 25% each
 
         Args:
             staged_delta: Complexity delta from staged changes
@@ -39,6 +43,7 @@ class ImpactCalculator:
         Returns:
             ImpactAssessment with Z-scores and composite score
         """
+        # Use totals to match baseline stats (which track total delta per commit)
         cc_delta = staged_delta.total_complexity_change
         effort_delta = staged_delta.total_effort_change
         mi_delta = staged_delta.total_mi_change
@@ -66,7 +71,9 @@ class ImpactCalculator:
         normalized_mi = mi_z
 
         impact_score = (
-            self.CC_WEIGHT * normalized_cc + self.HALSTEAD_WEIGHT * normalized_effort + self.MI_WEIGHT * normalized_mi
+            settings.impact_cc_weight * normalized_cc
+            + settings.impact_effort_weight * normalized_effort
+            + settings.impact_mi_weight * normalized_mi
         )
 
         impact_category = self._categorize_impact(impact_score)
@@ -96,10 +103,10 @@ class ImpactCalculator:
         Returns:
             Z-score (clamped for edge cases)
         """
-        if std < 1e-10:  # Essentially zero variance
+        if std < 1e-10:
             if abs(value - mean) < 1e-10:
-                return 0.0  # At the mean
-            return 1.0 if value > mean else -1.0  # Above or below mean
+                return 0.0
+            return 1.0 if value > mean else -1.0
 
         return (value - mean) / std
 

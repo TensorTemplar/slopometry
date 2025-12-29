@@ -4,6 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 from slopometry.core.database import EventDatabase
+from slopometry.core.models import ExperimentDisplayData, ProgressDisplayData
 from slopometry.summoner.services.experiment_orchestrator import ExperimentOrchestrator
 
 
@@ -30,14 +31,14 @@ class ExperimentService:
         orchestrator = ExperimentOrchestrator(repo_path)
         orchestrator.analyze_commit_chain(base_commit, head_commit)
 
-    def list_experiments(self) -> list[dict]:
+    def list_experiments(self) -> list[ExperimentDisplayData]:
         """List all experiment runs with metadata."""
         try:
             with self.db._get_db_connection() as conn:
                 rows = conn.execute("""
-                    SELECT id, repository_path, start_commit, target_commit, 
+                    SELECT id, repository_path, start_commit, target_commit,
                            start_time, end_time, status
-                    FROM experiment_runs 
+                    FROM experiment_runs
                     ORDER BY start_time DESC
                 """).fetchall()
 
@@ -53,14 +54,14 @@ class ExperimentService:
                     duration = "Running..."
 
                 experiments_data.append(
-                    {
-                        "id": experiment_id,
-                        "repository_name": Path(repo_path).name,
-                        "commits_display": f"{start_commit} → {target_commit}",
-                        "start_time": start_dt.strftime("%Y-%m-%d %H:%M:%S"),
-                        "duration": duration,
-                        "status": status,
-                    }
+                    ExperimentDisplayData(
+                        id=experiment_id,
+                        repository_name=Path(repo_path).name,
+                        commits_display=f"{start_commit} → {target_commit}",
+                        start_time=start_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                        duration=duration,
+                        status=status,
+                    )
                 )
 
             return experiments_data
@@ -92,19 +93,19 @@ class ExperimentService:
         except Exception:
             return None
 
-    def prepare_progress_data_for_display(self, progress_rows: list) -> list[dict]:
+    def prepare_progress_data_for_display(self, progress_rows: list) -> list[ProgressDisplayData]:
         """Prepare experiment progress data for display formatting."""
         progress_data = []
         for row in progress_rows:
             timestamp, cli_score, complexity_score, halstead_score, maintainability_score = row
             dt = datetime.fromisoformat(timestamp)
             progress_data.append(
-                {
-                    "timestamp": dt.strftime("%H:%M:%S"),
-                    "cli_score": f"{cli_score:.3f}",
-                    "complexity_score": f"{complexity_score:.3f}",
-                    "halstead_score": f"{halstead_score:.3f}",
-                    "maintainability_score": f"{maintainability_score:.3f}",
-                }
+                ProgressDisplayData(
+                    timestamp=dt.strftime("%H:%M:%S"),
+                    cli_score=f"{cli_score:.3f}",
+                    complexity_score=f"{complexity_score:.3f}",
+                    halstead_score=f"{halstead_score:.3f}",
+                    maintainability_score=f"{maintainability_score:.3f}",
+                )
             )
         return progress_data
