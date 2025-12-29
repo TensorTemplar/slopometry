@@ -8,18 +8,22 @@ import re
 import time
 import tokenize
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from dataclasses import dataclass, field
 from pathlib import Path
 
+from pydantic import BaseModel, ConfigDict, Field
+
+from slopometry.core.models import SmellField
 from slopometry.core.settings import settings
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class FeatureStats:
-    """Container for feature statistics."""
+class FeatureStats(BaseModel):
+    """Container for feature statistics with actionable guidance in Field descriptions."""
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    # Basic counts (no actionable message needed)
     functions_count: int = 0
     classes_count: int = 0
     docstrings_count: int = 0
@@ -31,27 +35,70 @@ class FeatureStats:
     any_type_count: int = 0
     str_type_count: int = 0
     deprecations_count: int = 0
-    orphan_comment_count: int = 0
-    untracked_todo_count: int = 0
-    inline_import_count: int = 0
-    dict_get_with_default_count: int = 0
-    hasattr_getattr_count: int = 0
-    nonempty_init_count: int = 0
-    test_skip_count: int = 0
-    swallowed_exception_count: int = 0
-    type_ignore_count: int = 0
-    dynamic_execution_count: int = 0
 
-    orphan_comment_files: set[str] = field(default_factory=set)
-    untracked_todo_files: set[str] = field(default_factory=set)
-    inline_import_files: set[str] = field(default_factory=set)
-    dict_get_with_default_files: set[str] = field(default_factory=set)
-    hasattr_getattr_files: set[str] = field(default_factory=set)
-    nonempty_init_files: set[str] = field(default_factory=set)
-    test_skip_files: set[str] = field(default_factory=set)
-    swallowed_exception_files: set[str] = field(default_factory=set)
-    type_ignore_files: set[str] = field(default_factory=set)
-    dynamic_execution_files: set[str] = field(default_factory=set)
+    # Code smells - self-describing via SmellField metadata
+    orphan_comment_count: int = SmellField(
+        label="Orphan Comments",
+        files_field="orphan_comment_files",
+        guidance="Make sure inline code comments add meaningful information about non-obvious design tradeoffs or explain tech debt or performance implications. Consider if these could be docstrings or field descriptors instead",
+    )
+    untracked_todo_count: int = SmellField(
+        label="Untracked TODOs",
+        files_field="untracked_todo_files",
+        guidance="Untracked TODOs should include ticket references (JIRA-123, #123) or URLs",
+    )
+    inline_import_count: int = SmellField(
+        label="Inline Imports",
+        files_field="inline_import_files",
+        guidance="Verify if these can be moved to the top of the file (except TYPE_CHECKING guards)",
+    )
+    dict_get_with_default_count: int = SmellField(
+        label="Modeling Gaps (.get() defaults)",
+        files_field="dict_get_with_default_files",
+        guidance="Consider if these are justified or just indicate modeling gaps - replace with Pydantic BaseSettings or BaseModel with narrower field types or raise explicit errors instead",
+    )
+    hasattr_getattr_count: int = SmellField(
+        label="Modeling Gaps (hasattr/getattr)",
+        files_field="hasattr_getattr_files",
+        guidance="Consider if these indicate missing domain models - replace with Pydantic BaseModel objects with explicit fields or raise explicit errors instead",
+    )
+    nonempty_init_count: int = SmellField(
+        label="Logic in __init__.py",
+        files_field="nonempty_init_files",
+        guidance="Consider if implementation code should be moved out of __init__.py files",
+    )
+    test_skip_count: int = SmellField(
+        label="Test Skips",
+        files_field="test_skip_files",
+        guidance="Request explicit user feedback on whether these test skips are still valid or should be addressed",
+    )
+    swallowed_exception_count: int = SmellField(
+        label="Swallowed Exceptions",
+        files_field="swallowed_exception_files",
+        guidance="Request explicit user feedback on all swallowed exceptions. Make sure to always log or print the expectation mismatch",
+    )
+    type_ignore_count: int = SmellField(
+        label="Type Ignores",
+        files_field="type_ignore_files",
+        guidance="Review type: ignore comments - consider fixing the underlying type issue",
+    )
+    dynamic_execution_count: int = SmellField(
+        label="Dynamic Execution",
+        files_field="dynamic_execution_files",
+        guidance="Review usage of eval/exec/compile - ensure this is necessary and secure",
+    )
+
+    # File tracking
+    orphan_comment_files: set[str] = Field(default_factory=set)
+    untracked_todo_files: set[str] = Field(default_factory=set)
+    inline_import_files: set[str] = Field(default_factory=set)
+    dict_get_with_default_files: set[str] = Field(default_factory=set)
+    hasattr_getattr_files: set[str] = Field(default_factory=set)
+    nonempty_init_files: set[str] = Field(default_factory=set)
+    test_skip_files: set[str] = Field(default_factory=set)
+    swallowed_exception_files: set[str] = Field(default_factory=set)
+    type_ignore_files: set[str] = Field(default_factory=set)
+    dynamic_execution_files: set[str] = Field(default_factory=set)
 
 
 def _analyze_single_file_features(file_path: Path) -> FeatureStats | None:
@@ -61,8 +108,9 @@ def _analyze_single_file_features(file_path: Path) -> FeatureStats | None:
     """
     try:
         content = file_path.read_text(encoding="utf-8")
-        tree = ast.parse(content)
-    except Exception:
+        tree = ast.parse(content, filename=str(file_path))
+    except Exception as e:
+        logger.debug(f"Skipping unparseable file {file_path}: {e}")
         return None
 
     visitor = FeatureVisitor()
@@ -146,8 +194,8 @@ def _analyze_comments_standalone(content: str, is_test_file: bool = False) -> tu
                         untracked_todos += 1
                 elif not has_url and not is_justification and not is_test_file:
                     orphan_comments += 1
-    except tokenize.TokenError:
-        pass
+    except tokenize.TokenError as e:
+        logger.debug(f"Tokenize error during comment analysis: {e}")
 
     return orphan_comments, untracked_todos, type_ignores
 
@@ -250,8 +298,9 @@ class PythonFeatureAnalyzer:
         """Analyze a single Python file."""
         try:
             content = file_path.read_text(encoding="utf-8")
-            tree = ast.parse(content)
-        except Exception:
+            tree = ast.parse(content, filename=str(file_path))
+        except Exception as e:
+            logger.debug(f"Skipping unparseable file {file_path}: {e}")
             return FeatureStats()
 
         visitor = FeatureVisitor()
@@ -376,8 +425,8 @@ class PythonFeatureAnalyzer:
                             untracked_todos += 1
                     elif not has_url and not is_justification and not is_test_file:
                         orphan_comments += 1
-        except tokenize.TokenError:
-            pass
+        except tokenize.TokenError as e:
+            logger.debug(f"Tokenize error during comment analysis: {e}")
 
         return orphan_comments, untracked_todos, type_ignores
 

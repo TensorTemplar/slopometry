@@ -81,7 +81,10 @@ class Settings(BaseSettings):
 
     enable_complexity_analysis: bool = True
     enable_complexity_feedback: bool = False
-    show_baseline_in_feedback: bool = True
+    feedback_dev_guidelines: bool = Field(
+        default=False,
+        description="Extract '## Development guidelines' from CLAUDE.md in stop hook feedback",
+    )
 
     llm_proxy_url: str = ""
     llm_proxy_api_key: str = ""
@@ -102,6 +105,14 @@ class Settings(BaseSettings):
     max_parallel_workers: int = Field(default=6, description="Maximum worker processes (conservative for RAM usage)")
 
     baseline_max_commits: int = Field(default=100, description="Maximum commits to analyze for baseline computation")
+
+    impact_cc_weight: float = Field(default=0.25, description="Weight for CC in impact score calculation")
+    impact_effort_weight: float = Field(
+        default=0.25, description="Weight for Halstead Effort in impact score calculation"
+    )
+    impact_mi_weight: float = Field(
+        default=0.50, description="Weight for Maintainability Index in impact score calculation"
+    )
 
     @field_validator("database_path", mode="before")
     @classmethod

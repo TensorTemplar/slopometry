@@ -104,7 +104,6 @@ def handle_hook(event_type_override: HookEventType | None = None) -> int:
     Args:
         event_type_override: Optional override for the event type, used when called via specific hook entrypoints
     """
-    # Acquire lock to prevent overlapping hook executions
     lock = SlopometryLock()
     with lock.acquire() as acquired:
         if not acquired:
@@ -173,8 +172,8 @@ def _handle_hook_internal(event_type_override: HookEventType | None = None) -> i
         db = EventDatabase()
         db.save_event(event)
 
-        if event_type in (HookEventType.STOP, HookEventType.SUBAGENT_STOP) and settings.enable_complexity_analysis:
-            return handle_stop_event(session_id, parsed_input)  # type: ignore[arg-type]
+        if settings.enable_complexity_analysis and isinstance(parsed_input, StopInput | SubagentStopInput):
+            return handle_stop_event(session_id, parsed_input)
 
         if settings.debug_mode:
             debug_info = {
@@ -203,8 +202,67 @@ def _handle_hook_internal(event_type_override: HookEventType | None = None) -> i
         return 0
 
 
+def get_modified_python_files(working_directory: str | None) -> set[str]:
+    """Get modified Python files from git working tree.
+
+    Uses `git diff --name-only` to get uncommitted changes (both staged and unstaged).
+    This is more reliable than transcript-based context coverage for detecting
+    which files the user has actually modified.
+
+    Args:
+        working_directory: Path to git repository
+
+    Returns:
+        Set of relative paths to modified Python files
+
+    Raises:
+        ValueError: If working_directory is None or doesn't exist
+        RuntimeError: If git commands fail
+    """
+    if not working_directory:
+        raise ValueError("working_directory is required for git diff")
+
+    import subprocess
+
+    working_dir = Path(working_directory)
+    if not working_dir.exists():
+        raise ValueError(f"working_directory does not exist: {working_directory}")
+
+    modified_files: set[str] = set()
+
+    # Get unstaged changes
+    result = subprocess.run(
+        ["git", "diff", "--name-only", "--", "*.py"],
+        cwd=working_dir,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"git diff failed: {result.stderr}")
+    modified_files.update(line.strip() for line in result.stdout.strip().split("\n") if line.strip())
+
+    # Get staged changes
+    result = subprocess.run(
+        ["git", "diff", "--cached", "--name-only", "--", "*.py"],
+        cwd=working_dir,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"git diff --cached failed: {result.stderr}")
+    modified_files.update(line.strip() for line in result.stdout.strip().split("\n") if line.strip())
+
+    return modified_files
+
+
 def handle_stop_event(session_id: str, parsed_input: "StopInput | SubagentStopInput") -> int:
-    """Handle Stop events with complexity analysis and optional feedback to Claude.
+    """Handle Stop events with code smell feedback and optional complexity analysis.
+
+    Code smells are always checked (independent of enable_complexity_feedback).
+    Complexity metrics are only shown when enable_complexity_feedback is True.
+    Dev guidelines are shown when feedback_dev_guidelines is True.
 
     Args:
         session_id: The session ID
@@ -216,97 +274,46 @@ def handle_stop_event(session_id: str, parsed_input: "StopInput | SubagentStopIn
     if parsed_input.stop_hook_active:
         return 0
 
-    try:
-        db = EventDatabase()
-        stats = db.get_session_statistics(session_id)
+    db = EventDatabase()
+    stats = db.get_session_statistics(session_id)
 
-        if not stats:
-            return 0
+    if not stats:
+        return 0
 
-        current_metrics, delta = db.calculate_extended_complexity_metrics(stats.working_directory)
+    current_metrics, delta = db.calculate_extended_complexity_metrics(stats.working_directory)
 
-        if not settings.enable_complexity_feedback:
-            return 0
+    feedback_parts: list[str] = []
 
-        if not delta or not current_metrics:
-            return 0
+    # Get edited files from git (more reliable than transcript-based context coverage)
+    edited_files = get_modified_python_files(stats.working_directory)
 
-        metrics_unchanged = abs(delta.total_complexity_change) < 5 and not delta.files_added and not delta.files_removed
-        if metrics_unchanged:
-            return 0
+    # Code smells - ALWAYS check (independent of enable_complexity_feedback)
+    if current_metrics:
+        smell_feedback, has_smells, _ = format_code_smell_feedback(current_metrics, delta, edited_files, session_id)
+        if has_smells:
+            feedback_parts.append(smell_feedback)
 
-        baseline_feedback = ""
-        if settings.show_baseline_in_feedback:
-            baseline_feedback = _get_baseline_feedback(stats.working_directory, delta)
+    if settings.enable_complexity_feedback and stats.context_coverage and stats.context_coverage.files_edited:
+        context_feedback = format_context_coverage_feedback(stats.context_coverage)
+        if context_feedback:
+            feedback_parts.append(context_feedback)
 
-        context_feedback = ""
-        if stats.context_coverage and stats.context_coverage.files_edited:
-            context_feedback = format_context_coverage_feedback(stats.context_coverage)
+    if settings.feedback_dev_guidelines:
+        dev_guidelines = extract_dev_guidelines_from_claude_md(stats.working_directory)
+        if dev_guidelines:
+            feedback_parts.append(f"\n**Project Development Guidelines:**\n{dev_guidelines}")
 
-        feedback = format_complexity_feedback(current_metrics, delta, baseline_feedback, context_feedback)
+    if feedback_parts:
+        feedback = "\n\n".join(feedback_parts)
+        feedback += (
+            f"\n\n---\n**Session**: `{session_id}` | Details: `slopometry solo show {session_id} --smell-details`"
+        )
 
         hook_output = {"decision": "block", "reason": feedback}
-
         print(json.dumps(hook_output))
         return 2
 
-    except Exception:
-        return 0
-
-
-def _get_baseline_feedback(working_directory: str, delta: ComplexityDelta) -> str:
-    """Get baseline comparison feedback if available.
-
-    Uses cached baseline only to avoid blocking. If not cached,
-    triggers background computation for next session.
-
-    Args:
-        working_directory: Path to the repository
-        delta: Complexity delta from the session
-
-    Returns:
-        Formatted baseline feedback string, or empty if unavailable
-    """
-    import threading
-    from pathlib import Path
-
-    from slopometry.display.formatters import display_baseline_comparison_compact
-    from slopometry.summoner.services.baseline_service import BaselineService
-    from slopometry.summoner.services.impact_calculator import ImpactCalculator
-
-    working_path = Path(working_directory)
-    if not working_path.exists():
-        return ""
-
-    baseline_service = BaselineService()
-
-    from slopometry.core.git_tracker import GitTracker
-
-    git_tracker = GitTracker(working_path)
-    head_sha = git_tracker._get_current_commit_sha()
-
-    if not head_sha:
-        return ""
-
-    baseline = baseline_service.db.get_cached_baseline(str(working_path), head_sha)
-
-    if not baseline:
-
-        def compute_baseline_background():
-            try:
-                baseline_service.compute_full_baseline(working_path, max_workers=2)
-            except Exception:
-                pass  # Silently fail - this is background work
-
-        thread = threading.Thread(target=compute_baseline_background, daemon=True)
-        thread.start()
-
-        return "\n**Baseline**: Computing repository baseline for future sessions..."
-
-    impact_calculator = ImpactCalculator()
-    assessment = impact_calculator.calculate_impact(delta, baseline)
-
-    return "\n" + display_baseline_comparison_compact(baseline, assessment)
+    return 0
 
 
 def format_context_coverage_feedback(coverage: ContextCoverage) -> str:
@@ -345,6 +352,232 @@ def format_context_coverage_feedback(coverage: ContextCoverage) -> str:
             lines.append(f"   • {blind_spot}")
         if len(coverage.blind_spots) > 5:
             lines.append(f"   ... and {len(coverage.blind_spots) - 5} more")
+
+    unread_tests: list[str] = []
+    for file_cov in coverage.file_coverage:
+        for test_file in file_cov.test_files:
+            if test_file not in file_cov.test_files_read and test_file not in unread_tests:
+                unread_tests.append(test_file)
+
+    if unread_tests:
+        lines.append("")
+        lines.append("**RELATED Tests - MUST REVIEW**: These tests correspond to files you edited:")
+        for test_file in unread_tests[:5]:
+            lines.append(f"   • {test_file}")
+        if len(unread_tests) > 5:
+            lines.append(f"   ... and {len(unread_tests) - 5} more")
+
+    return "\n".join(lines)
+
+
+def extract_dev_guidelines_from_claude_md(working_directory: str) -> str:
+    """Extract '## Development guidelines' section from CLAUDE.md in the CWD.
+
+    Args:
+        working_directory: The current working directory to search for CLAUDE.md
+
+    Returns:
+        The extracted dev guidelines content, or empty string if not found
+
+    Raises:
+        OSError: If CLAUDE.md exists but cannot be read
+    """
+    claude_md_path = Path(working_directory) / "CLAUDE.md"
+
+    if not claude_md_path.exists():
+        return ""
+
+    content = claude_md_path.read_text(encoding="utf-8")
+
+    lines = content.split("\n")
+    in_section = False
+    section_lines: list[str] = []
+
+    for line in lines:
+        if line.strip().startswith("## Development guidelines"):
+            in_section = True
+            continue
+
+        if in_section:
+            if line.strip().startswith("## ") or line.strip().startswith("# "):
+                break
+            section_lines.append(line)
+
+    if not section_lines:
+        return ""
+
+    return "\n".join(section_lines).strip()
+
+
+def format_code_smell_feedback(
+    current_metrics: "ExtendedComplexityMetrics",
+    delta: "ComplexityDelta | None",
+    edited_files: set[str] | None = None,
+    session_id: str | None = None,
+) -> tuple[str, bool, bool]:
+    """Format code smell feedback by iterating over SmellField-marked fields.
+
+    Args:
+        current_metrics: Current complexity metrics with code smell counts
+        delta: Optional complexity delta showing changes
+        edited_files: Set of files edited in this session (for blocking smell filtering)
+        session_id: Session ID for generating the smell-details command
+
+    Returns:
+        Tuple of (formatted feedback string, has_smells, has_blocking_smells)
+        - has_smells: whether any code smells were detected
+        - has_blocking_smells: whether any BLOCKING smells in edited files were detected
+    """
+    blocking_fields = {"test_skip_count", "swallowed_exception_count"}
+    edited_files = edited_files or set()
+
+    blocking_smells: list[tuple[str, int, int, str]] = []  # (label, count, change, guidance)
+    other_smells: list[tuple[str, int, int]] = []  # (label, count, change)
+
+    # NOTE: getattr usage below is intentional - we iterate over model_fields dynamically
+    # to discover smell fields by their is_smell marker. Field names come from Pydantic's
+    # schema, not external input, so this is a justified use of dynamic attribute access.
+    for field_name, field_info in ExtendedComplexityMetrics.model_fields.items():
+        extra = field_info.json_schema_extra
+        if not extra or not isinstance(extra, dict) or not extra.get("is_smell"):
+            continue
+
+        count = getattr(current_metrics, field_name, 0)
+        if count == 0:
+            continue
+
+        label = str(extra["label"])
+        change_field = field_name.replace("_count", "_change")
+        change = getattr(delta, change_field, 0) if delta else 0
+
+        is_blocking_related = False
+        if field_name in blocking_fields and edited_files:
+            files_field = str(extra["files_field"])
+            smell_files = set(getattr(current_metrics, files_field, []))
+            for smell_file in smell_files:
+                if smell_file in edited_files:
+                    is_blocking_related = True
+                    break
+                for edited_file in edited_files:
+                    edited_stem = Path(edited_file).stem
+                    if f"test_{edited_stem}" in smell_file:
+                        is_blocking_related = True
+                        break
+                if is_blocking_related:
+                    break
+
+        if is_blocking_related:
+            guidance = field_info.description or ""
+            blocking_smells.append((label, count, change, guidance))
+        else:
+            other_smells.append((label, count, change))
+
+    lines: list[str] = []
+    has_blocking = len(blocking_smells) > 0
+
+    if blocking_smells:
+        lines.append("")
+        lines.append("**ACTION REQUIRED** - The following issues are in files you edited:")
+        lines.append("")
+        for label, count, change, guidance in blocking_smells:
+            change_str = f" (+{change})" if change > 0 else f" ({change})" if change < 0 else ""
+            lines.append(f"   • **{label}**: {count}{change_str}")
+            if guidance:
+                lines.append(f"     → {guidance}")
+        if session_id:
+            lines.append("")
+            lines.append(f"Run `slopometry solo show {session_id} --smell-details` to see affected files.")
+        lines.append("")
+
+    if other_smells:
+        if not blocking_smells:
+            lines.append("")
+        lines.append("**Code Smells Summary** (not in edited files):")
+        smell_parts = []
+        for label, count, change in other_smells:
+            change_str = f" (+{change})" if change > 0 else f" ({change})" if change < 0 else ""
+            smell_parts.append(f"{label}: {count}{change_str}")
+        lines.append("   " + " | ".join(smell_parts))
+
+    has_smells = len(blocking_smells) > 0 or len(other_smells) > 0
+    if has_smells:
+        return "\n".join(lines), True, has_blocking
+    return "", False, False
+
+
+def format_complexity_metrics_only(
+    current_metrics: "ExtendedComplexityMetrics",
+    delta: "ComplexityDelta",
+    baseline_feedback: str = "",
+    context_feedback: str = "",
+) -> str:
+    """Format complexity metrics feedback (without code smells).
+
+    Args:
+        current_metrics: Current complexity metrics
+        delta: Complexity changes from previous commit
+        baseline_feedback: Optional baseline comparison feedback
+        context_feedback: Optional context coverage feedback
+
+    Returns:
+        Formatted feedback string for Claude
+    """
+    lines = []
+
+    lines.append("**Complexity Analysis Summary**")
+    lines.append("")
+
+    if delta.total_complexity_change > 0:
+        lines.append(
+            f"**Complexity increased by +{delta.total_complexity_change}** (now {current_metrics.total_complexity} total)"
+        )
+    elif delta.total_complexity_change < 0:
+        lines.append(
+            f"**Complexity decreased by {delta.total_complexity_change}** (now {current_metrics.total_complexity} total)"
+        )
+    else:
+        lines.append(f"**No net complexity change** ({current_metrics.total_complexity} total)")
+
+    if delta.files_added:
+        lines.append(f"**Added {len(delta.files_added)} files**: {', '.join(delta.files_added[:3])}")
+        if len(delta.files_added) > 3:
+            lines.append(f"   ... and {len(delta.files_added) - 3} more")
+
+    if delta.files_removed:
+        lines.append(f"**Removed {len(delta.files_removed)} files**: {', '.join(delta.files_removed[:3])}")
+        if len(delta.files_removed) > 3:
+            lines.append(f"   ... and {len(delta.files_removed) - 3} more")
+
+    lines.append("")
+    lines.append("**Code Quality**:")
+    lines.append(f"   * Type Hint Coverage: {current_metrics.type_hint_coverage:.1f}%")
+    lines.append(f"   * Docstring Coverage: {current_metrics.docstring_coverage:.1f}%")
+    lines.append(f"   * Any Type Usage: {current_metrics.any_type_percentage:.1f}%")
+    lines.append(f"   * str Type Usage: {current_metrics.str_type_percentage:.1f}%")
+
+    if delta.files_changed:
+        lines.append("")
+        lines.append("**Biggest complexity changes**:")
+        sorted_changes = sorted(delta.files_changed.items(), key=lambda x: abs(x[1]), reverse=True)[:3]
+        for file_path, change in sorted_changes:
+            if change > 0:
+                lines.append(f"   * {file_path}: +{change}")
+            else:
+                lines.append(f"   * {file_path}: {change}")
+
+    if baseline_feedback:
+        lines.append(baseline_feedback)
+
+    if context_feedback:
+        lines.append(context_feedback)
+
+    lines.append("")
+    if delta.total_complexity_change > 20:
+        lines.append("**Consider**: Breaking down complex functions or refactoring to reduce cognitive load.")
+    elif delta.total_complexity_change > 0:
+        lines.append("**Note**: Slight complexity increase. Monitor for future refactoring opportunities.")
+    elif delta.total_complexity_change < -10:
+        lines.append("**Great work**: Complexity reduction makes the code more maintainable!")
 
     return "\n".join(lines)
 
@@ -487,7 +720,6 @@ def format_complexity_feedback(
 
     lines.append("")
 
-    # Check for smell increases
     smell_increases = []
     if delta.orphan_comment_change > 0:
         smell_increases.append("orphan comments")
