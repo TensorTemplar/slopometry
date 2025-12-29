@@ -3,7 +3,7 @@
 import logging
 import shutil
 import subprocess
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -36,6 +36,50 @@ class CommitDelta:
     cc_delta: float
     effort_delta: float
     mi_delta: float
+
+
+def _compute_single_delta_task(repo_path: Path, parent_sha: str, child_sha: str) -> CommitDelta | None:
+    """Compute metrics delta between two commits (module-level for ProcessPoolExecutor).
+
+    NOTE: Must be at module level because ProcessPoolExecutor requires picklable callables.
+    """
+    git_tracker = GitTracker(repo_path)
+
+    changed_files = git_tracker.get_changed_python_files(parent_sha, child_sha)
+    if not changed_files:
+        return CommitDelta(cc_delta=0.0, effort_delta=0.0, mi_delta=0.0)
+
+    parent_dir = git_tracker.extract_specific_files_from_commit(parent_sha, changed_files)
+    child_dir = git_tracker.extract_specific_files_from_commit(child_sha, changed_files)
+
+    try:
+        if not parent_dir and not child_dir:
+            return None
+
+        analyzer = ComplexityAnalyzer(working_directory=repo_path)
+
+        parent_metrics = analyzer.analyze_extended_complexity(parent_dir) if parent_dir else None
+        child_metrics = analyzer.analyze_extended_complexity(child_dir) if child_dir else None
+
+        parent_cc = parent_metrics.total_complexity if parent_metrics else 0
+        parent_effort = parent_metrics.total_effort if parent_metrics else 0.0
+        parent_mi = parent_metrics.total_mi if parent_metrics else 0.0
+
+        child_cc = child_metrics.total_complexity if child_metrics else 0
+        child_effort = child_metrics.total_effort if child_metrics else 0.0
+        child_mi = child_metrics.total_mi if child_metrics else 0.0
+
+        return CommitDelta(
+            cc_delta=child_cc - parent_cc,
+            effort_delta=child_effort - parent_effort,
+            mi_delta=child_mi - parent_mi,
+        )
+
+    finally:
+        if parent_dir:
+            shutil.rmtree(parent_dir, ignore_errors=True)
+        if child_dir:
+            shutil.rmtree(child_dir, ignore_errors=True)
 
 
 class BaselineService:
@@ -164,9 +208,9 @@ class BaselineService:
         """Compute deltas for commit pairs in parallel."""
         deltas = []
 
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
             futures = {
-                executor.submit(self._compute_single_delta, repo_path, parent, child): (parent, child)
+                executor.submit(_compute_single_delta_task, repo_path, parent, child): (parent, child)
                 for parent, child in commit_pairs
             }
 
@@ -179,59 +223,6 @@ class BaselineService:
                     pass
 
         return deltas
-
-    def _compute_single_delta(self, repo_path: Path, parent_sha: str, child_sha: str) -> CommitDelta | None:
-        """Compute metrics delta between two commits.
-
-        Only analyzes files that actually changed between commits for speed.
-
-        Args:
-            repo_path: Path to the repository
-            parent_sha: Parent commit SHA
-            child_sha: Child commit SHA
-
-        Returns:
-            CommitDelta or None if computation fails
-        """
-        git_tracker = GitTracker(repo_path)
-
-        changed_files = git_tracker.get_changed_python_files(parent_sha, child_sha)
-        if not changed_files:
-            return CommitDelta(cc_delta=0.0, effort_delta=0.0, mi_delta=0.0)
-
-        parent_dir = git_tracker.extract_specific_files_from_commit(parent_sha, changed_files)
-        child_dir = git_tracker.extract_specific_files_from_commit(child_sha, changed_files)
-
-        try:
-            if not parent_dir and not child_dir:
-                return None
-
-            analyzer = ComplexityAnalyzer(working_directory=repo_path)
-
-            parent_metrics = analyzer.analyze_extended_complexity(parent_dir) if parent_dir else None
-            child_metrics = analyzer.analyze_extended_complexity(child_dir) if child_dir else None
-
-            # NOTE: Use TOTAL metrics (not averages) because totals are additive,
-            # allowing changed-files-only analysis to yield correct whole-repo deltas.
-            parent_cc = parent_metrics.total_complexity if parent_metrics else 0
-            parent_effort = parent_metrics.total_effort if parent_metrics else 0.0
-            parent_mi = parent_metrics.total_mi if parent_metrics else 0.0
-
-            child_cc = child_metrics.total_complexity if child_metrics else 0
-            child_effort = child_metrics.total_effort if child_metrics else 0.0
-            child_mi = child_metrics.total_mi if child_metrics else 0.0
-
-            return CommitDelta(
-                cc_delta=child_cc - parent_cc,
-                effort_delta=child_effort - parent_effort,
-                mi_delta=child_mi - parent_mi,
-            )
-
-        finally:
-            if parent_dir:
-                shutil.rmtree(parent_dir, ignore_errors=True)
-            if child_dir:
-                shutil.rmtree(child_dir, ignore_errors=True)
 
     def _get_commit_token_count(self, repo_path: Path, commit_sha: str, analyzer: ComplexityAnalyzer) -> int | None:
         """Get total token count for a specific commit.
