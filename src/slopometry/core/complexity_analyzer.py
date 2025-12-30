@@ -5,31 +5,21 @@ import os
 import time
 import warnings
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from slopometry.core.models import ComplexityDelta, ComplexityMetrics, ExtendedComplexityMetrics
+from slopometry.core.models import (
+    ComplexityDelta,
+    ComplexityMetrics,
+    ExtendedComplexityMetrics,
+    FileAnalysisResult,
+)
 from slopometry.core.python_feature_analyzer import PythonFeatureAnalyzer
 from slopometry.core.settings import settings
 
 logger = logging.getLogger(__name__)
 
 CALCULATOR_VERSION = "2024.1.4"
-
-
-@dataclass
-class FileAnalysisResult:
-    """Result from analyzing a single file."""
-
-    path: str
-    complexity: int
-    volume: float
-    difficulty: float
-    effort: float
-    mi: float
-    tokens: int
-    error: str | None = None
 
 
 def _analyze_single_file_extended(file_path: Path) -> FileAnalysisResult | None:

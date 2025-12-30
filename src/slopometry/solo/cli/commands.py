@@ -1,5 +1,6 @@
 """CLI commands for solo-leveler features."""
 
+import logging
 from pathlib import Path
 
 import click
@@ -11,6 +12,7 @@ from slopometry.solo.services.hook_service import HookService
 from slopometry.solo.services.session_service import SessionService
 
 console = Console()
+logger = logging.getLogger(__name__)
 
 
 def complete_session_id(ctx: click.Context, param: click.Parameter, incomplete: str) -> list[str]:
@@ -157,8 +159,8 @@ def latest(smell_details: bool, file_details: bool) -> None:
                     if coverage_result.coverage_available:
                         stats.complexity_metrics.test_coverage_percent = coverage_result.total_coverage_percent
                         stats.complexity_metrics.test_coverage_source = coverage_result.source_file
-                except Exception:
-                    pass  # Coverage is optional, silently skip on errors
+                except Exception as e:
+                    logger.debug(f"Coverage analysis failed (optional): {e}")
 
         # Compute baseline if we have complexity delta
         baseline, assessment = _compute_session_baseline(stats)

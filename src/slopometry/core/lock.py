@@ -1,6 +1,7 @@
 """File-based locking for Slopometry hook coordination."""
 
 import fcntl
+import logging
 import tempfile
 import time
 from collections.abc import Generator
@@ -8,6 +9,8 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from slopometry.core.settings import settings
+
+logger = logging.getLogger(__name__)
 
 
 class SlopometryLock:
@@ -24,8 +27,8 @@ class SlopometryLock:
             db_path = settings.resolved_database_path
             if db_path and db_path.parent.exists():
                 return db_path.parent / "slopometry.lock"
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"Failed to get db path for lock file, using tempdir: {e}")
 
         return Path(tempfile.gettempdir()) / "slopometry.lock"
 
@@ -57,10 +60,10 @@ class SlopometryLock:
             if acquired:
                 try:
                     fcntl.flock(self._lock_file_fd, fcntl.LOCK_UN)
-                except OSError:
-                    pass
+                except OSError as e:
+                    logger.debug(f"Failed to unlock file (may already be released): {e}")
 
             try:
                 self._lock_file_fd.close()
-            except OSError:
-                pass
+            except OSError as e:
+                logger.debug(f"Failed to close lock file (may already be closed): {e}")

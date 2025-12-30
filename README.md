@@ -8,12 +8,13 @@ A tool that lurks in the shadows, tracks and analyzes Claude Code sessions provi
 # Customer testimonials
 
 ### Claude Sonnet 4
-![claude sonnet feedback](assets/sonnet.png)  
-*"Amazing tool for tracking my own cognitive complexity!"*  
+![claude sonnet feedback](assets/stop_hook_example.png)  
+![claude sonnet actioning](assets/stop_hook_action.png)  
+*"Amazing tool for tracking my own blind spots!"*  
 — C. Sonnet, main-author
 
 ### Claude Opus
-![opus feedback](assets/opus.png)
+![opus feedback](assets/opus.png)  
 *"Finally, I can see when I'm overcomplicating things."*
 — C. Opus, overpaid, infrequent contributor who insists on having its name in commit history
 
@@ -245,6 +246,6 @@ Customize via `.env` file or environment variables:
 [x] - Actually make a package so people can install this   
 [ ] - Add hindsight-justified user stories with acceptance criteria based off of future commits  
 [x] - Add plan evolution log based on claude's todo shenanigans   
-[ ] - Finish git worktree-based [NFP-CLI](https://tensortemplar.substack.com/p/humans-are-no-longer-embodied-amortization) (TM) training objective implementation so complexity metrics can be used as additional process reward for training code agents
+[ ] - Finish git worktree-based [NFP-CLI](https://tensortemplar.substack.com/p/humans-are-no-longer-embodied-amortization) (TM) training objective implementation so complexity metrics can be used as additional process reward for training code agents  
 [ ] - Extend stop hook feedback with LLM-as-Judge to support guiding agents based on smells and style guide  
 [ ] - Not go bankrupt from having to maintain open source in my free time, no wait...
