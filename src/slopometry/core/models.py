@@ -134,6 +134,19 @@ class HookEvent(BaseModel):
     transcript_path: str | None = None
 
 
+class FileAnalysisResult(BaseModel):
+    """Result from analyzing a single Python file for complexity metrics."""
+
+    path: str
+    complexity: int
+    volume: float
+    difficulty: float
+    effort: float
+    mi: float
+    tokens: int
+    error: str | None = None
+
+
 class ComplexityMetrics(BaseModel):
     """Cognitive complexity metrics for Python files."""
 
