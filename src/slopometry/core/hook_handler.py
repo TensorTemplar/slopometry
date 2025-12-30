@@ -1,6 +1,8 @@
 """Hook handler script invoked by Claude Code for each event."""
 
+import hashlib
 import json
+import logging
 import os
 import sys
 from pathlib import Path
@@ -24,6 +26,9 @@ from slopometry.core.models import (
 )
 from slopometry.core.project_tracker import ProjectTracker
 from slopometry.core.settings import settings
+from slopometry.display.formatters import truncate_path
+
+logger = logging.getLogger(__name__)
 
 
 def get_tool_type(tool_name: str) -> ToolType:
@@ -230,7 +235,6 @@ def get_modified_python_files(working_directory: str | None) -> set[str]:
 
     modified_files: set[str] = set()
 
-    # Get unstaged changes
     result = subprocess.run(
         ["git", "diff", "--name-only", "--", "*.py"],
         cwd=working_dir,
@@ -242,7 +246,6 @@ def get_modified_python_files(working_directory: str | None) -> set[str]:
         raise RuntimeError(f"git diff failed: {result.stderr}")
     modified_files.update(line.strip() for line in result.stdout.strip().split("\n") if line.strip())
 
-    # Get staged changes
     result = subprocess.run(
         ["git", "diff", "--cached", "--name-only", "--", "*.py"],
         cwd=working_dir,
@@ -257,12 +260,77 @@ def get_modified_python_files(working_directory: str | None) -> set[str]:
     return modified_files
 
 
+def _get_feedback_cache_path(working_directory: str) -> Path:
+    """Get path to the feedback cache file for a working directory."""
+    cache_dir = Path(working_directory) / ".slopometry"
+    cache_dir.mkdir(exist_ok=True)
+    return cache_dir / "feedback_cache.json"
+
+
+def _compute_feedback_cache_key(working_directory: str, edited_files: set[str], feedback_hash: str) -> str:
+    """Compute a cache key for the current state.
+
+    Args:
+        working_directory: Path to the working directory
+        edited_files: Set of edited file paths
+        feedback_hash: Hash of the feedback content
+
+    Returns:
+        Cache key string
+    """
+    tracker = GitTracker(Path(working_directory))
+    commit_sha = tracker.get_current_commit_sha() or "unknown"
+    working_tree_hash = tracker.get_working_tree_hash() or "unknown"
+    files_key = ",".join(sorted(edited_files))
+
+    key_parts = f"{commit_sha}:{working_tree_hash}:{files_key}:{feedback_hash}"
+    return hashlib.sha256(key_parts.encode()).hexdigest()[:16]
+
+
+def _is_feedback_cached(working_directory: str, cache_key: str) -> bool:
+    """Check if the feedback for this state was already shown.
+
+    Args:
+        working_directory: Path to the working directory
+        cache_key: Cache key to check
+
+    Returns:
+        True if feedback was already shown for this state
+    """
+    cache_path = _get_feedback_cache_path(working_directory)
+    if not cache_path.exists():
+        return False
+
+    try:
+        cache_data = json.loads(cache_path.read_text())
+        return cache_data.get("last_key") == cache_key
+    except (json.JSONDecodeError, OSError):
+        return False
+
+
+def _save_feedback_cache(working_directory: str, cache_key: str) -> None:
+    """Save the feedback cache key.
+
+    Args:
+        working_directory: Path to the working directory
+        cache_key: Cache key to save
+    """
+    cache_path = _get_feedback_cache_path(working_directory)
+    try:
+        cache_path.write_text(json.dumps({"last_key": cache_key}))
+    except OSError as e:
+        logger.debug(f"Failed to save feedback cache: {e}")
+
+
 def handle_stop_event(session_id: str, parsed_input: "StopInput | SubagentStopInput") -> int:
     """Handle Stop events with code smell feedback and optional complexity analysis.
 
     Code smells are always checked (independent of enable_complexity_feedback).
     Complexity metrics are only shown when enable_complexity_feedback is True.
     Dev guidelines are shown when feedback_dev_guidelines is True.
+
+    Feedback is cached - if the same feedback would be shown twice without code changes,
+    the second invocation returns silently.
 
     Args:
         session_id: The session ID
@@ -289,7 +357,9 @@ def handle_stop_event(session_id: str, parsed_input: "StopInput | SubagentStopIn
 
     # Code smells - ALWAYS check (independent of enable_complexity_feedback)
     if current_metrics:
-        smell_feedback, has_smells, _ = format_code_smell_feedback(current_metrics, delta, edited_files, session_id)
+        smell_feedback, has_smells, _ = format_code_smell_feedback(
+            current_metrics, delta, edited_files, session_id, stats.working_directory
+        )
         if has_smells:
             feedback_parts.append(smell_feedback)
 
@@ -308,6 +378,15 @@ def handle_stop_event(session_id: str, parsed_input: "StopInput | SubagentStopIn
         feedback += (
             f"\n\n---\n**Session**: `{session_id}` | Details: `slopometry solo show {session_id} --smell-details`"
         )
+
+        # Check cache - skip if same feedback was already shown for this state
+        feedback_hash = hashlib.sha256(feedback.encode()).hexdigest()[:16]
+        cache_key = _compute_feedback_cache_key(stats.working_directory, edited_files, feedback_hash)
+
+        if _is_feedback_cached(stats.working_directory, cache_key):
+            return 0
+
+        _save_feedback_cache(stats.working_directory, cache_key)
 
         hook_output = {"decision": "block", "reason": feedback}
         print(json.dumps(hook_output))
@@ -349,7 +428,7 @@ def format_context_coverage_feedback(coverage: ContextCoverage) -> str:
         lines.append("")
         lines.append("**Blind spots** (related files not read):")
         for blind_spot in coverage.blind_spots[:5]:
-            lines.append(f"   • {blind_spot}")
+            lines.append(f"   • {truncate_path(blind_spot, max_width=65)}")
         if len(coverage.blind_spots) > 5:
             lines.append(f"   ... and {len(coverage.blind_spots) - 5} more")
 
@@ -363,7 +442,7 @@ def format_context_coverage_feedback(coverage: ContextCoverage) -> str:
         lines.append("")
         lines.append("**RELATED Tests - MUST REVIEW**: These tests correspond to files you edited:")
         for test_file in unread_tests[:5]:
-            lines.append(f"   • {test_file}")
+            lines.append(f"   • {truncate_path(test_file, max_width=65)}")
         if len(unread_tests) > 5:
             lines.append(f"   ... and {len(unread_tests) - 5} more")
 
@@ -409,11 +488,68 @@ def extract_dev_guidelines_from_claude_md(working_directory: str) -> str:
     return "\n".join(section_lines).strip()
 
 
+def _get_related_files_via_imports(edited_files: set[str], working_directory: str) -> set[str]:
+    """Build set of files related to edited files via import graph.
+
+    Uses the ContextCoverageAnalyzer to find:
+    - Files that import the edited files (dependents) - these could break from our changes
+    - Test files for edited files
+
+    Note: We intentionally do NOT include files that edited files import, because
+    changes to the edited file don't affect its dependencies.
+
+    Args:
+        edited_files: Set of files edited in this session
+        working_directory: Path to the working directory
+
+    Returns:
+        Set of file paths related to edited files (includes edited_files themselves)
+
+    Raises:
+        Exception: If import graph analysis fails (no silent fallback)
+    """
+    from slopometry.core.context_coverage_analyzer import ContextCoverageAnalyzer
+
+    related = set(edited_files)
+
+    analyzer = ContextCoverageAnalyzer(Path(working_directory))
+    analyzer._build_import_graph()
+
+    for edited_file in edited_files:
+        # Dependents (files that import the edited file) could break from our changes
+        dependents = analyzer._reverse_import_graph.get(edited_file, set())
+        related.update(dependents)
+
+        test_files = analyzer._find_test_files(edited_file)
+        related.update(test_files)
+
+    return related
+
+
+def _is_file_related_to_edits(smell_file: str, edited_files: set[str], related_files: set[str]) -> bool:
+    """Check if a smell file is related to the edited files.
+
+    A file is related if:
+    - It is directly in edited_files
+    - It is in the related_files set (computed via import graph)
+
+    Args:
+        smell_file: Path to a file containing a smell
+        edited_files: Set of files edited in this session
+        related_files: Set of related files via import graph (required)
+
+    Returns:
+        True if the smell file is related to edited files
+    """
+    return smell_file in edited_files or smell_file in related_files
+
+
 def format_code_smell_feedback(
     current_metrics: "ExtendedComplexityMetrics",
     delta: "ComplexityDelta | None",
     edited_files: set[str] | None = None,
     session_id: str | None = None,
+    working_directory: str | None = None,
 ) -> tuple[str, bool, bool]:
     """Format code smell feedback by iterating over SmellField-marked fields.
 
@@ -422,6 +558,7 @@ def format_code_smell_feedback(
         delta: Optional complexity delta showing changes
         edited_files: Set of files edited in this session (for blocking smell filtering)
         session_id: Session ID for generating the smell-details command
+        working_directory: Path to working directory for import graph analysis
 
     Returns:
         Tuple of (formatted feedback string, has_smells, has_blocking_smells)
@@ -431,7 +568,14 @@ def format_code_smell_feedback(
     blocking_fields = {"test_skip_count", "swallowed_exception_count"}
     edited_files = edited_files or set()
 
-    blocking_smells: list[tuple[str, int, int, str]] = []  # (label, count, change, guidance)
+    related_via_imports: set[str] = set()
+    if edited_files:
+        if not working_directory:
+            raise ValueError("working_directory is required when edited_files is provided")
+        related_via_imports = _get_related_files_via_imports(edited_files, working_directory)
+
+    # (label, related_file_count, change, guidance, related_files)
+    blocking_smells: list[tuple[str, int, int, str, list[str]]] = []
     other_smells: list[tuple[str, int, int]] = []  # (label, count, change)
 
     # NOTE: getattr usage below is intentional - we iterate over model_fields dynamically
@@ -450,25 +594,19 @@ def format_code_smell_feedback(
         change_field = field_name.replace("_count", "_change")
         change = getattr(delta, change_field, 0) if delta else 0
 
-        is_blocking_related = False
         if field_name in blocking_fields and edited_files:
             files_field = str(extra["files_field"])
-            smell_files = set(getattr(current_metrics, files_field, []))
-            for smell_file in smell_files:
-                if smell_file in edited_files:
-                    is_blocking_related = True
-                    break
-                for edited_file in edited_files:
-                    edited_stem = Path(edited_file).stem
-                    if f"test_{edited_stem}" in smell_file:
-                        is_blocking_related = True
-                        break
-                if is_blocking_related:
-                    break
+            smell_files = list(getattr(current_metrics, files_field, []))
 
-        if is_blocking_related:
-            guidance = field_info.description or ""
-            blocking_smells.append((label, count, change, guidance))
+            related_files = [f for f in smell_files if _is_file_related_to_edits(f, edited_files, related_via_imports)]
+            unrelated_count = len(smell_files) - len(related_files)
+
+            if related_files:
+                guidance = field_info.description or ""
+                blocking_smells.append((label, len(related_files), change, guidance, related_files))
+
+            if unrelated_count > 0:
+                other_smells.append((label, unrelated_count, 0))  # No change tracking for split counts
         else:
             other_smells.append((label, count, change))
 
@@ -479,14 +617,15 @@ def format_code_smell_feedback(
         lines.append("")
         lines.append("**ACTION REQUIRED** - The following issues are in files you edited:")
         lines.append("")
-        for label, count, change, guidance in blocking_smells:
+        for label, file_count, change, guidance, related_files in blocking_smells:
             change_str = f" (+{change})" if change > 0 else f" ({change})" if change < 0 else ""
-            lines.append(f"   • **{label}**: {count}{change_str}")
+            lines.append(f"   • **{label}**: {file_count} file(s){change_str}")
+            for f in related_files[:5]:
+                lines.append(f"     - {truncate_path(f, max_width=60)}")
+            if len(related_files) > 5:
+                lines.append(f"     ... and {len(related_files) - 5} more")
             if guidance:
                 lines.append(f"     → {guidance}")
-        if session_id:
-            lines.append("")
-            lines.append(f"Run `slopometry solo show {session_id} --smell-details` to see affected files.")
         lines.append("")
 
     if other_smells:
@@ -539,12 +678,14 @@ def format_complexity_metrics_only(
         lines.append(f"**No net complexity change** ({current_metrics.total_complexity} total)")
 
     if delta.files_added:
-        lines.append(f"**Added {len(delta.files_added)} files**: {', '.join(delta.files_added[:3])}")
+        truncated_added = [truncate_path(f, max_width=30) for f in delta.files_added[:3]]
+        lines.append(f"**Added {len(delta.files_added)} files**: {', '.join(truncated_added)}")
         if len(delta.files_added) > 3:
             lines.append(f"   ... and {len(delta.files_added) - 3} more")
 
     if delta.files_removed:
-        lines.append(f"**Removed {len(delta.files_removed)} files**: {', '.join(delta.files_removed[:3])}")
+        truncated_removed = [truncate_path(f, max_width=30) for f in delta.files_removed[:3]]
+        lines.append(f"**Removed {len(delta.files_removed)} files**: {', '.join(truncated_removed)}")
         if len(delta.files_removed) > 3:
             lines.append(f"   ... and {len(delta.files_removed) - 3} more")
 
@@ -560,10 +701,11 @@ def format_complexity_metrics_only(
         lines.append("**Biggest complexity changes**:")
         sorted_changes = sorted(delta.files_changed.items(), key=lambda x: abs(x[1]), reverse=True)[:3]
         for file_path, change in sorted_changes:
+            truncated = truncate_path(file_path, max_width=50)
             if change > 0:
-                lines.append(f"   * {file_path}: +{change}")
+                lines.append(f"   * {truncated}: +{change}")
             else:
-                lines.append(f"   * {file_path}: {change}")
+                lines.append(f"   * {truncated}: {change}")
 
     if baseline_feedback:
         lines.append(baseline_feedback)
@@ -616,12 +758,14 @@ def format_complexity_feedback(
         lines.append(f"**No net complexity change** ({current_metrics.total_complexity} total)")
 
     if delta.files_added:
-        lines.append(f"**Added {len(delta.files_added)} files**: {', '.join(delta.files_added[:3])}")
+        truncated_added = [truncate_path(f, max_width=30) for f in delta.files_added[:3]]
+        lines.append(f"**Added {len(delta.files_added)} files**: {', '.join(truncated_added)}")
         if len(delta.files_added) > 3:
             lines.append(f"   ... and {len(delta.files_added) - 3} more")
 
     if delta.files_removed:
-        lines.append(f"**Removed {len(delta.files_removed)} files**: {', '.join(delta.files_removed[:3])}")
+        truncated_removed = [truncate_path(f, max_width=30) for f in delta.files_removed[:3]]
+        lines.append(f"**Removed {len(delta.files_removed)} files**: {', '.join(truncated_removed)}")
         if len(delta.files_removed) > 3:
             lines.append(f"   ... and {len(delta.files_removed) - 3} more")
 
@@ -646,7 +790,8 @@ def format_complexity_feedback(
             base_msg = f"   • {label}: {count}"
 
         if files and count > 0:
-            file_list = ", ".join(files[:3])
+            truncated_files = [truncate_path(f, max_width=25) for f in files[:3]]
+            file_list = ", ".join(truncated_files)
             remaining = len(files) - 3
             if remaining > 0:
                 return f"{base_msg} [{file_list}, ... +{remaining}]"
@@ -707,10 +852,11 @@ def format_complexity_feedback(
         lines.append("**Biggest complexity changes**:")
         sorted_changes = sorted(delta.files_changed.items(), key=lambda x: abs(x[1]), reverse=True)[:3]
         for file_path, change in sorted_changes:
+            truncated = truncate_path(file_path, max_width=50)
             if change > 0:
-                lines.append(f"   • {file_path}: +{change}")
+                lines.append(f"   • {truncated}: +{change}")
             else:
-                lines.append(f"   • {file_path}: {change}")
+                lines.append(f"   • {truncated}: {change}")
 
     if baseline_feedback:
         lines.append(baseline_feedback)

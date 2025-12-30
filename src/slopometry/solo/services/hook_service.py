@@ -4,7 +4,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-from slopometry.core.settings import settings
+from slopometry.core.settings import get_default_config_dir, get_default_data_dir, settings
 
 
 class HookService:
@@ -32,12 +32,24 @@ class HookService:
             "SubagentStop": [{"hooks": [{"type": "command", "command": base_command.format("subagent-stop")}]}],
         }
 
+    def _ensure_global_directories(self) -> None:
+        """Create global config and data directories if they don't exist."""
+        config_dir = get_default_config_dir()
+        data_dir = get_default_data_dir()
+
+        config_dir.mkdir(parents=True, exist_ok=True)
+        data_dir.mkdir(parents=True, exist_ok=True)
+
     def install_hooks(self, global_: bool = False) -> tuple[bool, str]:
         """Install slopometry hooks into Claude Code settings.
+
+        Also ensures global config and data directories exist.
 
         Returns:
             Tuple of (success, message)
         """
+        self._ensure_global_directories()
+
         settings_dir = Path.home() / ".claude" if global_ else Path.cwd() / ".claude"
         settings_file = settings_dir / "settings.json"
 

@@ -49,12 +49,16 @@ def _warn_if_not_in_path() -> None:
 )
 def install(global_: bool) -> None:
     """Install slopometry hooks into Claude Code settings to automatically track all sessions and tool usage."""
+    from slopometry.core.settings import get_default_config_dir, get_default_data_dir
+
     hook_service = HookService()
     success, message = hook_service.install_hooks(global_)
 
     if success:
         console.print(f"[green]{message}[/green]")
         console.print("[cyan]All Claude Code sessions will now be automatically tracked[/cyan]")
+        console.print(f"[dim]Config: {get_default_config_dir()}[/dim]")
+        console.print(f"[dim]Data:   {get_default_data_dir()}[/dim]")
         _warn_if_not_in_path()
     else:
         console.print(f"[red]{message}[/red]")
@@ -111,7 +115,6 @@ def show(session_id: str, smell_details: bool, file_details: bool) -> None:
         console.print(f"[red]No data found for session {session_id}[/red]")
         return
 
-    # Compute baseline if we have complexity delta
     baseline, assessment = _compute_session_baseline(stats)
     display_session_summary(
         stats,
@@ -146,7 +149,6 @@ def latest(smell_details: bool, file_details: bool) -> None:
     console.print(f"[bold]Showing most recent session: {most_recent}[/bold]\n")
     stats = session_service.get_session_statistics(most_recent)
     if stats:
-        # Add test coverage if we have complexity metrics and working directory
         if stats.complexity_metrics and stats.working_directory:
             working_dir = Path(stats.working_directory)
             if working_dir.exists():
@@ -162,7 +164,6 @@ def latest(smell_details: bool, file_details: bool) -> None:
                 except Exception as e:
                     logger.debug(f"Coverage analysis failed (optional): {e}")
 
-        # Compute baseline if we have complexity delta
         baseline, assessment = _compute_session_baseline(stats)
         display_session_summary(
             stats,
@@ -196,11 +197,9 @@ def _compute_session_baseline(stats):
     if not working_dir or not working_dir.exists():
         return None, None
 
-    # Check if baseline is cached - if not, show a hint
     db = EventDatabase()
     git_tracker = GitTracker(working_dir)
     head_sha = git_tracker._get_current_commit_sha()
-
     cached_baseline = db.get_cached_baseline(str(working_dir.resolve()), head_sha) if head_sha else None
 
     if not cached_baseline:
