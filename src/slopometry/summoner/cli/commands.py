@@ -1,5 +1,6 @@
 """CLI commands for summoner features."""
 
+import logging
 import subprocess
 import sys
 from pathlib import Path
@@ -7,6 +8,8 @@ from pathlib import Path
 import click
 from click.shell_completion import CompletionItem
 from rich.console import Console
+
+logger = logging.getLogger(__name__)
 
 from slopometry.display.formatters import (
     create_experiment_table,
@@ -357,8 +360,8 @@ def current_impact(
             if coverage_result.coverage_available:
                 analysis.current_metrics.test_coverage_percent = coverage_result.total_coverage_percent
                 analysis.current_metrics.test_coverage_source = coverage_result.source_file
-        except Exception:
-            pass  # Coverage is optional, silently skip on errors
+        except Exception as e:
+            logger.debug(f"Coverage analysis failed (optional): {e}")
 
         display_current_impact_analysis(analysis)
 

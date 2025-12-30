@@ -1,7 +1,61 @@
 """Rich formatting utilities for displaying slopometry data."""
 
+from pathlib import Path
+
 from rich.console import Console
 from rich.table import Table
+
+
+def truncate_path(path: str, max_width: int = 55) -> str:
+    """Truncate a file path keeping prefix and basename, ellipsizing the middle.
+
+    Displays paths like: src/.../utils/helpers.py
+    - Keeps the first component (e.g., 'src/', 'test/')
+    - Keeps the basename and immediate parent if possible
+    - Truncates the middle with '...'
+
+    Args:
+        path: The file path to truncate
+        max_width: Maximum width for the displayed path
+
+    Returns:
+        Truncated path string
+    """
+    if len(path) <= max_width:
+        return path
+
+    p = Path(path)
+    parts = p.parts
+
+    if len(parts) <= 2:
+        # Very short path, just truncate end
+        return path[: max_width - 3] + "..."
+
+    # Keep first part and last 2 parts (parent + basename)
+    prefix = parts[0]
+    if prefix == "/":
+        prefix = "/" + parts[1] if len(parts) > 1 else "/"
+        tail_parts = parts[-2:] if len(parts) > 3 else parts[-1:]
+    else:
+        tail_parts = parts[-2:] if len(parts) > 2 else parts[-1:]
+
+    tail = str(Path(*tail_parts))
+
+    # Calculate available space for middle
+    ellipsis = "/.../"
+    available = max_width - len(prefix) - len(ellipsis) - len(tail)
+
+    if available < 0:
+        # Not enough room, just show prefix + ... + basename
+        basename = p.name
+        remaining = max_width - len(prefix) - len(ellipsis) - len(basename)
+        if remaining >= 0:
+            return f"{prefix}{ellipsis}{basename}"
+        # Last resort: truncate basename too
+        return path[: max_width - 3] + "..."
+
+    return f"{prefix}{ellipsis}{tail}"
+
 
 from slopometry.core.models import (
     ContextCoverage,
@@ -109,7 +163,6 @@ def display_session_summary(
     current_tokens = stats.complexity_metrics.total_tokens if stats.complexity_metrics else None
     baseline_galen_metrics = _calculate_galen_metrics_from_baseline(baseline, current_tokens)
 
-    # Show Microsoft NGMI alert if feature flag is enabled
     from slopometry.core.settings import settings
 
     if settings.enable_working_at_microsoft and baseline_galen_metrics:
@@ -298,15 +351,12 @@ def _display_complexity_metrics(
 
     console.print(overview_table)
 
-    # Display Galen Rate if available
     if galen_metrics:
         _display_galen_rate(galen_metrics)
 
-    # Display detailed code smells
     if show_smell_files:
         _display_code_smells_detailed(metrics)
     else:
-        # Check if there are any smells with files to show
         has_smell_files = any(
             [
                 metrics.orphan_comment_files,
@@ -326,23 +376,23 @@ def _display_complexity_metrics(
 
     if metrics.files_by_complexity:
         files_table = Table(title="Files by Complexity")
-        files_table.add_column("File", style="cyan")
-        files_table.add_column("Complexity", justify="right")
+        files_table.add_column("File", style="cyan", no_wrap=True, max_width=55)
+        files_table.add_column("Complexity", justify="right", width=12)
 
         sorted_files = sorted(metrics.files_by_complexity.items(), key=lambda x: x[1], reverse=True)[:10]
 
         for file_path, complexity in sorted_files:
-            files_table.add_row(file_path, str(complexity))
+            files_table.add_row(truncate_path(file_path, max_width=55), str(complexity))
 
         console.print(files_table)
 
     if metrics.files_with_parse_errors:
         errors_table = Table(title="[yellow]Files with Parse Errors[/yellow]")
-        errors_table.add_column("File", style="yellow")
+        errors_table.add_column("File", style="yellow", no_wrap=True, max_width=55)
         errors_table.add_column("Error", style="dim")
 
         for file_path, error_msg in metrics.files_with_parse_errors.items():
-            errors_table.add_row(file_path, error_msg)
+            errors_table.add_row(truncate_path(file_path, max_width=55), error_msg)
 
         console.print(errors_table)
 
@@ -426,18 +476,18 @@ def _display_complexity_delta(
     if show_file_details:
         if delta.files_added:
             files_added_table = Table(title="Files Added")
-            files_added_table.add_column("File", style="green")
+            files_added_table.add_column("File", style="green", no_wrap=True, max_width=55)
             for file_path in delta.files_added[:10]:
-                files_added_table.add_row(file_path)
+                files_added_table.add_row(truncate_path(file_path, max_width=55))
             if len(delta.files_added) > 10:
                 files_added_table.add_row(f"... and {len(delta.files_added) - 10} more")
             console.print(files_added_table)
 
         if delta.files_removed:
             files_removed_table = Table(title="Files Removed")
-            files_removed_table.add_column("File", style="red")
+            files_removed_table.add_column("File", style="red", no_wrap=True, max_width=55)
             for file_path in delta.files_removed[:10]:
-                files_removed_table.add_row(file_path)
+                files_removed_table.add_row(truncate_path(file_path, max_width=55))
             if len(delta.files_removed) > 10:
                 files_removed_table.add_row(f"... and {len(delta.files_removed) - 10} more")
             console.print(files_removed_table)
@@ -447,10 +497,10 @@ def _display_complexity_delta(
 
             if sorted_changes:
                 file_changes_table = Table(title="File Complexity Changes")
-                file_changes_table.add_column("File", style="cyan")
-                file_changes_table.add_column("Previous", justify="right")
-                file_changes_table.add_column("Current", justify="right")
-                file_changes_table.add_column("Change", justify="right")
+                file_changes_table.add_column("File", style="cyan", no_wrap=True, max_width=55)
+                file_changes_table.add_column("Previous", justify="right", width=10)
+                file_changes_table.add_column("Current", justify="right", width=10)
+                file_changes_table.add_column("Change", justify="right", width=10)
 
                 for file_path, change in sorted_changes:
                     current_complexity = stats.complexity_metrics.files_by_complexity.get(file_path, 0)
@@ -458,7 +508,7 @@ def _display_complexity_delta(
 
                     change_color = "green" if change < 0 else "red"
                     file_changes_table.add_row(
-                        file_path,
+                        truncate_path(file_path, max_width=55),
                         str(previous_complexity),
                         str(current_complexity),
                         f"[{change_color}]{change:+d}[/{change_color}]",
@@ -472,16 +522,17 @@ def _display_complexity_delta(
 
             if sorted_changes:
                 file_changes_table = Table(title="Top File Complexity Changes")
-                file_changes_table.add_column("File", style="cyan")
-                file_changes_table.add_column("Change", justify="right")
+                file_changes_table.add_column("File", style="cyan", no_wrap=True, max_width=55)
+                file_changes_table.add_column("Change", justify="right", width=10)
 
                 for file_path, change in sorted_changes:
                     change_color = "green" if change < 0 else "red"
-                    file_changes_table.add_row(file_path, f"[{change_color}]{change:+d}[/{change_color}]")
+                    file_changes_table.add_row(
+                        truncate_path(file_path, max_width=55), f"[{change_color}]{change:+d}[/{change_color}]"
+                    )
 
                 console.print(file_changes_table)
 
-        # Show hint if there's more data available
         has_file_data = delta.files_added or delta.files_removed or len(delta.files_changed) > 3
         if has_file_data:
             console.print("\n[dim]Run with --file-details to see all file changes[/dim]")
@@ -577,8 +628,8 @@ def _display_context_coverage(coverage: ContextCoverage) -> None:
 
     if coverage.file_coverage:
         table = Table(title="Coverage by Edited File")
-        table.add_column("File", style="cyan", no_wrap=True, max_width=40)
-        table.add_column("Read?", justify="center", width=5)
+        table.add_column("File", style="cyan", no_wrap=True, max_width=55)
+        table.add_column("Read?", justify="center", width=6)
         table.add_column("Imports", justify="right", width=10)
         table.add_column("Dependents", justify="right", width=10)
         table.add_column("Tests", justify="right", width=8)
@@ -590,9 +641,7 @@ def _display_context_coverage(coverage: ContextCoverage) -> None:
             dependents_display = _format_coverage_ratio(len(fc.dependents_read), len(fc.dependents))
             tests_display = _format_coverage_ratio(len(fc.test_files_read), len(fc.test_files))
 
-            file_display = fc.file_path
-            if len(file_display) > 40:
-                file_display = "..." + file_display[-37:]
+            file_display = truncate_path(fc.file_path, max_width=55)
 
             table.add_row(file_display, read_mark, imports_display, dependents_display, tests_display)
 
@@ -604,7 +653,7 @@ def _display_context_coverage(coverage: ContextCoverage) -> None:
     if coverage.blind_spots:
         console.print(f"\n[yellow]Potential blind spots ({len(coverage.blind_spots)} files):[/yellow]")
         for blind_spot in coverage.blind_spots:
-            console.print(f"  • {blind_spot}")
+            console.print(f"  • {truncate_path(blind_spot, max_width=70)}")
 
 
 def _format_coverage_ratio(read: int, total: int) -> str:
@@ -996,20 +1045,20 @@ def display_current_impact_analysis(analysis: CurrentChangesAnalysis) -> None:
     if analysis.filtered_coverage:
         console.print("\n[bold]Code Coverage for Edited Files:[/bold]")
         cov_table = Table(show_header=True)
-        cov_table.add_column("File", style="cyan")
-        cov_table.add_column("Coverage", justify="right")
+        cov_table.add_column("File", style="cyan", no_wrap=True, max_width=55)
+        cov_table.add_column("Coverage", justify="right", width=10)
 
         for fname in sorted(analysis.filtered_coverage.keys()):
             pct = analysis.filtered_coverage[fname]
             color = "green" if pct >= 80 else "yellow" if pct >= 50 else "red"
-            cov_table.add_row(fname, f"[{color}]{pct:.1f}%[/{color}]")
+            cov_table.add_row(truncate_path(fname, max_width=55), f"[{color}]{pct:.1f}%[/{color}]")
         console.print(cov_table)
 
     if analysis.blind_spots:
         console.print(f"\n[yellow]Potential blind spots ({len(analysis.blind_spots)} files):[/yellow]")
         # Show all blind spots as requested
         for blind_spot in analysis.blind_spots:
-            console.print(f"  • {blind_spot}")
+            console.print(f"  • {truncate_path(blind_spot, max_width=70)}")
 
     filter_set = set(analysis.changed_files) if analysis.changed_files else None
     _display_code_smells_detailed(metrics, filter_files=filter_set)
@@ -1066,9 +1115,9 @@ def _display_code_smells_detailed(metrics, filter_files: set[str] | None = None)
         console.print("[dim]Showing smells for changed files only[/dim]")
 
     table = Table(show_header=True, show_lines=True)
-    table.add_column("Smell Type", style="cyan", width=20)
+    table.add_column("Smell Type", style="cyan", width=22)
     table.add_column("Count", justify="right", width=8)
-    table.add_column("Affected Files", style="dim")
+    table.add_column("Affected Files", style="dim", max_width=55)
 
     def add_smell_row(label: str, files: list[str]) -> None:
         count = len(files)
@@ -1078,8 +1127,8 @@ def _display_code_smells_detailed(metrics, filter_files: set[str] | None = None)
         color = "red"
         count_str = f"[{color}]{count}[/{color}]"
 
-        # Sort files for consistent display
-        files_display = "\n".join(sorted(files))
+        # Sort files for consistent display, truncate each path
+        files_display = "\n".join(truncate_path(f, max_width=55) for f in sorted(files))
 
         table.add_row(label, count_str, files_display)
 

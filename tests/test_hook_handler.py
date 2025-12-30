@@ -1,6 +1,11 @@
 """Tests for hook handler functionality."""
 
+import subprocess
+import tempfile
+from pathlib import Path
+
 from slopometry.core.hook_handler import (
+    _get_related_files_via_imports,
     detect_event_type_from_parsed,
     extract_dev_guidelines_from_claude_md,
     format_code_smell_feedback,
@@ -226,80 +231,285 @@ class TestFormatCodeSmellFeedback:
 
     def test_format_code_smell_feedback__includes_actionable_guidance(self):
         """Test that actionable guidance from SmellField is included."""
-        metrics = ExtendedComplexityMetrics(
-            total_complexity=0,
-            average_complexity=0,
-            total_volume=0,
-            total_effort=0,
-            total_difficulty=0,
-            average_volume=0,
-            average_effort=0,
-            average_difficulty=0,
-            total_mi=0,
-            average_mi=0,
-            swallowed_exception_count=2,
-            swallowed_exception_files=["src/bar.py"],
-        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            subprocess.run(["git", "init"], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=tmppath, capture_output=True)
 
-        # Pass edited files to trigger blocking - smell file was edited
-        feedback, has_smells, has_blocking = format_code_smell_feedback(metrics, None, edited_files={"src/bar.py"})
+            src_dir = tmppath / "src"
+            src_dir.mkdir()
+            (src_dir / "bar.py").write_text("def bar(): pass")
 
-        assert has_smells is True
-        assert has_blocking is True  # Swallowed exceptions ARE blocking when file was edited
-        assert "Swallowed Exceptions" in feedback
-        # Check that the guidance from SmellField is included
-        assert "BLOCKING" in feedback
-        assert "table" in feedback
+            subprocess.run(["git", "add", "."], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=tmppath, capture_output=True)
+
+            metrics = ExtendedComplexityMetrics(
+                total_complexity=0,
+                average_complexity=0,
+                total_volume=0,
+                total_effort=0,
+                total_difficulty=0,
+                average_volume=0,
+                average_effort=0,
+                average_difficulty=0,
+                total_mi=0,
+                average_mi=0,
+                swallowed_exception_count=2,
+                swallowed_exception_files=["src/bar.py"],
+            )
+
+            feedback, has_smells, has_blocking = format_code_smell_feedback(
+                metrics, None, edited_files={"src/bar.py"}, working_directory=str(tmppath)
+            )
+
+            assert has_smells is True
+            assert has_blocking is True
+            assert "Swallowed Exceptions" in feedback
+            assert "BLOCKING" in feedback
+            assert "table" in feedback
 
     def test_format_code_smell_feedback__test_skips_are_blocking(self):
         """Test that test skips are marked as blocking when related file edited."""
-        metrics = ExtendedComplexityMetrics(
-            total_complexity=0,
-            average_complexity=0,
-            total_volume=0,
-            total_effort=0,
-            total_difficulty=0,
-            average_volume=0,
-            average_effort=0,
-            average_difficulty=0,
-            total_mi=0,
-            average_mi=0,
-            test_skip_count=3,
-            test_skip_files=["tests/test_foo.py"],
-        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            subprocess.run(["git", "init"], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=tmppath, capture_output=True)
 
-        # Pass edited files - editing src/foo.py should trigger blocking for test_foo.py
-        feedback, has_smells, has_blocking = format_code_smell_feedback(metrics, None, edited_files={"src/foo.py"})
+            src_dir = tmppath / "src"
+            src_dir.mkdir()
+            tests_dir = tmppath / "tests"
+            tests_dir.mkdir()
+            (src_dir / "foo.py").write_text("def foo(): pass")
+            (tests_dir / "test_foo.py").write_text("def test_foo(): pass")
 
-        assert has_smells is True
-        assert has_blocking is True  # Test skips ARE blocking when source file edited
-        assert "Test Skips" in feedback
+            subprocess.run(["git", "add", "."], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=tmppath, capture_output=True)
+
+            metrics = ExtendedComplexityMetrics(
+                total_complexity=0,
+                average_complexity=0,
+                total_volume=0,
+                total_effort=0,
+                total_difficulty=0,
+                average_volume=0,
+                average_effort=0,
+                average_difficulty=0,
+                total_mi=0,
+                average_mi=0,
+                test_skip_count=3,
+                test_skip_files=["tests/test_foo.py"],
+            )
+
+            feedback, has_smells, has_blocking = format_code_smell_feedback(
+                metrics, None, edited_files={"src/foo.py"}, working_directory=str(tmppath)
+            )
+
+            assert has_smells is True
+            assert has_blocking is True
+            assert "Test Skips" in feedback
 
     def test_format_code_smell_feedback__not_blocking_when_unrelated_files(self):
         """Test that blocking smells don't block when files are unrelated to edits."""
-        metrics = ExtendedComplexityMetrics(
-            total_complexity=0,
-            average_complexity=0,
-            total_volume=0,
-            total_effort=0,
-            total_difficulty=0,
-            average_volume=0,
-            average_effort=0,
-            average_difficulty=0,
-            total_mi=0,
-            average_mi=0,
-            test_skip_count=3,
-            test_skip_files=["tests/test_foo.py"],
-        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            subprocess.run(["git", "init"], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=tmppath, capture_output=True)
 
-        # Pass unrelated edited files - should NOT trigger blocking
-        feedback, has_smells, has_blocking = format_code_smell_feedback(
-            metrics, None, edited_files={"src/unrelated.py"}
-        )
+            src_dir = tmppath / "src"
+            src_dir.mkdir()
+            tests_dir = tmppath / "tests"
+            tests_dir.mkdir()
+            (src_dir / "unrelated.py").write_text("def unrelated(): pass")
+            (tests_dir / "test_foo.py").write_text("def test_foo(): pass")
 
-        assert has_smells is True
-        assert has_blocking is False  # NOT blocking because files are unrelated
-        assert "Test Skips" in feedback
+            subprocess.run(["git", "add", "."], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=tmppath, capture_output=True)
+
+            metrics = ExtendedComplexityMetrics(
+                total_complexity=0,
+                average_complexity=0,
+                total_volume=0,
+                total_effort=0,
+                total_difficulty=0,
+                average_volume=0,
+                average_effort=0,
+                average_difficulty=0,
+                total_mi=0,
+                average_mi=0,
+                test_skip_count=3,
+                test_skip_files=["tests/test_foo.py"],
+            )
+
+            feedback, has_smells, has_blocking = format_code_smell_feedback(
+                metrics, None, edited_files={"src/unrelated.py"}, working_directory=str(tmppath)
+            )
+
+            assert has_smells is True
+            assert has_blocking is False
+            assert "Test Skips" in feedback
+
+    def test_format_code_smell_feedback__splits_related_and_unrelated_files(self):
+        """Test that smells are split between related (blocking) and unrelated files."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            subprocess.run(["git", "init"], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=tmppath, capture_output=True)
+
+            src_dir = tmppath / "src"
+            src_dir.mkdir()
+            (src_dir / "foo.py").write_text("def foo(): pass")
+            (src_dir / "bar.py").write_text("def bar(): pass")
+            (src_dir / "baz.py").write_text("def baz(): pass")
+
+            subprocess.run(["git", "add", "."], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=tmppath, capture_output=True)
+
+            metrics = ExtendedComplexityMetrics(
+                total_complexity=0,
+                average_complexity=0,
+                total_volume=0,
+                total_effort=0,
+                total_difficulty=0,
+                average_volume=0,
+                average_effort=0,
+                average_difficulty=0,
+                total_mi=0,
+                average_mi=0,
+                swallowed_exception_count=3,
+                swallowed_exception_files=["src/foo.py", "src/bar.py", "src/baz.py"],
+            )
+
+            feedback, has_smells, has_blocking = format_code_smell_feedback(
+                metrics, None, edited_files={"src/bar.py"}, working_directory=str(tmppath)
+            )
+
+            assert has_smells is True
+            assert has_blocking is True
+            assert "ACTION REQUIRED" in feedback
+            assert "bar.py" in feedback
+            assert "not in edited files" in feedback
+            assert "Swallowed Exceptions: 2" in feedback
+
+    def test_format_code_smell_feedback__related_test_file_triggers_blocking(self):
+        """Test that editing a source file makes its test file's smells blocking."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            subprocess.run(["git", "init"], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=tmppath, capture_output=True)
+
+            src_dir = tmppath / "src"
+            src_dir.mkdir()
+            tests_dir = tmppath / "tests"
+            tests_dir.mkdir()
+            (src_dir / "foo.py").write_text("def foo(): pass")
+            (tests_dir / "test_foo.py").write_text("def test_foo(): pass")
+            (tests_dir / "test_bar.py").write_text("def test_bar(): pass")
+
+            subprocess.run(["git", "add", "."], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=tmppath, capture_output=True)
+
+            metrics = ExtendedComplexityMetrics(
+                total_complexity=0,
+                average_complexity=0,
+                total_volume=0,
+                total_effort=0,
+                total_difficulty=0,
+                average_volume=0,
+                average_effort=0,
+                average_difficulty=0,
+                total_mi=0,
+                average_mi=0,
+                test_skip_count=2,
+                test_skip_files=["tests/test_foo.py", "tests/test_bar.py"],
+            )
+
+            feedback, has_smells, has_blocking = format_code_smell_feedback(
+                metrics, None, edited_files={"src/foo.py"}, working_directory=str(tmppath)
+            )
+
+            assert has_smells is True
+            assert has_blocking is True
+            assert "test_foo.py" in feedback
+            assert "not in edited files" in feedback
+
+
+class TestGetRelatedFilesViaImports:
+    """Tests for import graph-based file relationship detection."""
+
+    def test_get_related_files_via_imports__finds_dependents_not_imports(self):
+        """Test that files importing edited files are found, but not files that edited files import."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+
+            # Initialize git repo (required for git_tracker)
+            subprocess.run(["git", "init"], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=tmppath, capture_output=True)
+
+            # Create src directory with modules
+            src_dir = tmppath / "src"
+            src_dir.mkdir()
+
+            # core.py - a dependency
+            (src_dir / "core.py").write_text("def core_func(): pass")
+
+            # service.py - the file we'll edit (imports core.py)
+            (src_dir / "service.py").write_text("from src.core import core_func\ndef service_func(): pass")
+
+            # handler.py - imports service.py (is a dependent)
+            (src_dir / "handler.py").write_text("from src.service import service_func")
+
+            # unrelated.py - doesn't import service.py
+            (src_dir / "unrelated.py").write_text("def other(): pass")
+
+            # Track files in git
+            subprocess.run(["git", "add", "."], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=tmppath, capture_output=True)
+
+            # Get related files for editing service.py
+            edited = {"src/service.py"}
+            related = _get_related_files_via_imports(edited, str(tmppath))
+
+            # Should include the edited file
+            assert "src/service.py" in related
+            # Should include handler.py (imports service.py - is a dependent)
+            assert "src/handler.py" in related
+            # Should NOT include core.py (service.py imports it, but changes don't flow upstream)
+            assert "src/core.py" not in related
+            # Should NOT include unrelated.py
+            assert "src/unrelated.py" not in related
+
+    def test_get_related_files_via_imports__finds_test_files(self):
+        """Test that test files for edited modules are found as related."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+
+            subprocess.run(["git", "init"], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=tmppath, capture_output=True)
+
+            # Create src and tests directories
+            src_dir = tmppath / "src"
+            src_dir.mkdir()
+            tests_dir = tmppath / "tests"
+            tests_dir.mkdir()
+
+            (src_dir / "core.py").write_text("def core_func(): pass")
+            (tests_dir / "test_core.py").write_text("def test_core(): pass")
+
+            subprocess.run(["git", "add", "."], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=tmppath, capture_output=True)
+
+            edited = {"src/core.py"}
+            related = _get_related_files_via_imports(edited, str(tmppath))
+
+            assert "src/core.py" in related
+            assert "tests/test_core.py" in related
 
 
 class TestSmellField:
