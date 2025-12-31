@@ -1,6 +1,7 @@
 """Database operations for storing hook events."""
 
 import json
+import logging
 import sqlite3
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -8,6 +9,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from slopometry.core.migrations import MigrationRunner
+
+logger = logging.getLogger(__name__)
 from slopometry.core.models import (
     ComplexityDelta,
     ContextCoverage,
@@ -568,14 +571,16 @@ class EventDatabase:
                     transcript_path = Path(stats.transcript_path)
                     if transcript_path.exists():
                         stats.plan_evolution.token_usage = analyze_transcript_tokens(transcript_path)
-                except Exception:
-                    pass
-        except Exception:
+                except Exception as e:
+                    logger.debug(f"Failed to analyze transcript tokens for session {session_id}: {e}")
+        except Exception as e:
+            logger.debug(f"Failed to calculate plan evolution for session {session_id}: {e}")
             stats.plan_evolution = None
 
         try:
             stats.context_coverage = self._calculate_context_coverage(stats.transcript_path, stats.working_directory)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to calculate context coverage for session {session_id}: {e}")
             stats.context_coverage = None
 
         return stats
@@ -631,7 +636,8 @@ class EventDatabase:
             try:
                 baseline_commit_sha = initial_git_state.commit_sha if initial_git_state else None
                 return self.calculate_extended_complexity_metrics(working_directory, baseline_commit_sha)
-            except Exception:
+            except Exception as e2:
+                logger.debug(f"Failed to compute session complexity metrics (fallback also failed): {e2}")
                 return None, None
 
     def _calculate_plan_evolution(self, session_id: str) -> PlanEvolution:
@@ -793,13 +799,15 @@ class EventDatabase:
                         )
 
                         shutil.rmtree(baseline_dir, ignore_errors=True)
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"Failed to compute complexity delta, cleanup skipped: {e}")
                         if baseline_dir:
                             shutil.rmtree(baseline_dir, ignore_errors=True)
 
             return current_extended, complexity_delta
 
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to compute extended complexity metrics: {e}")
             return None, None
 
     def list_sessions(self, limit: int | None = None) -> list[str]:

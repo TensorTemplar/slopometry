@@ -1,8 +1,12 @@
 """Hugging Face dataset upload functionality."""
 
+import logging
 from pathlib import Path
 
 from slopometry.core.settings import settings
+
+logger = logging.getLogger(__name__)
+from slopometry.summoner.services.llm_wrapper import OfflineModeError
 
 
 def upload_to_huggingface(file_path: Path, repo_id: str, token: str | None = None) -> None:
@@ -12,7 +16,13 @@ def upload_to_huggingface(file_path: Path, repo_id: str, token: str | None = Non
         file_path: Path to the parquet dataset file
         repo_id: HuggingFace dataset repository ID (e.g., 'username/dataset-name')
         token: Optional HuggingFace token (defaults to settings or HF_TOKEN env var)
+
+    Raises:
+        OfflineModeError: If offline_mode is enabled
     """
+    if settings.offline_mode:
+        raise OfflineModeError()
+
     # Use token from settings if not provided
     if token is None and settings.hf_token:
         token = settings.hf_token
@@ -36,8 +46,8 @@ def upload_to_huggingface(file_path: Path, repo_id: str, token: str | None = Non
     api = HfApi(token=token)
     try:
         create_repo(repo_id=repo_id, token=token, repo_type="dataset", exist_ok=True)
-    except Exception:
-        pass  # Repo might already exist
+    except Exception as e:
+        logger.debug(f"Could not create repo {repo_id} (may already exist): {e}")
 
     # Push to hub
     dataset_dict.push_to_hub(repo_id, token=token, commit_message="Upload slopometry user story dataset")

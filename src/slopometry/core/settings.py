@@ -2,9 +2,11 @@
 
 import os
 import sys
+import warnings
 from pathlib import Path
 
-from pydantic import Field, field_validator
+from dotenv import dotenv_values
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -88,12 +90,21 @@ class Settings(BaseSettings):
 
     llm_proxy_url: str = ""
     llm_proxy_api_key: str = ""
+    llm_responses_url: str = ""
     interactive_rating_enabled: bool = False
 
     hf_token: str = ""
     hf_default_repo: str = ""
 
-    user_story_agents: list[str] = ["o3", "claude-opus-4", "gemini-2.5-pro"]
+    offline_mode: bool = Field(
+        default=True,
+        description="Disables all external LLM requests from slopometry. Set to False to enable AI features.",
+    )
+
+    user_story_agent: str = Field(
+        default="gpt_oss_120b",
+        description="Agent to use for user story generation. Options: gpt_oss_120b, gemini",
+    )
 
     enable_working_at_microsoft: bool = Field(
         default=False, description="Galen Rate feature flag - shows NGMI alert when below 1 Galen productivity target"
@@ -123,6 +134,36 @@ class Settings(BaseSettings):
         if isinstance(v, str):
             return Path(v)
         return v
+
+    @model_validator(mode="after")
+    def warn_unknown_prefixed_settings(self) -> "Settings":
+        """Warn about unknown SLOPOMETRY_ prefixed environment variables."""
+        prefix = "SLOPOMETRY_"
+        known_fields = {prefix + name.upper() for name in type(self).model_fields}
+
+        prefixed_env_vars: set[str] = set()
+        for key in os.environ:
+            if key.upper().startswith(prefix):
+                prefixed_env_vars.add(key.upper())
+
+        for env_file in self.model_config.get("env_file", []):
+            env_path = Path(env_file)
+            if env_path.exists():
+                for key in dotenv_values(env_path):
+                    if key.upper().startswith(prefix):
+                        prefixed_env_vars.add(key.upper())
+
+        unknown = prefixed_env_vars - known_fields
+        if unknown:
+            unknown_list = ", ".join(sorted(unknown))
+            warnings.warn(
+                f"Unknown SLOPOMETRY_ settings will be ignored: {unknown_list}. "
+                f"Check spelling or see 'slopometry solo config --list' for valid options.",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        return self
 
     @property
     def resolved_database_path(self) -> Path:

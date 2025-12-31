@@ -8,13 +8,11 @@ from slopometry.core.models import UserStoryEntry
 from slopometry.core.settings import settings
 from slopometry.summoner.services.llm_wrapper import (
     calculate_stride_size,
-    cluade,
-    gemini,
     get_commit_diff,
     get_feature_boundaries,
+    get_user_story_agent,
     get_user_story_prompt,
     resolve_commit_reference,
-    user_story_agent,
 )
 
 
@@ -23,22 +21,17 @@ class LLMService:
 
     def __init__(self, db: EventDatabase | None = None):
         self.db = db or EventDatabase()
-        self.agent_map = {
-            "gpt-5.1-2025-11-13": user_story_agent,
-            "claude-opus-4": cluade,
-            "gemini-3.5-pro": gemini,
-        }
 
     def generate_user_stories_from_commits(
         self, repo_path: Path, base_commit: str, head_commit: str
     ) -> tuple[int, list[str]]:
-        """Generate user stories from commit diffs using configured AI agents.
+        """Generate user stories from commit diffs using configured AI agent.
 
         Returns:
             Tuple of (successful_generations, error_messages)
         """
         original_dir = os.getcwd()
-        error_messages = []
+        error_messages: list[str] = []
 
         try:
             os.chdir(repo_path)
@@ -48,46 +41,31 @@ class LLMService:
 
             stride_size = calculate_stride_size(resolved_base, resolved_head)
 
-            diff = get_commit_diff(base_commit)
+            diff = get_commit_diff(resolved_base, resolved_head)
 
             if not diff:
                 return 0, ["No changes found between commits"]
 
             prompt = get_user_story_prompt(diff)
 
-            successful_generations = 0
+            agent = get_user_story_agent()
+            result = agent.run_sync(prompt)
 
-            for model_name in settings.user_story_agents:
-                if model_name not in self.agent_map:
-                    error_messages.append(f"Unknown agent '{model_name}', skipping")
-                    continue
+            user_story_entry = UserStoryEntry(
+                base_commit=resolved_base,
+                head_commit=resolved_head,
+                diff_content=diff,
+                stride_size=stride_size,
+                user_stories=result.output,
+                rating=3,  # Default neutral rating
+                guidelines_for_improving="",
+                model_used=settings.user_story_agent,
+                prompt_template=prompt,
+                repository_path=str(repo_path),
+            )
 
-                agent = self.agent_map[model_name]
-
-                try:
-                    result = agent.run_sync(prompt)
-
-                    user_story_entry = UserStoryEntry(
-                        base_commit=resolved_base,
-                        head_commit=resolved_head,
-                        diff_content=diff,
-                        stride_size=stride_size,
-                        user_stories=result.output,
-                        rating=3,  # Default neutral rating for bulk generation
-                        guidelines_for_improving="",
-                        model_used=model_name,
-                        prompt_template=prompt,
-                        repository_path=str(repo_path),
-                    )
-
-                    self.db.save_user_story_entry(user_story_entry)
-                    successful_generations += 1
-
-                except Exception as e:
-                    error_messages.append(f"Failed to generate with {model_name}: {e}")
-                    continue
-
-            return successful_generations, error_messages
+            self.db.save_user_story_entry(user_story_entry)
+            return 1, error_messages
 
         except Exception as e:
             return 0, [f"Failed to generate user stories: {e}"]
@@ -157,10 +135,6 @@ class LLMService:
                 "resolved_head": head_commit,
             }
 
-    def get_available_agents(self) -> list[str]:
-        """Get list of available AI agents."""
-        return list(self.agent_map.keys())
-
-    def get_configured_agents(self) -> list[str]:
-        """Get list of configured AI agents from settings."""
-        return settings.user_story_agents
+    def get_configured_agent(self) -> str:
+        """Get the configured user story agent name."""
+        return settings.user_story_agent

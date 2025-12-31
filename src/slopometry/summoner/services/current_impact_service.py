@@ -1,5 +1,6 @@
 """Current (uncommitted) impact analysis service."""
 
+import logging
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -13,6 +14,8 @@ from slopometry.core.models import (
 )
 from slopometry.core.working_tree_extractor import WorkingTreeExtractor
 from slopometry.summoner.services.impact_calculator import ImpactCalculator
+
+logger = logging.getLogger(__name__)
 
 
 class CurrentImpactService:

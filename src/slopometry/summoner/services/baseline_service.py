@@ -219,8 +219,8 @@ class BaselineService:
                     delta = future.result(timeout=120)
                     if delta:
                         deltas.append(delta)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f"Skipping failed baseline delta analysis: {e}")
 
         return deltas
 
@@ -244,7 +244,8 @@ class BaselineService:
         try:
             metrics = analyzer.analyze_extended_complexity(commit_dir)
             return metrics.total_tokens
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Failed to analyze token count for commit {commit_sha}: {e}")
             return None
         finally:
             if commit_dir:

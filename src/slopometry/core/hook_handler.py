@@ -26,6 +26,7 @@ from slopometry.core.models import (
 )
 from slopometry.core.project_tracker import ProjectTracker
 from slopometry.core.settings import settings
+from slopometry.core.working_tree_state import WorkingTreeStateCalculator
 from slopometry.display.formatters import truncate_path
 
 logger = logging.getLogger(__name__)
@@ -97,7 +98,13 @@ def parse_hook_input(raw_data: dict) -> HookInputUnion:
         return NotificationInput(**raw_data)
 
     elif "stop_hook_active" in fields:
-        return SubagentStopInput(**raw_data)
+        if raw_data.get("stop_hook_active"):
+            return SubagentStopInput(**raw_data)
+        return StopInput(**raw_data)
+
+    elif "session_id" in fields and "transcript_path" in fields:
+        # Handle stop-type hooks without stop_hook_active field
+        return StopInput(**raw_data)
 
     else:
         raise ValueError(f"Unknown hook input schema with fields: {fields}")
@@ -279,8 +286,12 @@ def _compute_feedback_cache_key(working_directory: str, edited_files: set[str], 
         Cache key string
     """
     tracker = GitTracker(Path(working_directory))
-    commit_sha = tracker.get_current_commit_sha() or "unknown"
-    working_tree_hash = tracker.get_working_tree_hash() or "unknown"
+    git_state = tracker.get_git_state()
+    commit_sha = git_state.commit_sha or "unknown"
+    wt_calculator = WorkingTreeStateCalculator(working_directory)
+    working_tree_hash = (
+        wt_calculator.calculate_working_tree_hash(commit_sha) if git_state.has_uncommitted_changes else "clean"
+    )
     files_key = ",".join(sorted(edited_files))
 
     key_parts = f"{commit_sha}:{working_tree_hash}:{files_key}:{feedback_hash}"

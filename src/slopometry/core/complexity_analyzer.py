@@ -22,6 +22,21 @@ logger = logging.getLogger(__name__)
 CALCULATOR_VERSION = "2024.1.4"
 
 
+def _get_tiktoken_encoder() -> Any:
+    """Get tiktoken encoder, falling back if o200k_base encoding not available.
+
+    Returns:
+        tiktoken Encoder for token counting
+    """
+    import tiktoken
+
+    try:
+        return tiktoken.get_encoding("o200k_base")
+    except Exception as e:
+        logger.debug(f"Falling back to cl100k_base encoding: {e}")
+        return tiktoken.get_encoding("cl100k_base")
+
+
 def _analyze_single_file_extended(file_path: Path) -> FileAnalysisResult | None:
     """Analyze a single Python file for all metrics.
 
@@ -30,12 +45,8 @@ def _analyze_single_file_extended(file_path: Path) -> FileAnalysisResult | None:
     """
     import radon.complexity as cc_lib
     import radon.metrics as metrics_lib
-    import tiktoken
 
-    try:
-        encoder = tiktoken.get_encoding("o200k_base")
-    except Exception:
-        encoder = tiktoken.get_encoding("cl100k_base")
+    encoder = _get_tiktoken_encoder()
 
     try:
         content = file_path.read_text(encoding="utf-8")
@@ -109,7 +120,8 @@ class ComplexityAnalyzer:
 
             return current_metrics, delta
 
-        except Exception:
+        except Exception as e:
+            logger.debug(f"Baseline complexity analysis failed, returning current metrics only: {e}")
             current_metrics = self._analyze_directory(self.working_directory)
             return current_metrics, ComplexityDelta()
 
@@ -125,18 +137,13 @@ class ComplexityAnalyzer:
             ComplexityMetrics with aggregated complexity data.
         """
         import radon.complexity as cc_lib
-        import tiktoken
 
         from slopometry.core.git_tracker import GitTracker
 
         tracker = GitTracker(directory)
         python_files = tracker.get_tracked_python_files()
 
-        try:
-            encoder = tiktoken.get_encoding("o200k_base")
-        except Exception:
-            # Fallback for older tiktoken versions if o200k_base not available
-            encoder = tiktoken.get_encoding("cl100k_base")
+        encoder = _get_tiktoken_encoder()
 
         files_by_complexity = {}
         all_complexities = []
