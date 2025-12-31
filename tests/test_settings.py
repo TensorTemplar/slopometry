@@ -2,6 +2,7 @@
 
 import os
 import tempfile
+import warnings
 from pathlib import Path
 from unittest.mock import patch
 
@@ -38,7 +39,8 @@ class TestSettingsOverridePriority:
             interactive_rating_enabled: bool = False
             hf_token: str = ""
             hf_default_repo: str = ""
-            user_story_agents: list[str] = ["o3", "claude-opus-4", "gemini-2.5-pro"]
+            offline_mode: bool = True
+            user_story_agent: str = "gemini"
 
         return TestSettings
 
@@ -48,13 +50,11 @@ class TestSettingsOverridePriority:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
 
-            # Create global config with some values
             global_config = temp_path / "global.env"
             global_config.write_text(
                 "SLOPOMETRY_EVENT_DISPLAY_LIMIT=100\nSLOPOMETRY_DEBUG_MODE=true\nSLOPOMETRY_SESSION_ID_PREFIX=global_\n"
             )
 
-            # Create local config that overrides some global values
             local_config = temp_path / "local.env"
             local_config.write_text("SLOPOMETRY_EVENT_DISPLAY_LIMIT=200\nSLOPOMETRY_RECENT_SESSIONS_LIMIT=25\n")
 
@@ -182,13 +182,9 @@ class TestSettingsOverridePriority:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
 
-            # 1. Default value (from class definition): event_display_limit = 50
-
-            # 2. Global config
             global_config = temp_path / "global.env"
             global_config.write_text("SLOPOMETRY_EVENT_DISPLAY_LIMIT=75\n")
 
-            # 3. Local config (should override global)
             local_config = temp_path / "local.env"
             local_config.write_text("SLOPOMETRY_EVENT_DISPLAY_LIMIT=125\n")
 
@@ -217,3 +213,73 @@ class TestSettingsOverridePriority:
                 TestSettings4 = self._create_test_settings(nonexistent_global, nonexistent_local)
                 settings4 = TestSettings4()
                 assert settings4.event_display_limit == 50
+
+
+class TestUnknownSettingsWarning:
+    """Test warnings for unknown SLOPOMETRY_ prefixed settings."""
+
+    def test_warn_unknown_prefixed_settings__warns_on_typo_in_env_var(self):
+        """Settings init warns when unknown SLOPOMETRY_ env vars are detected."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            dotenv_file = temp_path / ".env"
+            dotenv_file.touch()
+
+            env_vars_to_clear = [k for k in os.environ.keys() if k.startswith("SLOPOMETRY_")]
+            with patch.dict(
+                os.environ, {"SLOPOMETRY_ENABLE_STOP_FEEDBACK": "true", "SLOPOMETRY_DEBUG_MODE": "true"}, clear=False
+            ):
+                for var in env_vars_to_clear:
+                    if var not in ("SLOPOMETRY_ENABLE_STOP_FEEDBACK", "SLOPOMETRY_DEBUG_MODE"):
+                        os.environ.pop(var, None)
+
+                with patch.object(Settings, "model_config", {**Settings.model_config, "env_file": [str(dotenv_file)]}):
+                    with warnings.catch_warnings(record=True) as w:
+                        warnings.simplefilter("always")
+                        Settings()
+
+                        slopometry_warnings = [warning for warning in w if "SLOPOMETRY_" in str(warning.message)]
+                        assert len(slopometry_warnings) == 1
+                        assert "SLOPOMETRY_ENABLE_STOP_FEEDBACK" in str(slopometry_warnings[0].message)
+                        assert "SLOPOMETRY_DEBUG_MODE" not in str(slopometry_warnings[0].message)
+
+    def test_warn_unknown_prefixed_settings__no_warning_for_valid_settings(self):
+        """Settings init does not warn when all SLOPOMETRY_ env vars are valid."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            dotenv_file = temp_path / ".env"
+            dotenv_file.write_text("SLOPOMETRY_DEBUG_MODE=true\n")
+
+            env_vars_to_clear = [k for k in os.environ.keys() if k.startswith("SLOPOMETRY_")]
+            with patch.dict(os.environ, {}, clear=False):
+                for var in env_vars_to_clear:
+                    os.environ.pop(var, None)
+
+                with patch.object(Settings, "model_config", {**Settings.model_config, "env_file": [str(dotenv_file)]}):
+                    with warnings.catch_warnings(record=True) as w:
+                        warnings.simplefilter("always")
+                        Settings()
+
+                        slopometry_warnings = [warning for warning in w if "SLOPOMETRY_" in str(warning.message)]
+                        assert len(slopometry_warnings) == 0
+
+    def test_warn_unknown_prefixed_settings__warns_on_typo_in_dotenv_file(self):
+        """Settings init warns when unknown SLOPOMETRY_ settings are in .env file."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            dotenv_file = temp_path / ".env"
+            dotenv_file.write_text("SLOPOMETRY_FAKE_SETTING=value\nSLOPOMETRY_DEBUG_MODE=true\n")
+
+            env_vars_to_clear = [k for k in os.environ.keys() if k.startswith("SLOPOMETRY_")]
+            with patch.dict(os.environ, {}, clear=False):
+                for var in env_vars_to_clear:
+                    os.environ.pop(var, None)
+
+                with patch.object(Settings, "model_config", {**Settings.model_config, "env_file": [str(dotenv_file)]}):
+                    with warnings.catch_warnings(record=True) as w:
+                        warnings.simplefilter("always")
+                        Settings()
+
+                        slopometry_warnings = [warning for warning in w if "SLOPOMETRY_" in str(warning.message)]
+                        assert len(slopometry_warnings) == 1
+                        assert "SLOPOMETRY_FAKE_SETTING" in str(slopometry_warnings[0].message)

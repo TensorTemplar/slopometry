@@ -217,6 +217,24 @@ uv sync --extra dev
 uv run pytest
 ```
 
+### Running Tests with LLM Integration
+
+By default, LLM integration tests are skipped because `offline_mode` is enabled. To run the full test suite including LLM tests:
+
+```bash
+# Set up credentials in .env (copy from example)
+cp .env.summoner.example .env
+# Edit .env with your LLM proxy credentials:
+# - SLOPOMETRY_LLM_PROXY_URL
+# - SLOPOMETRY_LLM_PROXY_API_KEY
+# - SLOPOMETRY_LLM_RESPONSES_URL
+
+# Run tests with offline mode disabled
+SLOPOMETRY_OFFLINE_MODE=false uv run pytest tests/test_llm_integration.py -v
+```
+
+The integration tests make real API calls to configured LLM providers and verify that agents return valid responses.
+
 Customize via `.env` file or environment variables:
 
 - `SLOPOMETRY_DATABASE_PATH`: Custom database location (optional)

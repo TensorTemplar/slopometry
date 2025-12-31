@@ -49,8 +49,6 @@ def complete_nfp_id(ctx: click.Context, param: click.Parameter, incomplete: str)
 def complete_feature_id(ctx: click.Context, param: click.Parameter, incomplete: str) -> list[str]:
     """Complete feature IDs from the database."""
     try:
-        from pathlib import Path
-
         from slopometry.core.database import EventDatabase
 
         db = EventDatabase()
@@ -63,9 +61,9 @@ def complete_feature_id(ctx: click.Context, param: click.Parameter, incomplete: 
 
 def complete_user_story_entry_id(ctx: click.Context, param: click.Parameter, incomplete: str) -> list[str]:
     """Complete user story entry IDs from the database."""
-    try:
-        from slopometry.core.database import EventDatabase
+    from slopometry.core.database import EventDatabase
 
+    try:
         db = EventDatabase()
         entry_ids = db.get_user_story_entry_ids_for_completion()
         return [eid for eid in entry_ids if eid.startswith(incomplete)]
@@ -484,7 +482,7 @@ def userstorify(
         sys.exit(1)
 
     console.print(f"Repository: {repo_path}")
-    console.print(f"Using agents: {', '.join(llm_service.get_configured_agents())}")
+    console.print(f"Using agent: {llm_service.get_configured_agent()}")
 
     commit_info = llm_service.get_commit_info_for_display(base_commit, head_commit)
 

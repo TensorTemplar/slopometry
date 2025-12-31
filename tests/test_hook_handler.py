@@ -10,6 +10,7 @@ from slopometry.core.hook_handler import (
     extract_dev_guidelines_from_claude_md,
     format_code_smell_feedback,
     format_context_coverage_feedback,
+    parse_hook_input,
 )
 from slopometry.core.models import (
     ContextCoverage,
@@ -138,6 +139,44 @@ class TestEventTypeDetection:
         for input_data, expected_type in zip(input_types, expected_types):
             result = detect_event_type_from_parsed(input_data)
             assert result == expected_type, f"Input {type(input_data).__name__} should map to {expected_type}"
+
+
+def test_parse_hook_input__stop_hook_active_true_returns_subagent_stop():
+    """Test that stop_hook_active=true is parsed as SubagentStopInput."""
+    raw_data = {
+        "session_id": "test-session",
+        "transcript_path": "/tmp/test.jsonl",
+        "stop_hook_active": True,
+    }
+
+    result = parse_hook_input(raw_data)
+
+    assert isinstance(result, SubagentStopInput)
+
+
+def test_parse_hook_input__stop_hook_active_false_returns_stop():
+    """Test that stop_hook_active=false is parsed as StopInput."""
+    raw_data = {
+        "session_id": "test-session",
+        "transcript_path": "/tmp/test.jsonl",
+        "stop_hook_active": False,
+    }
+
+    result = parse_hook_input(raw_data)
+
+    assert isinstance(result, StopInput)
+
+
+def test_parse_hook_input__stop_hook_active_omitted_returns_stop():
+    """Test that missing stop_hook_active is parsed as StopInput."""
+    raw_data = {
+        "session_id": "test-session",
+        "transcript_path": "/tmp/test.jsonl",
+    }
+
+    result = parse_hook_input(raw_data)
+
+    assert isinstance(result, StopInput)
 
 
 class TestExtractDevGuidelines:

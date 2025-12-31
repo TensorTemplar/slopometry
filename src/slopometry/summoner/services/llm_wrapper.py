@@ -1,20 +1,78 @@
+import logging
 import subprocess
 from pathlib import Path
 
+logger = logging.getLogger(__name__)
+
 from pydantic_ai import Agent
-from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel, OpenAIResponsesModelSettings
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from slopometry.core.models import FeatureBoundary, MergeCommit
 from slopometry.core.settings import settings
 
-llm_gateway = OpenAIProvider(base_url=settings.llm_proxy_url, api_key=settings.llm_proxy_api_key)
 
-# In llm gateway land, everything is an openai model
-vlm = OpenAIChatModel(model_name="gemma3:27b-it-q8_0", provider=llm_gateway)
-cluade = Agent(model=OpenAIChatModel(model_name="claude-opus-4", provider=llm_gateway))
-gemini = Agent(model=OpenAIChatModel(model_name="gemini-3.5-pro", provider=llm_gateway))
-user_story_agent = Agent(model=OpenAIChatModel(model_name="o3", provider=llm_gateway))
+class OfflineModeError(Exception):
+    """Raised when attempting to use LLM features while offline_mode is enabled."""
+
+    def __init__(self):
+        super().__init__(
+            "LLM features are disabled (offline_mode=True). "
+            "Set SLOPOMETRY_OFFLINE_MODE=false to enable external requests."
+        )
+
+
+def _create_providers() -> tuple[OpenAIProvider, OpenAIProvider]:
+    """Create LLM providers. Only called when offline_mode is disabled."""
+    llm_gateway = OpenAIProvider(base_url=settings.llm_proxy_url, api_key=settings.llm_proxy_api_key)
+    responses_api_gateway = OpenAIProvider(base_url=settings.llm_responses_url, api_key=settings.llm_proxy_api_key)
+    return llm_gateway, responses_api_gateway
+
+
+def _create_agents() -> dict[str, Agent]:
+    """Create all available agents. Only called when offline_mode is disabled."""
+    llm_gateway, responses_api_gateway = _create_providers()
+
+    return {
+        "gpt_oss_120b": Agent(
+            name="gpt_oss_120b",
+            model=OpenAIResponsesModel("openai/gpt-oss-120b", provider=responses_api_gateway),
+            retries=2,
+            end_strategy="exhaustive",
+            model_settings=OpenAIResponsesModelSettings(
+                max_tokens=64000,
+                seed=1337,
+                openai_reasoning_effort="medium",
+                temperature=1.0,
+            ),
+        ),
+        "gemini": Agent(
+            name="gemini",
+            model=OpenAIChatModel(model_name="gemini-3-pro-preview", provider=llm_gateway),
+        ),
+    }
+
+
+_agents: dict[str, Agent] | None = None
+
+
+def _get_agents() -> dict[str, Agent]:
+    """Get or create the agents registry. Raises OfflineModeError if offline_mode is enabled."""
+    global _agents
+    if settings.offline_mode:
+        raise OfflineModeError()
+    if _agents is None:
+        _agents = _create_agents()
+    return _agents
+
+
+def get_user_story_agent() -> Agent:
+    """Get the configured agent for user story generation."""
+    agents = _get_agents()
+    agent_name = settings.user_story_agent
+    if agent_name not in agents:
+        raise ValueError(f"Unknown user_story_agent: {agent_name}. Available: {list(agents.keys())}")
+    return agents[agent_name]
 
 
 def get_user_story_prompt(diff: str) -> str:
@@ -60,8 +118,9 @@ def resolve_commit_reference(commit_ref: str) -> str:
     try:
         result = subprocess.run(["git", "rev-parse", commit_ref], capture_output=True, text=True, check=True)
         return result.stdout.strip()
-    except subprocess.CalledProcessError:
-        return commit_ref  # Return original if resolution fails
+    except subprocess.CalledProcessError as e:
+        logger.debug(f"Could not resolve commit ref '{commit_ref}', returning original: {e}")
+        return commit_ref
 
 
 def calculate_stride_size(base_commit: str, head_commit: str) -> int:
@@ -79,21 +138,25 @@ def calculate_stride_size(base_commit: str, head_commit: str) -> int:
             ["git", "rev-list", "--count", f"{base_commit}..{head_commit}"], capture_output=True, text=True, check=True
         )
         return int(result.stdout.strip())
-    except (subprocess.CalledProcessError, ValueError):
-        return 1  # Default to 1 if calculation fails
+    except (subprocess.CalledProcessError, ValueError) as e:
+        logger.debug(f"Could not calculate stride between {base_commit}..{head_commit}, using default 1: {e}")
+        return 1
 
 
-def get_commit_diff(commit_ref: str) -> str:
-    """Get the diff between a specific commit and the current state.
+def get_commit_diff(base_commit: str, head_commit: str) -> str:
+    """Get the diff between two commits.
 
     Args:
-        commit_ref: Git commit hash or reference (e.g., 'HEAD~3', 'abc123')
+        base_commit: Base commit hash or reference
+        head_commit: Head commit hash or reference
 
     Returns:
         The git diff output as a string
     """
     try:
-        result = subprocess.run(["git", "diff", f"{commit_ref}..HEAD"], capture_output=True, text=True, check=True)
+        result = subprocess.run(
+            ["git", "diff", f"{base_commit}..{head_commit}"], capture_output=True, text=True, check=True
+        )
         return result.stdout
     except subprocess.CalledProcessError as e:
         return f"Error getting diff: {e.stderr}"
@@ -138,7 +201,8 @@ def find_merge_commits(branch: str = "HEAD", limit: int = 50) -> list[MergeCommi
                     )
 
         return merge_commits
-    except subprocess.CalledProcessError:
+    except subprocess.CalledProcessError as e:
+        logger.debug(f"Failed to find merge commits: {e}")
         return []
 
 
