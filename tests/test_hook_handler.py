@@ -13,6 +13,7 @@ from slopometry.core.hook_handler import (
     parse_hook_input,
 )
 from slopometry.core.models import (
+    ComplexityDelta,
     ContextCoverage,
     ExtendedComplexityMetrics,
     FileCoverageStatus,
@@ -244,7 +245,7 @@ class TestFormatCodeSmellFeedback:
         assert feedback == ""
 
     def test_format_code_smell_feedback__includes_smell_when_count_nonzero(self):
-        """Test that smells are included when count is non-zero."""
+        """Test that non-blocking smells only show when there are changes (deltas)."""
         metrics = ExtendedComplexityMetrics(
             total_complexity=0,
             average_complexity=0,
@@ -260,13 +261,22 @@ class TestFormatCodeSmellFeedback:
             orphan_comment_files=["src/foo.py"],
         )
 
+        # Without delta, non-blocking smells don't show (no changes to report)
         feedback, has_smells, has_blocking = format_code_smell_feedback(metrics, None)
+        assert has_smells is False
+        assert has_blocking is False
+        assert feedback == ""
 
+        # With a delta showing changes, non-blocking smells are shown
+        delta = ComplexityDelta(
+            orphan_comment_change=2,  # New orphan comments added
+        )
+        feedback, has_smells, has_blocking = format_code_smell_feedback(metrics, delta)
         assert has_smells is True
-        assert has_blocking is False  # Orphan comments are not blocking
+        assert has_blocking is False
         assert "Orphan Comments" in feedback
-        assert "5" in feedback
-        assert "not in edited files" in feedback  # Non-blocking smells show as summary
+        assert "(+2)" in feedback
+        assert "changes in non-edited files" in feedback
 
     def test_format_code_smell_feedback__includes_actionable_guidance(self):
         """Test that actionable guidance from SmellField is included."""
@@ -350,7 +360,13 @@ class TestFormatCodeSmellFeedback:
             assert "Test Skips" in feedback
 
     def test_format_code_smell_feedback__not_blocking_when_unrelated_files(self):
-        """Test that blocking smells don't block when files are unrelated to edits."""
+        """Test that blocking smells don't block when files are unrelated to edits.
+
+        Note: When a blocking smell (test_skip, swallowed_exception) is found in files
+        unrelated to edits, it's added to other_smells with change=0 because we can't
+        attribute the global change to specific files. This means unrelated blocking
+        smells won't show in the "non-edited files" summary (which only shows changes).
+        """
         with tempfile.TemporaryDirectory() as tmpdir:
             tmppath = Path(tmpdir)
             subprocess.run(["git", "init"], cwd=tmppath, capture_output=True)
@@ -382,13 +398,26 @@ class TestFormatCodeSmellFeedback:
                 test_skip_files=["tests/test_foo.py"],
             )
 
+            # When blocking smells are in unrelated files, they're not blocking
+            # and don't show in the summary (no changes to report for unrelated split)
             feedback, has_smells, has_blocking = format_code_smell_feedback(
                 metrics, None, edited_files={"src/unrelated.py"}, working_directory=str(tmppath)
             )
 
-            assert has_smells is True
+            assert has_smells is False
             assert has_blocking is False
-            assert "Test Skips" in feedback
+            assert feedback == ""
+
+            # Even with a delta, unrelated blocking smells don't show because
+            # changes can't be attributed to the unrelated portion
+            delta = ComplexityDelta(test_skip_change=1)
+            feedback, has_smells, has_blocking = format_code_smell_feedback(
+                metrics, delta, edited_files={"src/unrelated.py"}, working_directory=str(tmppath)
+            )
+
+            assert has_smells is False
+            assert has_blocking is False
+            assert feedback == ""
 
     def test_format_code_smell_feedback__splits_related_and_unrelated_files(self):
         """Test that smells are split between related (blocking) and unrelated files."""
@@ -430,8 +459,8 @@ class TestFormatCodeSmellFeedback:
             assert has_blocking is True
             assert "ACTION REQUIRED" in feedback
             assert "bar.py" in feedback
-            assert "not in edited files" in feedback
-            assert "Swallowed Exceptions: 2" in feedback
+            # Non-blocking smells (foo.py, baz.py) only show when there are changes
+            # Without a delta, only blocking smells in edited files are shown
 
     def test_format_code_smell_feedback__related_test_file_triggers_blocking(self):
         """Test that editing a source file makes its test file's smells blocking."""
@@ -474,7 +503,7 @@ class TestFormatCodeSmellFeedback:
             assert has_smells is True
             assert has_blocking is True
             assert "test_foo.py" in feedback
-            assert "not in edited files" in feedback
+            # test_bar.py (unrelated) only shows in non-edited files section when there are changes
 
 
 class TestGetRelatedFilesViaImports:

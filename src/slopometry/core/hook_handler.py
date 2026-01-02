@@ -587,7 +587,8 @@ def format_code_smell_feedback(
 
     # (label, related_file_count, change, guidance, related_files)
     blocking_smells: list[tuple[str, int, int, str, list[str]]] = []
-    other_smells: list[tuple[str, int, int]] = []  # (label, count, change)
+    # (label, count, change, files, guidance) - files and guidance included for actionable feedback
+    other_smells: list[tuple[str, int, int, list[str], str]] = []
 
     # NOTE: getattr usage below is intentional - we iterate over model_fields dynamically
     # to discover smell fields by their is_smell marker. Field names come from Pydantic's
@@ -602,24 +603,23 @@ def format_code_smell_feedback(
             continue
 
         label = str(extra["label"])
+        files_field = str(extra["files_field"])
+        smell_files = list(getattr(current_metrics, files_field, []))
         change_field = field_name.replace("_count", "_change")
         change = getattr(delta, change_field, 0) if delta else 0
+        guidance = field_info.description or ""
 
         if field_name in blocking_fields and edited_files:
-            files_field = str(extra["files_field"])
-            smell_files = list(getattr(current_metrics, files_field, []))
-
             related_files = [f for f in smell_files if _is_file_related_to_edits(f, edited_files, related_via_imports)]
-            unrelated_count = len(smell_files) - len(related_files)
+            unrelated_files = [f for f in smell_files if f not in related_files]
 
             if related_files:
-                guidance = field_info.description or ""
                 blocking_smells.append((label, len(related_files), change, guidance, related_files))
 
-            if unrelated_count > 0:
-                other_smells.append((label, unrelated_count, 0))  # No change tracking for split counts
+            if unrelated_files:
+                other_smells.append((label, len(unrelated_files), 0, unrelated_files, guidance))
         else:
-            other_smells.append((label, count, change))
+            other_smells.append((label, count, change, smell_files, guidance))
 
     lines: list[str] = []
     has_blocking = len(blocking_smells) > 0
@@ -639,17 +639,27 @@ def format_code_smell_feedback(
                 lines.append(f"     → {guidance}")
         lines.append("")
 
-    if other_smells:
+    # Only show other_smells if there are actual changes (non-zero deltas)
+    other_smells_with_changes = [
+        (label, count, change, files, guidance) for label, count, change, files, guidance in other_smells if change != 0
+    ]
+    if other_smells_with_changes:
         if not blocking_smells:
             lines.append("")
-        lines.append("**Code Smells Summary** (not in edited files):")
-        smell_parts = []
-        for label, count, change in other_smells:
-            change_str = f" (+{change})" if change > 0 else f" ({change})" if change < 0 else ""
-            smell_parts.append(f"{label}: {count}{change_str}")
-        lines.append("   " + " | ".join(smell_parts))
+        lines.append("**Code Smells** (changes in non-edited files):")
+        lines.append("")
+        for label, count, change, files, guidance in other_smells_with_changes:
+            change_str = f" (+{change})" if change > 0 else f" ({change})"
+            lines.append(f"   • **{label}**: {count}{change_str}")
+            # Show files where changes likely occurred (limited to 3 for brevity)
+            for f in files[:3]:
+                lines.append(f"     - {truncate_path(f, max_width=60)}")
+            if len(files) > 3:
+                lines.append(f"     ... and {len(files) - 3} more")
+            if guidance:
+                lines.append(f"     → {guidance}")
 
-    has_smells = len(blocking_smells) > 0 or len(other_smells) > 0
+    has_smells = len(blocking_smells) > 0 or len(other_smells_with_changes) > 0
     if has_smells:
         return "\n".join(lines), True, has_blocking
     return "", False, False
