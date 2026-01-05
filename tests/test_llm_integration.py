@@ -8,6 +8,8 @@ import os
 
 import pytest
 
+from slopometry.core.settings import settings
+
 _INTEGRATION_TESTS_ENABLED = os.environ.get("SLOPOMETRY_RUN_INTEGRATION_TESTS", "").lower() in ("1", "true", "yes")
 
 skip_without_integration_flag = pytest.mark.skipif(

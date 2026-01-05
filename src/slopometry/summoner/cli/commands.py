@@ -3,14 +3,23 @@
 import logging
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import click
 from click.shell_completion import CompletionItem
 from rich.console import Console
 
+from slopometry.core.complexity_analyzer import ComplexityAnalyzer
+from slopometry.core.database import EventDatabase
+from slopometry.core.git_tracker import GitOperationError, GitTracker
 from slopometry.core.language_guard import check_language_support
-from slopometry.core.models import ProjectLanguage
+from slopometry.core.models import ComplexityDelta, LeaderboardEntry, ProjectLanguage
+from slopometry.core.working_tree_extractor import WorkingTreeExtractor
+from slopometry.summoner.services.baseline_service import BaselineService
+from slopometry.summoner.services.current_impact_service import CurrentImpactService
+from slopometry.summoner.services.impact_calculator import ImpactCalculator
+from slopometry.summoner.services.qpe_calculator import QPECalculator
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +29,10 @@ from slopometry.display.formatters import (
     create_nfp_objectives_table,
     create_progress_history_table,
     create_user_story_entries_table,
+    display_baseline_comparison,
+    display_current_impact_analysis,
+    display_leaderboard,
+    display_qpe_score,
 )
 from slopometry.summoner.services.experiment_service import ExperimentService
 from slopometry.summoner.services.llm_service import LLMService
@@ -52,8 +65,6 @@ def complete_nfp_id(ctx: click.Context, param: click.Parameter, incomplete: str)
 def complete_feature_id(ctx: click.Context, param: click.Parameter, incomplete: str) -> list[str]:
     """Complete feature IDs from the database."""
     try:
-        from slopometry.core.database import EventDatabase
-
         db = EventDatabase()
         repo_path = Path.cwd()
         feature_ids = db.get_feature_ids_for_completion(repo_path)
@@ -64,8 +75,6 @@ def complete_feature_id(ctx: click.Context, param: click.Parameter, incomplete: 
 
 def complete_user_story_entry_id(ctx: click.Context, param: click.Parameter, incomplete: str) -> list[str]:
     """Complete user story entry IDs from the database."""
-    from slopometry.core.database import EventDatabase
-
     try:
         db = EventDatabase()
         entry_ids = db.get_user_story_entry_ids_for_completion()
@@ -126,7 +135,6 @@ def run_experiments(commits: int, max_workers: int, repo_path: Path | None) -> N
     if repo_path is None:
         repo_path = Path.cwd()
 
-    # Language guard - requires Python for complexity analysis
     guard = check_language_support(repo_path, ProjectLanguage.PYTHON)
     if warning := guard.format_warning():
         console.print(f"[dim]{warning}[/dim]")
@@ -169,7 +177,6 @@ def analyze_commits(start: str | None, end: str | None, repo_path: Path | None) 
     if repo_path is None:
         repo_path = Path.cwd()
 
-    # Language guard - requires Python for complexity analysis
     guard = check_language_support(repo_path, ProjectLanguage.PYTHON)
     if warning := guard.format_warning():
         console.print(f"[dim]{warning}[/dim]")
@@ -200,13 +207,6 @@ def analyze_commits(start: str | None, end: str | None, repo_path: Path | None) 
 
 def _show_commit_range_baseline_comparison(repo_path: Path, start: str, end: str) -> None:
     """Show baseline comparison for analyzed commit range."""
-    from slopometry.core.complexity_analyzer import ComplexityAnalyzer
-    from slopometry.core.git_tracker import GitTracker
-    from slopometry.core.models import ComplexityDelta
-    from slopometry.display.formatters import display_baseline_comparison
-    from slopometry.summoner.services.baseline_service import BaselineService
-    from slopometry.summoner.services.impact_calculator import ImpactCalculator
-
     console.print("\n[yellow]Computing baseline comparison...[/yellow]")
 
     baseline_service = BaselineService()
@@ -218,9 +218,6 @@ def _show_commit_range_baseline_comparison(repo_path: Path, start: str, end: str
 
     git_tracker = GitTracker(repo_path)
     analyzer = ComplexityAnalyzer(working_directory=repo_path)
-
-    import shutil
-    import subprocess
 
     start_sha_result = subprocess.run(
         ["git", "rev-parse", start],
@@ -242,43 +239,40 @@ def _show_commit_range_baseline_comparison(repo_path: Path, start: str, end: str
     start_sha = start_sha_result.stdout.strip()
     end_sha = end_sha_result.stdout.strip()
 
-    start_dir = git_tracker.extract_files_from_commit(start_sha)
-    end_dir = git_tracker.extract_files_from_commit(end_sha)
-
-    if not start_dir or not end_dir:
-        console.print("[yellow]Could not extract commits for baseline comparison.[/yellow]")
-        return
-
     try:
-        start_metrics = analyzer.analyze_extended_complexity(start_dir)
-        end_metrics = analyzer.analyze_extended_complexity(end_dir)
+        with git_tracker.extract_files_from_commit_ctx(start_sha) as start_dir:
+            with git_tracker.extract_files_from_commit_ctx(end_sha) as end_dir:
+                if not start_dir or not end_dir:
+                    console.print("[yellow]No Python files found in commits for baseline comparison.[/yellow]")
+                    return
 
-        range_delta = ComplexityDelta(
-            total_complexity_change=end_metrics.total_complexity - start_metrics.total_complexity,
-            avg_complexity_change=end_metrics.average_complexity - start_metrics.average_complexity,
-            total_volume_change=end_metrics.total_volume - start_metrics.total_volume,
-            avg_volume_change=end_metrics.average_volume - start_metrics.average_volume,
-            total_difficulty_change=end_metrics.total_difficulty - start_metrics.total_difficulty,
-            avg_difficulty_change=end_metrics.average_difficulty - start_metrics.average_difficulty,
-            total_effort_change=end_metrics.total_effort - start_metrics.total_effort,
-            total_mi_change=end_metrics.total_mi - start_metrics.total_mi,
-            avg_mi_change=end_metrics.average_mi - start_metrics.average_mi,
-            net_files_change=end_metrics.total_files_analyzed - start_metrics.total_files_analyzed,
-        )
+                start_metrics = analyzer.analyze_extended_complexity(start_dir)
+                end_metrics = analyzer.analyze_extended_complexity(end_dir)
 
-        impact_calculator = ImpactCalculator()
-        assessment = impact_calculator.calculate_impact(range_delta, baseline)
+                range_delta = ComplexityDelta(
+                    total_complexity_change=end_metrics.total_complexity - start_metrics.total_complexity,
+                    avg_complexity_change=end_metrics.average_complexity - start_metrics.average_complexity,
+                    total_volume_change=end_metrics.total_volume - start_metrics.total_volume,
+                    avg_volume_change=end_metrics.average_volume - start_metrics.average_volume,
+                    total_difficulty_change=end_metrics.total_difficulty - start_metrics.total_difficulty,
+                    avg_difficulty_change=end_metrics.average_difficulty - start_metrics.average_difficulty,
+                    total_effort_change=end_metrics.total_effort - start_metrics.total_effort,
+                    total_mi_change=end_metrics.total_mi - start_metrics.total_mi,
+                    avg_mi_change=end_metrics.average_mi - start_metrics.average_mi,
+                    net_files_change=end_metrics.total_files_analyzed - start_metrics.total_files_analyzed,
+                )
 
-        console.print(f"\n[bold]Commit Range Baseline Comparison ({start}..{end})[/bold]")
-        display_baseline_comparison(
-            baseline=baseline,
-            assessment=assessment,
-            title="Commit Range Impact",
-        )
+                impact_calculator = ImpactCalculator()
+                assessment = impact_calculator.calculate_impact(range_delta, baseline)
 
-    finally:
-        shutil.rmtree(start_dir, ignore_errors=True)
-        shutil.rmtree(end_dir, ignore_errors=True)
+                console.print(f"\n[bold]Commit Range Baseline Comparison ({start}..{end})[/bold]")
+                display_baseline_comparison(
+                    baseline=baseline,
+                    assessment=assessment,
+                    title="Commit Range Impact",
+                )
+    except GitOperationError as e:
+        console.print(f"[red]Git operation failed: {e}[/red]")
 
 
 @summoner.command("current-impact")
@@ -319,15 +313,9 @@ def current_impact(
       - MINOR_DEGRADATION: 0.5 to 1.0 std dev worse
       - SIGNIFICANT_DEGRADATION: > 1.0 std dev worse
     """
-    from slopometry.core.working_tree_extractor import WorkingTreeExtractor
-    from slopometry.display.formatters import display_current_impact_analysis
-    from slopometry.summoner.services.baseline_service import BaselineService
-    from slopometry.summoner.services.current_impact_service import CurrentImpactService
-
     if repo_path is None:
         repo_path = Path.cwd()
 
-    # Language guard - requires Python for complexity analysis
     guard = check_language_support(repo_path, ProjectLanguage.PYTHON)
     if warning := guard.format_warning():
         console.print(f"[dim]{warning}[/dim]")
@@ -375,7 +363,6 @@ def current_impact(
             console.print("[red]Failed to analyze uncommitted changes.[/red]")
             return
 
-        # Add test coverage if available from existing coverage files
         try:
             from slopometry.core.coverage_analyzer import CoverageAnalyzer
 
@@ -467,8 +454,6 @@ def userstorify(
         if base_commit or head_commit:
             console.print("[red]Cannot specify both --feature-id and --base-commit/--head-commit[/red]")
             sys.exit(1)
-
-        from slopometry.core.database import EventDatabase
 
         db = EventDatabase()
 
@@ -760,8 +745,6 @@ def user_story_export(output: str | None, upload_to_hf: bool, hf_repo: str | Non
 @click.argument("entry_id", shell_complete=complete_user_story_entry_id)
 def show_user_story(entry_id: str) -> None:
     """Show detailed information for a user story entry."""
-    from slopometry.core.database import EventDatabase
-
     db = EventDatabase()
 
     match len(entry_id):
@@ -936,14 +919,9 @@ def qpe(repo_path: Path | None, output_json: bool) -> None:
 
     Use --json for machine-readable output in GRPO pipelines.
     """
-    from slopometry.core.complexity_analyzer import ComplexityAnalyzer
-    from slopometry.display.formatters import display_qpe_score
-    from slopometry.summoner.services.qpe_calculator import QPECalculator
-
     if repo_path is None:
         repo_path = Path.cwd()
 
-    # Language guard - requires Python for complexity analysis
     guard = check_language_support(repo_path, ProjectLanguage.PYTHON)
     if warning := guard.format_warning():
         if not output_json:
@@ -967,7 +945,6 @@ def qpe(repo_path: Path | None, output_json: bool) -> None:
         qpe_score = qpe_calculator.calculate_qpe(metrics)
 
         if output_json:
-            # Machine-readable output for GRPO integration
             print(qpe_score.model_dump_json(indent=2))
         else:
             display_qpe_score(qpe_score, metrics)
@@ -1005,15 +982,6 @@ def compare_projects(append_paths: tuple[Path, ...]) -> None:
 
         slopometry summoner compare-projects -a /path/to/project1 -a /path/to/project2
     """
-    import subprocess
-    from datetime import datetime
-
-    from slopometry.core.complexity_analyzer import ComplexityAnalyzer
-    from slopometry.core.database import EventDatabase
-    from slopometry.core.models import LeaderboardEntry
-    from slopometry.display.formatters import display_leaderboard
-    from slopometry.summoner.services.qpe_calculator import QPECalculator
-
     db = EventDatabase()
 
     if append_paths:
@@ -1022,7 +990,6 @@ def compare_projects(append_paths: tuple[Path, ...]) -> None:
         for project_path in append_paths:
             project_path = project_path.resolve()
 
-            # Language guard - requires Python for complexity analysis
             guard = check_language_support(project_path, ProjectLanguage.PYTHON)
             if warning := guard.format_warning():
                 console.print(f"[dim]{project_path.name}: {warning}[/dim]")
@@ -1032,7 +999,6 @@ def compare_projects(append_paths: tuple[Path, ...]) -> None:
 
             console.print(f"[dim]Analyzing {project_path.name}...[/dim]")
 
-            # Get git commit hash
             result = subprocess.run(
                 ["git", "rev-parse", "HEAD"],
                 cwd=project_path,
@@ -1046,18 +1012,27 @@ def compare_projects(append_paths: tuple[Path, ...]) -> None:
             commit_sha_full = result.stdout.strip()
             commit_sha_short = commit_sha_full[:7]
 
-            # Compute metrics and QPE
+            date_result = subprocess.run(
+                ["git", "log", "-1", "--format=%ct", "HEAD"],
+                cwd=project_path,
+                capture_output=True,
+                text=True,
+            )
+            if date_result.returncode == 0 and date_result.stdout.strip():
+                commit_date = datetime.fromtimestamp(int(date_result.stdout.strip()))
+            else:
+                commit_date = datetime.now()  # Fallback if git log fails
+
             analyzer = ComplexityAnalyzer(working_directory=project_path)
             metrics = analyzer.analyze_extended_complexity()
             qpe_score = qpe_calculator.calculate_qpe(metrics)
 
-            # Create and save leaderboard entry
             entry = LeaderboardEntry(
                 project_name=project_path.name,
                 project_path=str(project_path),
                 commit_sha_short=commit_sha_short,
                 commit_sha_full=commit_sha_full,
-                measured_at=datetime.now(),
+                measured_at=commit_date,
                 qpe_score=qpe_score.qpe,
                 mi_normalized=qpe_score.mi_normalized,
                 smell_penalty=qpe_score.smell_penalty,
@@ -1071,7 +1046,6 @@ def compare_projects(append_paths: tuple[Path, ...]) -> None:
 
         console.print()
 
-    # Show current leaderboard
     leaderboard = db.get_leaderboard()
 
     if not leaderboard:

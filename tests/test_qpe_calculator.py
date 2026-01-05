@@ -434,7 +434,7 @@ class TestQPEIntegration:
 
         # Capture output to verify no errors
         console_output = StringIO()
-        console = Console(file=console_output, force_terminal=True, width=120)
+        Console(file=console_output, force_terminal=True, width=120)
 
         # This should not raise AttributeError: 'QPEScore' object has no attribute 'effort_tier'
         display_qpe_score(qpe_score, metrics)

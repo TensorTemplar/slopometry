@@ -724,8 +724,6 @@ class EventDatabase:
             Tuple of (current_metrics, complexity_delta)
         """
         try:
-            import shutil
-
             from slopometry.core.complexity_analyzer import ComplexityAnalyzer
             from slopometry.core.git_tracker import GitTracker
 
@@ -745,10 +743,8 @@ class EventDatabase:
                     if baseline_ref is None:
                         baseline_ref = "HEAD"
 
-                baseline_dir = git_tracker.extract_files_from_commit(baseline_ref)
-
-                if baseline_dir:
-                    try:
+                with git_tracker.extract_files_from_commit_ctx(baseline_ref) as baseline_dir:
+                    if baseline_dir:
                         baseline_extended = analyzer.analyze_extended_complexity(baseline_dir)
 
                         current_basic = analyzer.analyze_complexity()
@@ -798,12 +794,6 @@ class EventDatabase:
                         complexity_delta.nonempty_init_change = (
                             current_extended.nonempty_init_count - baseline_extended.nonempty_init_count
                         )
-
-                        shutil.rmtree(baseline_dir, ignore_errors=True)
-                    except Exception as e:
-                        logger.debug(f"Failed to compute complexity delta, cleanup skipped: {e}")
-                        if baseline_dir:
-                            shutil.rmtree(baseline_dir, ignore_errors=True)
 
             return current_extended, complexity_delta
 
@@ -1650,8 +1640,6 @@ class EventDatabase:
                 ),
             )
             conn.commit()
-
-    # ==================== QPE Leaderboard ====================
 
     def save_leaderboard_entry(self, entry: LeaderboardEntry) -> None:
         """Save or update a leaderboard entry.

@@ -422,7 +422,6 @@ class ComplexityAnalyzer:
 
         start_total = time.perf_counter()
 
-        # Use parallel processing for large file sets
         if len(python_files) >= settings.parallel_file_threshold:
             results = self._analyze_files_parallel(python_files)
         else:

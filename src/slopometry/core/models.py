@@ -972,7 +972,7 @@ class LeaderboardEntry(BaseModel):
     project_path: str = Field(description="Absolute path to the project")
     commit_sha_short: str = Field(description="7-character short git hash")
     commit_sha_full: str = Field(description="Full git hash for deduplication")
-    measured_at: datetime = Field(default_factory=datetime.now, description="When the measurement was taken")
+    measured_at: datetime = Field(default_factory=datetime.now, description="Date of the analyzed commit")
     qpe_score: float = Field(description="Quality-per-effort score")
     mi_normalized: float = Field(description="Maintainability Index normalized to 0-1")
     smell_penalty: float = Field(description="Penalty from code smells")

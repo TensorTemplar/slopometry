@@ -1,9 +1,16 @@
 """Rich formatting utilities for displaying slopometry data."""
 
+import logging
+from datetime import datetime
 from pathlib import Path
 
 from rich.console import Console
 from rich.table import Table
+
+from slopometry.core.models import ZScoreInterpretation
+from slopometry.core.settings import settings
+
+logger = logging.getLogger(__name__)
 
 
 def truncate_path(path: str, max_width: int = 55) -> str:
@@ -28,10 +35,8 @@ def truncate_path(path: str, max_width: int = 55) -> str:
     parts = p.parts
 
     if len(parts) <= 2:
-        # Very short path, just truncate end
         return path[: max_width - 3] + "..."
 
-    # Keep first part and last 2 parts (parent + basename)
     prefix = parts[0]
     if prefix == "/":
         prefix = "/" + parts[1] if len(parts) > 1 else "/"
@@ -41,17 +46,14 @@ def truncate_path(path: str, max_width: int = 55) -> str:
 
     tail = str(Path(*tail_parts))
 
-    # Calculate available space for middle
     ellipsis = "/.../"
     available = max_width - len(prefix) - len(ellipsis) - len(tail)
 
     if available < 0:
-        # Not enough room, just show prefix + ... + basename
         basename = p.name
         remaining = max_width - len(prefix) - len(ellipsis) - len(basename)
         if remaining >= 0:
             return f"{prefix}{ellipsis}{basename}"
-        # Last resort: truncate basename too
         return path[: max_width - 3] + "..."
 
     return f"{prefix}{ellipsis}{tail}"
@@ -109,8 +111,6 @@ def _display_microsoft_ngmi_alert(galen_metrics: GalenMetrics) -> None:
     Shows a prominent alert with the Galen Rate and whether the developer is
     on track to hit 1 Galen (1M tokens/month) by end of month.
     """
-    from datetime import datetime
-
     rate = galen_metrics.galen_rate
     rate_color = "green" if rate >= 1.0 else "yellow" if rate >= 0.5 else "red"
 
@@ -131,7 +131,6 @@ def _display_microsoft_ngmi_alert(galen_metrics: GalenMetrics) -> None:
         console.print(f"[{rate_color} bold]GALEN RATE: {rate:.2f} Galens[/{rate_color} bold]")
         console.print(f"[yellow]Need +{tokens_needed:,.0f} tokens/day to hit 1 Galen[/yellow]")
 
-        # Check if NGMI
         if days_remaining > 0:
             tokens_still_needed = 1_000_000 - (projected_monthly * (now.day / 30))
             if tokens_still_needed > tokens_per_day * days_remaining:
@@ -165,8 +164,6 @@ def display_session_summary(
     # Calculate Galen metrics from commit history (not session duration)
     current_tokens = stats.complexity_metrics.total_tokens if stats.complexity_metrics else None
     baseline_galen_metrics = _calculate_galen_metrics_from_baseline(baseline, current_tokens)
-
-    from slopometry.core.settings import settings
 
     if settings.enable_working_at_microsoft and baseline_galen_metrics:
         _display_microsoft_ngmi_alert(baseline_galen_metrics)
@@ -424,7 +421,6 @@ def _display_complexity_delta(
     if has_baseline:
         changes_table.add_column("vs Baseline", justify="right")
 
-    # Average Cyclomatic Complexity - lower is better
     cc_color = "green" if delta.avg_complexity_change < 0 else "red" if delta.avg_complexity_change > 0 else "yellow"
     cc_baseline = _format_baseline_cell(assessment.cc_z_score, invert=True) if has_baseline else None
     changes_table.add_row(
@@ -433,7 +429,6 @@ def _display_complexity_delta(
         cc_baseline if has_baseline else None,
     )
 
-    # Average Effort - lower is better (complexity density)
     effort_color = "green" if delta.avg_effort_change < 0 else "red" if delta.avg_effort_change > 0 else "yellow"
     effort_baseline = _format_baseline_cell(assessment.effort_z_score, invert=True) if has_baseline else None
     changes_table.add_row(
@@ -442,7 +437,6 @@ def _display_complexity_delta(
         effort_baseline if has_baseline else None,
     )
 
-    # Maintainability Index (per-file average) - higher is better
     mi_color = "red" if delta.avg_mi_change < 0 else "green" if delta.avg_mi_change > 0 else "yellow"
     mi_baseline = _format_baseline_cell(assessment.mi_z_score, invert=False) if has_baseline else None
     changes_table.add_row(
@@ -451,7 +445,6 @@ def _display_complexity_delta(
         mi_baseline if has_baseline else None,
     )
 
-    # Token Deltas
     token_color = "red" if delta.total_tokens_change > 0 else "green" if delta.total_tokens_change < 0 else "yellow"
     changes_table.add_row(
         "Total Tokens",
@@ -475,7 +468,6 @@ def _display_complexity_delta(
             f"(score: {assessment.impact_score:+.2f})"
         )
 
-    # File lists - show in detail mode, otherwise just counts in the summary table above
     if show_file_details:
         if delta.files_added:
             files_added_table = Table(title="Files Added")
@@ -519,7 +511,6 @@ def _display_complexity_delta(
 
                 console.print(file_changes_table)
     else:
-        # Compact mode: show top 3 file changes only, with hint
         if delta.files_changed:
             sorted_changes = sorted(delta.files_changed.items(), key=lambda x: abs(x[1]), reverse=True)[:3]
 
@@ -574,18 +565,15 @@ def _display_galen_rate(galen_metrics: GalenMetrics, title: str = "Galen Rate") 
     galen_table.add_column("Metric", style="cyan")
     galen_table.add_column("Value", justify="right")
 
-    # Token delta (can be negative if removing code)
     sign = "+" if galen_metrics.tokens_changed >= 0 else ""
     galen_table.add_row("Token Delta", f"{sign}{galen_metrics.tokens_changed:,}")
 
-    # Analysis period
     if galen_metrics.period_days >= 1:
         galen_table.add_row("Analysis Period", f"{galen_metrics.period_days:.1f} days")
     else:
         hours = galen_metrics.period_days * 24
         galen_table.add_row("Analysis Period", f"{hours:.1f} hours")
 
-    # Galen Rate with color
     rate = galen_metrics.galen_rate
     rate_color = "green" if rate >= 1.0 else "yellow" if rate >= 0.5 else "red"
     galen_table.add_row("Galen Rate", f"[{rate_color}]{rate:.2f} Galens[/{rate_color}]")
@@ -605,7 +593,6 @@ def _display_work_summary(evolution: PlanEvolution) -> None:
     )
     impl_percentage = 100 - evolution.exploration_percentage
 
-    # Build work style line with optional token info
     if evolution.token_usage and evolution.token_usage.total_tokens > 0:
         exploration_tokens = _format_token_count(evolution.token_usage.exploration_tokens)
         implementation_tokens = _format_token_count(evolution.token_usage.implementation_tokens)
@@ -931,8 +918,6 @@ def _interpret_z_score(normalized_z: float) -> str:
 
     Uses verbose mode from ZScoreInterpretation for more nuanced output.
     """
-    from slopometry.core.models import ZScoreInterpretation
-
     return ZScoreInterpretation.from_z_score(normalized_z, verbose=True).value
 
 
@@ -1006,7 +991,6 @@ def display_current_impact_analysis(analysis: CurrentChangesAnalysis) -> None:
     )
     console.print(token_table)
 
-    # Display Galen Rate metrics
     if analysis.galen_metrics:
         _display_galen_rate(analysis.galen_metrics)
 
@@ -1081,10 +1065,8 @@ def _display_code_smells_detailed(metrics, filter_files: set[str] | None = None)
             return files
         return [f for f in files if f in filter_files]
 
-    # Check if we have any smells to display after filtering
     has_smells = False
 
-    # We need to compute filtered lists first to know if we should show the table
     orphan_files = get_filtered_files(metrics.orphan_comment_files)
     todo_files = get_filtered_files(metrics.untracked_todo_files)
     import_files = get_filtered_files(metrics.inline_import_files)
@@ -1130,7 +1112,6 @@ def _display_code_smells_detailed(metrics, filter_files: set[str] | None = None)
         color = "red"
         count_str = f"[{color}]{count}[/{color}]"
 
-        # Sort files for consistent display, truncate each path
         files_display = "\n".join(truncate_path(f, max_width=55) for f in sorted(files))
 
         table.add_row(label, count_str, files_display)
@@ -1284,11 +1265,9 @@ def display_qpe_score(
 
     console.print("\n[bold]Quality-Per-Effort Score[/bold]")
 
-    # Main QPE score display
     qpe_color = "green" if qpe_score.qpe > 0.05 else "yellow" if qpe_score.qpe > 0.02 else "red"
     console.print(f"  [bold]QPE:[/bold] [{qpe_color}]{qpe_score.qpe:.4f}[/{qpe_color}]")
 
-    # Component breakdown table
     component_table = Table(title="QPE Components", show_header=True)
     component_table.add_column("Component", style="cyan")
     component_table.add_column("Value", justify="right")
@@ -1321,7 +1300,6 @@ def display_qpe_score(
 
     console.print(component_table)
 
-    # Smell breakdown if any
     if any(count > 0 for count in qpe_score.smell_counts.values()):
         smell_table = Table(title="Code Smell Breakdown", show_header=True)
         smell_table.add_column("Smell", style="cyan")
@@ -1389,17 +1367,36 @@ def display_leaderboard(entries: list) -> None:
     table.add_column("Rank", justify="right", style="bold")
     table.add_column("Project", style="cyan")
     table.add_column("QPE", justify="right")
+    table.add_column("Smell", justify="right")
+    table.add_column("Quality", justify="right")
+    table.add_column("Tokens", justify="right")
+    table.add_column("Effort", justify="right")
     table.add_column("Commit", justify="center")
-    table.add_column("Date", justify="center")
+    table.add_column("Commit Date", justify="center")
 
     for rank, entry in enumerate(entries, 1):
         rank_style = "green" if rank == 1 else "yellow" if rank == 2 else "blue" if rank == 3 else ""
         qpe_color = "green" if entry.qpe_score > 0.05 else "yellow" if entry.qpe_score > 0.02 else "red"
+        smell_color = "green" if entry.smell_penalty < 0.1 else "yellow" if entry.smell_penalty < 0.3 else "red"
+
+        try:
+            metrics = ExtendedComplexityMetrics.model_validate_json(entry.metrics_json)
+            total_tokens = metrics.total_tokens
+        except Exception as e:
+            logger.warning(f"Failed to parse metrics_json for {entry.project_name}: {e}")
+            total_tokens = 0
+
+        tokens_str = f"{total_tokens // 1000}K" if total_tokens >= 1000 else str(total_tokens)
+        effort_str = f"{entry.total_effort / 1000:.0f}K" if entry.total_effort >= 1000 else f"{entry.total_effort:.0f}"
 
         table.add_row(
             f"[{rank_style}]#{rank}[/{rank_style}]" if rank_style else f"#{rank}",
             entry.project_name,
             f"[{qpe_color}]{entry.qpe_score:.4f}[/{qpe_color}]",
+            f"[{smell_color}]{entry.smell_penalty:.3f}[/{smell_color}]",
+            f"{entry.adjusted_quality:.3f}",
+            f"[dim]{tokens_str}[/dim]",
+            f"[dim]{effort_str}[/dim]",
             f"[dim]{entry.commit_sha_short}[/dim]",
             entry.measured_at.strftime("%Y-%m-%d"),
         )
