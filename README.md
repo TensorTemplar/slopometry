@@ -260,7 +260,7 @@ Customize via `.env` file or environment variables:
 [x] - Actually make a package so people can install this   
 [ ] - Add hindsight-justified user stories with acceptance criteria based off of future commits  
 [x] - Add plan evolution log based on claude's todo shenanigans   
-[ ] - Rename the readme.md to wontreadme.md because have it takes more than 15 seconds or whatever the attention span is nowadays to read it all. Maybe make it all one giant picture? Anyway, stop talking to yourself in the roadmap.  
+[ ] - Rename the readme.md to wontreadme.md because it takes more than 15 seconds or whatever the attention span is nowadays to read it all. Maybe make it all one giant picture? Anyway, stop talking to yourself in the roadmap.  
 [ ] - Finish git worktree-based [NFP-CLI](https://tensortemplar.substack.com/p/humans-are-no-longer-embodied-amortization) (TM) training objective implementation so complexity metrics can be used as additional process reward for training code agents  
 [ ] - Extend stop hook feedback with LLM-as-Judge to support guiding agents based on smells and style guide  
 [ ] - Not go bankrupt from having to maintain open source in my free time, no wait...
