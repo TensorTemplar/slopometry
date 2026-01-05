@@ -4,9 +4,22 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from slopometry.core.models import GitState
+
+
+class GitOperationError(Exception):
+    """Raised when a git operation fails unexpectedly.
+
+    This exception indicates that a git command failed in a context where
+    failure should not be silently ignored. Callers should catch this and
+    either propagate it or provide meaningful error handling.
+    """
+
+    pass
 
 
 class GitTracker:
@@ -45,7 +58,7 @@ class GitTracker:
                 commit_sha=commit_sha,
             )
 
-        except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError):
+        except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError, GitOperationError):
             return GitState(is_git_repo=False)
 
     def _get_commit_count(self) -> int:
@@ -61,10 +74,14 @@ class GitTracker:
             if result.returncode == 0:
                 return int(result.stdout.strip())
 
-        except (subprocess.TimeoutExpired, subprocess.SubprocessError, ValueError, OSError):
-            pass
+            raise GitOperationError(f"git rev-list failed: {result.stderr.strip()}")
 
-        return 0
+        except subprocess.TimeoutExpired as e:
+            raise GitOperationError(f"git rev-list timed out: {e}") from e
+        except ValueError as e:
+            raise GitOperationError(f"Invalid commit count output: {e}") from e
+        except (subprocess.SubprocessError, OSError) as e:
+            raise GitOperationError(f"git rev-list failed: {e}") from e
 
     def _get_current_branch(self) -> str | None:
         try:
@@ -98,10 +115,12 @@ class GitTracker:
             if result.returncode == 0:
                 return bool(result.stdout.strip())
 
-        except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError):
-            pass
+            raise GitOperationError(f"git status failed: {result.stderr.strip()}")
 
-        return False
+        except subprocess.TimeoutExpired as e:
+            raise GitOperationError(f"git status timed out: {e}") from e
+        except (subprocess.SubprocessError, OSError) as e:
+            raise GitOperationError(f"git status failed: {e}") from e
 
     def _get_current_commit_sha(self) -> str | None:
         """Get current git commit SHA.
@@ -221,7 +240,10 @@ class GitTracker:
             commit_ref: Git commit reference (default: HEAD~1 for previous commit)
 
         Returns:
-            Path to temporary directory containing extracted files, or None if failed
+            Path to temporary directory containing extracted files, or None if no Python files
+
+        Raises:
+            GitOperationError: If git archive fails or tar extraction fails
         """
         try:
             temp_dir = Path(tempfile.mkdtemp(prefix="slopometry_baseline_"))
@@ -234,7 +256,8 @@ class GitTracker:
             )
 
             if result.returncode != 0:
-                return None
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                raise GitOperationError(f"git archive failed for {commit_ref}: {result.stderr.decode().strip()}")
 
             from io import BytesIO
 
@@ -245,14 +268,71 @@ class GitTracker:
 
                 members_to_extract = python_members + coverage_members
                 if not python_members:
+                    shutil.rmtree(temp_dir, ignore_errors=True)
                     return None
 
                 tar.extractall(path=temp_dir, members=members_to_extract, filter="data")
 
             return temp_dir
 
-        except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError, tarfile.TarError):
-            return None
+        except subprocess.TimeoutExpired as e:
+            raise GitOperationError(f"git archive timed out for {commit_ref}: {e}") from e
+        except tarfile.TarError as e:
+            raise GitOperationError(f"Failed to extract tar for {commit_ref}: {e}") from e
+        except (subprocess.SubprocessError, OSError) as e:
+            raise GitOperationError(f"git archive failed for {commit_ref}: {e}") from e
+
+    @contextmanager
+    def extract_files_from_commit_ctx(self, commit_ref: str = "HEAD~1") -> Iterator[Path | None]:
+        """Extract Python files from a commit to a temporary directory with auto-cleanup.
+
+        This is the preferred method over extract_files_from_commit as it ensures
+        the temporary directory is automatically cleaned up when the context exits.
+
+        Args:
+            commit_ref: Git commit reference (default: HEAD~1 for previous commit)
+
+        Yields:
+            Path to temporary directory containing extracted files, or None if no Python files
+
+        Raises:
+            GitOperationError: If git archive fails or tar extraction fails
+        """
+        with tempfile.TemporaryDirectory(prefix="slopometry_baseline_") as temp_dir_str:
+            temp_dir = Path(temp_dir_str)
+            try:
+                result = subprocess.run(
+                    ["git", "archive", "--format=tar", commit_ref],
+                    cwd=self.working_dir,
+                    capture_output=True,
+                    timeout=60,
+                )
+
+                if result.returncode != 0:
+                    raise GitOperationError(f"git archive failed for {commit_ref}: {result.stderr.decode().strip()}")
+
+                from io import BytesIO
+
+                tar_data = BytesIO(result.stdout)
+                with tarfile.open(fileobj=tar_data, mode="r") as tar:
+                    python_members = [m for m in tar.getmembers() if m.name.endswith(".py")]
+                    coverage_members = [m for m in tar.getmembers() if m.name == "coverage.xml"]
+
+                    members_to_extract = python_members + coverage_members
+                    if not python_members:
+                        yield None
+                        return
+
+                    tar.extractall(path=temp_dir, members=members_to_extract, filter="data")
+
+                yield temp_dir
+
+            except subprocess.TimeoutExpired as e:
+                raise GitOperationError(f"git archive timed out for {commit_ref}: {e}") from e
+            except tarfile.TarError as e:
+                raise GitOperationError(f"Failed to extract tar for {commit_ref}: {e}") from e
+            except (subprocess.SubprocessError, OSError) as e:
+                raise GitOperationError(f"git archive failed for {commit_ref}: {e}") from e
 
     def get_changed_python_files(self, parent_sha: str, child_sha: str) -> list[str]:
         """Get list of Python files that changed between two commits.
@@ -263,6 +343,9 @@ class GitTracker:
 
         Returns:
             List of changed Python file paths (relative to repo root)
+
+        Raises:
+            GitOperationError: If git diff fails
         """
         try:
             result = subprocess.run(
@@ -274,11 +357,14 @@ class GitTracker:
             )
 
             if result.returncode != 0:
-                return []
+                raise GitOperationError(f"git diff failed for {parent_sha}..{child_sha}: {result.stderr.strip()}")
 
             return [f.strip() for f in result.stdout.strip().split("\n") if f.strip()]
-        except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError):
-            return []
+
+        except subprocess.TimeoutExpired as e:
+            raise GitOperationError(f"git diff timed out for {parent_sha}..{child_sha}: {e}") from e
+        except (subprocess.SubprocessError, OSError) as e:
+            raise GitOperationError(f"git diff failed for {parent_sha}..{child_sha}: {e}") from e
 
     def extract_specific_files_from_commit(self, commit_ref: str, file_paths: list[str]) -> Path | None:
         """Extract specific files from a commit to a temporary directory.
@@ -288,13 +374,17 @@ class GitTracker:
             file_paths: List of file paths to extract
 
         Returns:
-            Path to temporary directory containing extracted files, or None if failed
+            Path to temporary directory containing extracted files, or None if no files to extract
+
+        Raises:
+            GitOperationError: If extraction fails completely
         """
         if not file_paths:
             return None
 
         try:
             temp_dir = Path(tempfile.mkdtemp(prefix="slopometry_delta_"))
+            failed_files: list[str] = []
 
             for file_path in file_paths:
                 try:
@@ -309,20 +399,31 @@ class GitTracker:
                         dest_path = temp_dir / file_path
                         dest_path.parent.mkdir(parents=True, exist_ok=True)
                         dest_path.write_bytes(result.stdout)
+                    else:
+                        failed_files.append(file_path)
                 except (subprocess.TimeoutExpired, subprocess.SubprocessError):
-                    continue
+                    failed_files.append(file_path)
 
             if not any(temp_dir.rglob("*.py")):
                 shutil.rmtree(temp_dir, ignore_errors=True)
+                if failed_files:
+                    raise GitOperationError(f"Failed to extract any files from {commit_ref}. Failed: {failed_files}")
                 return None
 
             return temp_dir
 
-        except (subprocess.SubprocessError, OSError):
-            return None
+        except (subprocess.SubprocessError, OSError) as e:
+            raise GitOperationError(f"Failed to extract files from {commit_ref}: {e}") from e
 
     def has_previous_commit(self) -> bool:
-        """Check if there's a previous commit to compare against."""
+        """Check if there's a previous commit to compare against.
+
+        Returns:
+            True if HEAD~1 exists, False if this is the first commit
+
+        Raises:
+            GitOperationError: If git command fails unexpectedly
+        """
         try:
             result = subprocess.run(
                 ["git", "rev-parse", "--verify", "HEAD~1"],
@@ -332,8 +433,11 @@ class GitTracker:
                 timeout=5,
             )
             return result.returncode == 0
-        except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError):
-            return False
+
+        except subprocess.TimeoutExpired as e:
+            raise GitOperationError(f"git rev-parse timed out: {e}") from e
+        except (subprocess.SubprocessError, OSError) as e:
+            raise GitOperationError(f"git rev-parse failed: {e}") from e
 
     def get_merge_base_with_main(self) -> str | None:
         """Get the merge-base commit where current branch diverged from main/master.

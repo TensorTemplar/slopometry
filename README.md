@@ -26,7 +26,7 @@ A tool that lurks in the shadows, tracks and analyzes Claude Code sessions provi
 *"Let's slop up all the things."*
 — sherbie, opinionated SDET
 
-# Features
+# Features / FAQ
 
 **NEWS:** 
 
@@ -41,38 +41,59 @@ Please stop contacting us with your cries for mercy - this is between you and yo
 ![galen details](assets/galen_details.png)  
 
 
-### Eyeball progress based on overall session-vibes
+### Q: How do i know if claude is lazy today? 
+
+A: Eyeball progress based on overall session-vibes
 
 ```bash
 slopometry latest
 ```
 <details>
-
+  
 Will show some metrics since the session start of the newest `claude code` session
 
 ![session statistics](assets/session-stat.png)  
 
 ![complexity metrics (CC)](assets/cc.png)  
+  
+### Q: I don't need to verify when my tests are passing, right? 
 
+A: lmao
 
-### Dumb practices are now explicit and quantifiable!
+Agents love to reward hack (I blame SWE-Bench, btw). Naive "unit-test passed" rewards teach the model to cheat by skipping them in clever ways.
+What clevery ways you ask? Silent exception swallowing upstream ofc!
+
+Slopometry forces agents to state the purpose of swallowed exceptions and skipped tests, this is a simple LLM-as-judge call for your RL pipeline (you're welcome)
+
+Here is Opus 4.5, which is writing 90% of your production code by 2026:
+![silent-errors](assets/force-review-silent-errors.png)
+![silent-errors2](assets/force-review-silent-errors-2.png)
+  
+"> But tensor, i don't use slopometry and already committed to production!?"   
+Don't worry, your customers probably don't read their code either, and their agents will just run python -c "<1600 LOC adhoc fix>" as a workaround for each api call.  
+
+### Q: I am a junior and all my colleagues were replaced with AI before I learned good code taste, is this fine? 
+
+A: Here are some dumb practices agents love to add, that you should never show to anyone who cares about readable and predictable code:
 
 ![code_smells1](assets/code_smells1.png)
 
 ![code_smells2](assets/code_smells2.png)
 
-### Measure your negative improvement since session start*!
+### Q: I have been vibe-coding this codebase for a while now and learned prooompt engineering. Clearly the code is better now? 
+
+A: You're absolutely right (But we verify via code trends for the last ~100 commits anyway):
 
 ![session_delta](assets/session_delta.png)
 
-*just got lucky here, plz ignore
+### Q: I use Cursor/BillionDollarVSCodeForkFlavourOfTheWeek, which uses embeddings and RAG on my code in the cloud, so my agent always knows which file are related to the current task, right? 
 
-### Measure agent blind spots when vibe editing files before reading!
+A: Haha, sure, maybe try a trillion dollar vscode fork, or a simple AST parser that checks imports for edited files and tests instead. Spend the quadrillions saved on funding researchers who read more than 0 SWE books during their careers next time.  
 
 ![blind_spots](assets/blind_spots.png)
 
-
-### Preserve incriminating evidence!
+### Q: My boss is llm-pilled and asks me to report my progress every 5 minutes, but human rights forbid keylogging in my country, what do I do? 
+A: export your claude code transcripts and commit them into the codebase!  
 
 ![evidence](assets/evidence.png)
 **legal disclaimer**: transcripts are totally not for any kind of distillation, but merely for personal entertainment purposes
@@ -140,9 +161,6 @@ slopometry solo show <session_id>
 # Alias for latest session, same as solo show <session_id>
 slopometry latest
 
-# Analyze the last 100 commits for trend analysis caching vs. current changes (can take a while)
-slopometry summoner current-impact
-
 # Save session artifacts (transcript, plans, todos) to .slopometry/<session_id>/
 slopometry solo save-transcript  # latest
 slopometry solo save-transcript <session_id>
@@ -194,15 +212,11 @@ Slopometry can be configured using environment variables or a `.env` file:
 # Create config directory and copy example config
 mkdir -p ~/.config/slopometry
 
-# For solo-leveler users (basic session tracking):
+# Copy example config
 curl -o ~/.config/slopometry/.env https://raw.githubusercontent.com/TensorTemplar/slopometry/main/.env.solo.example
-
-# For summoner users (advanced experimentation):
-curl -o ~/.config/slopometry/.env https://raw.githubusercontent.com/TensorTemplar/slopometry/main/.env.summoner.example
 
 # Or if you have the repo cloned:
 # cp .env.solo.example ~/.config/slopometry/.env
-# cp .env.summoner.example ~/.config/slopometry/.env
 
 # Edit ~/.config/slopometry/.env with your preferences
 ```
@@ -216,24 +230,6 @@ cd slopometry
 uv sync --extra dev
 uv run pytest
 ```
-
-### Running Tests with LLM Integration
-
-By default, LLM integration tests are skipped because `offline_mode` is enabled. To run the full test suite including LLM tests:
-
-```bash
-# Set up credentials in .env (copy from example)
-cp .env.summoner.example .env
-# Edit .env with your LLM proxy credentials:
-# - SLOPOMETRY_LLM_PROXY_URL
-# - SLOPOMETRY_LLM_PROXY_API_KEY
-# - SLOPOMETRY_LLM_RESPONSES_URL
-
-# Run tests with offline mode disabled
-SLOPOMETRY_OFFLINE_MODE=false uv run pytest tests/test_llm_integration.py -v
-```
-
-The integration tests make real API calls to configured LLM providers and verify that agents return valid responses.
 
 Customize via `.env` file or environment variables:
 
@@ -264,6 +260,7 @@ Customize via `.env` file or environment variables:
 [x] - Actually make a package so people can install this   
 [ ] - Add hindsight-justified user stories with acceptance criteria based off of future commits  
 [x] - Add plan evolution log based on claude's todo shenanigans   
+[ ] - Rename the readme.md to wontreadme.md because have it takes more than 15 seconds or whatever the attention span is nowadays to read it all. Maybe make it all one giant picture? Anyway, stop talking to yourself in the roadmap.  
 [ ] - Finish git worktree-based [NFP-CLI](https://tensortemplar.substack.com/p/humans-are-no-longer-embodied-amortization) (TM) training objective implementation so complexity metrics can be used as additional process reward for training code agents  
 [ ] - Extend stop hook feedback with LLM-as-Judge to support guiding agents based on smells and style guide  
 [ ] - Not go bankrupt from having to maintain open source in my free time, no wait...

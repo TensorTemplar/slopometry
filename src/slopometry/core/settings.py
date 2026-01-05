@@ -82,7 +82,7 @@ class Settings(BaseSettings):
     debug_mode: bool = False
 
     enable_complexity_analysis: bool = True
-    enable_complexity_feedback: bool = False
+    enable_complexity_feedback: bool = True
     feedback_dev_guidelines: bool = Field(
         default=False,
         description="Extract '## Development guidelines' from CLAUDE.md in stop hook feedback",

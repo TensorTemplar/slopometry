@@ -202,6 +202,80 @@ class Migration005AddGalenRateColumns(Migration):
                     raise
 
 
+class Migration006AddQPEColumns(Migration):
+    """Add QPE (Quality-Per-Effort) columns to experiment_progress."""
+
+    @property
+    def version(self) -> str:
+        return "006"
+
+    @property
+    def description(self) -> str:
+        return "Add qpe_score, smell_penalty, effort_tier columns to experiment_progress"
+
+    def up(self, conn: sqlite3.Connection) -> None:
+        """Add QPE columns to experiment_progress table."""
+        # Check if table exists first
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='experiment_progress'")
+        if not cursor.fetchone():
+            return  # Table doesn't exist yet, skip migration
+
+        columns = [
+            ("qpe_score", "REAL"),
+            ("smell_penalty", "REAL"),
+            ("effort_tier", "TEXT"),
+        ]
+
+        for column_name, column_type in columns:
+            try:
+                conn.execute(f"ALTER TABLE experiment_progress ADD COLUMN {column_name} {column_type}")
+            except sqlite3.OperationalError as e:
+                if "duplicate column name" not in str(e).lower():
+                    raise
+
+        # Add index for QPE score queries
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_progress_qpe ON experiment_progress(experiment_id, qpe_score)")
+
+
+class Migration007AddQPELeaderboard(Migration):
+    """Add QPE leaderboard table for cross-project comparison persistence."""
+
+    @property
+    def version(self) -> str:
+        return "007"
+
+    @property
+    def description(self) -> str:
+        return "Add qpe_leaderboard table for persistent cross-project comparison"
+
+    def up(self, conn: sqlite3.Connection) -> None:
+        """Create qpe_leaderboard table."""
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS qpe_leaderboard (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_name TEXT NOT NULL,
+                project_path TEXT NOT NULL,
+                commit_sha_short TEXT NOT NULL,
+                commit_sha_full TEXT NOT NULL,
+                measured_at TEXT NOT NULL,
+                qpe_score REAL NOT NULL,
+                mi_normalized REAL NOT NULL,
+                smell_penalty REAL NOT NULL,
+                adjusted_quality REAL NOT NULL,
+                effort_factor REAL NOT NULL,
+                total_effort REAL NOT NULL,
+                metrics_json TEXT NOT NULL,
+                UNIQUE(project_path, commit_sha_full)
+            )
+        """)
+
+        # Index for ranking queries
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_leaderboard_qpe ON qpe_leaderboard(qpe_score DESC)")
+
+        # Index for project history queries
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_leaderboard_project ON qpe_leaderboard(project_path, measured_at)")
+
+
 class MigrationRunner:
     """Manages database migrations."""
 
@@ -213,6 +287,8 @@ class MigrationRunner:
             Migration003AddWorkingTreeHash(),
             Migration004AddCalculatorVersion(),
             Migration005AddGalenRateColumns(),
+            Migration006AddQPEColumns(),
+            Migration007AddQPELeaderboard(),
         ]
 
     @contextmanager

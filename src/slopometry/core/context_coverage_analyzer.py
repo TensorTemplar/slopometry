@@ -68,15 +68,12 @@ class ContextCoverageAnalyzer:
         affected = set()
 
         for file_path in changed_files:
-            # Files that import the changed file
             dependents = self._reverse_import_graph.get(file_path, set())
             affected.update(dependents)
 
-            # Tests related to the changed file
             tests = self._find_test_files(file_path)
             affected.update(tests)
 
-        # Remove files that are already in the changed set (we know we're editing them)
         return sorted(list(affected - changed_files))
 
     def _extract_file_events(self, transcript_path: Path) -> tuple[set[str], set[str], dict[str, int], dict[str, int]]:
@@ -291,12 +288,10 @@ class ContextCoverageAnalyzer:
             except ValueError:
                 continue
 
-            # Check exact pattern matches
             if rel_path in patterns:
                 test_files.append(rel_path)
                 continue
 
-            # Fuzzy match in tests/ directory
             if rel_path.startswith("tests/") and f"test_{source_name}" in rel_path and rel_path not in test_files:
                 test_files.append(rel_path)
 

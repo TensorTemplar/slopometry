@@ -11,7 +11,7 @@ from statistics import mean, median, stdev
 
 from slopometry.core.complexity_analyzer import ComplexityAnalyzer
 from slopometry.core.database import EventDatabase
-from slopometry.core.git_tracker import GitTracker
+from slopometry.core.git_tracker import GitOperationError, GitTracker
 from slopometry.core.models import (
     HistoricalMetricStats,
     RepoBaseline,
@@ -44,15 +44,17 @@ def _compute_single_delta_task(repo_path: Path, parent_sha: str, child_sha: str)
     NOTE: Must be at module level because ProcessPoolExecutor requires picklable callables.
     """
     git_tracker = GitTracker(repo_path)
-
-    changed_files = git_tracker.get_changed_python_files(parent_sha, child_sha)
-    if not changed_files:
-        return CommitDelta(cc_delta=0.0, effort_delta=0.0, mi_delta=0.0)
-
-    parent_dir = git_tracker.extract_specific_files_from_commit(parent_sha, changed_files)
-    child_dir = git_tracker.extract_specific_files_from_commit(child_sha, changed_files)
+    parent_dir = None
+    child_dir = None
 
     try:
+        changed_files = git_tracker.get_changed_python_files(parent_sha, child_sha)
+        if not changed_files:
+            return CommitDelta(cc_delta=0.0, effort_delta=0.0, mi_delta=0.0)
+
+        parent_dir = git_tracker.extract_specific_files_from_commit(parent_sha, changed_files)
+        child_dir = git_tracker.extract_specific_files_from_commit(child_sha, changed_files)
+
         if not parent_dir and not child_dir:
             return None
 
@@ -74,6 +76,10 @@ def _compute_single_delta_task(repo_path: Path, parent_sha: str, child_sha: str)
             effort_delta=child_effort - parent_effort,
             mi_delta=child_mi - parent_mi,
         )
+
+    except GitOperationError as e:
+        logger.warning(f"Git operation failed for {parent_sha}..{child_sha}: {e}")
+        return None
 
     finally:
         if parent_dir:
@@ -236,14 +242,19 @@ class BaselineService:
             Total token count or None if analysis fails
         """
         git_tracker = GitTracker(repo_path)
-        commit_dir = git_tracker.extract_files_from_commit(commit_sha)
-
-        if not commit_dir:
-            return None
+        commit_dir = None
 
         try:
+            commit_dir = git_tracker.extract_files_from_commit(commit_sha)
+
+            if not commit_dir:
+                return None
+
             metrics = analyzer.analyze_extended_complexity(commit_dir)
             return metrics.total_tokens
+        except GitOperationError as e:
+            logger.warning(f"Git operation failed for commit {commit_sha}: {e}")
+            return None
         except Exception as e:
             logger.debug(f"Failed to analyze token count for commit {commit_sha}: {e}")
             return None

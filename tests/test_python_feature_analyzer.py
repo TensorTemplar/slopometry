@@ -223,8 +223,7 @@ class TestPythonFeatureAnalyzerIntegration:
             capture_output=True,
             timeout=30,
         )
-        if result.returncode != 0:
-            pytest.skip(f"Could not extract frozen commit: {result.stderr.decode()}")
+        assert result.returncode == 0, f"Could not extract frozen commit: {result.stderr.decode()}"
 
         tar_data = BytesIO(result.stdout)
         with tarfile.open(fileobj=tar_data, mode="r") as tar:

@@ -52,8 +52,7 @@ class TestCurrentImpactService:
         """Create a temporary clone of the current repository."""
         # Use the actual current repo as source
         source_repo = Path.cwd()
-        if not (source_repo / ".git").exists():
-            pytest.skip("Must run from within the repository")
+        assert (source_repo / ".git").exists(), "Test must run from within the repository"
 
         dest_repo_path = tmp_path / "repo"
 
@@ -64,8 +63,7 @@ class TestCurrentImpactService:
 
     def test_analyze_uncommitted_changes__no_changes_returns_none(self, test_repo_path, real_baseline):
         """Test that analyzing a clean repo returns None."""
-        if not real_baseline:
-            pytest.skip("Could not compute baseline")
+        assert real_baseline is not None, "Baseline computation failed - fixture returned None"
 
         # Setup
         service = CurrentImpactService()
@@ -85,8 +83,7 @@ class TestCurrentImpactService:
 
     def test_analyze_uncommitted_changes__detects_changes(self, test_repo_path, real_baseline):
         """Test analyzing a repo with uncommitted changes."""
-        if not real_baseline:
-            pytest.skip("Could not compute baseline")
+        assert real_baseline is not None, "Baseline computation failed - fixture returned None"
 
         service = CurrentImpactService()
 

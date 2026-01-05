@@ -9,18 +9,16 @@ from click.testing import CliRunner
 from slopometry.summoner.cli.commands import summoner
 
 
-def test_analyze_commits__fails_gracefully_when_not_a_git_repo(tmp_path: Path) -> None:
-    """Test that analyze-commits fails failures when path is not a git repo."""
+def test_analyze_commits__exits_cleanly_when_not_a_git_repo(tmp_path: Path) -> None:
+    """Test that analyze-commits exits cleanly when path is not a git repo (no Python detected)."""
     runner = CliRunner()
 
-    # Run against a plain temp directory
+    # Run against a plain temp directory - language guard will detect no Python files
     result = runner.invoke(summoner, ["analyze-commits", "--repo-path", str(tmp_path)])
 
-    assert result.exit_code == 1
-    assert "Failed to analyze commits" in result.output
-    # Depending on exact error message from underlying service, might check for more details
-    # But usually it propagates "not a git repository" or similar
-    assert "not a git repository" in result.output.lower() or "failed" in result.output.lower()
+    # Language guard exits cleanly (exit code 0) when no Python files detected
+    assert result.exit_code == 0
+    assert "requires Python files" in result.output
 
 
 def test_analyze_commits__fails_gracefully_when_insufficient_commits(tmp_path: Path) -> None:
@@ -37,7 +35,8 @@ def test_analyze_commits__fails_gracefully_when_insufficient_commits(tmp_path: P
     )
     subprocess.run(["git", "config", "user.name", "Test"], cwd=tmp_path, env=env, check=True, capture_output=True)
 
-    (tmp_path / "foo").touch()
+    # Add a Python file so language guard passes
+    (tmp_path / "main.py").write_text("print('hello')")
     subprocess.run(["git", "add", "."], cwd=tmp_path, env=env, check=True, capture_output=True)
     subprocess.run(["git", "commit", "-m", "Initial"], cwd=tmp_path, env=env, check=True, capture_output=True)
 

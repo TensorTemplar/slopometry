@@ -3,8 +3,6 @@
 import shutil
 from pathlib import Path
 
-import pytest
-
 from slopometry.core.coverage_analyzer import CoverageAnalyzer, CoverageResult
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
@@ -51,8 +49,7 @@ class TestCoverageAnalyzerXML:
     def test_analyze_coverage__parses_real_xml_fixture(self, tmp_path: Path) -> None:
         """Test parsing real coverage.xml from this repository."""
         fixture_xml = FIXTURES_DIR / "coverage.xml"
-        if not fixture_xml.exists():
-            pytest.skip("coverage.xml fixture not found")
+        assert fixture_xml.exists(), f"coverage.xml fixture not found at {fixture_xml}"
 
         shutil.copy(fixture_xml, tmp_path / "coverage.xml")
 
@@ -71,8 +68,7 @@ class TestCoverageAnalyzerXML:
     def test_analyze_coverage__parses_flat_xml(self, tmp_path: Path) -> None:
         """Test parsing flattened coverage.xml (no packages)."""
         fixture_xml = FIXTURES_DIR / "coverage_flat.xml"
-        if not fixture_xml.exists():
-            pytest.skip("coverage_flat.xml fixture not found")
+        assert fixture_xml.exists(), f"coverage_flat.xml fixture not found at {fixture_xml}"
 
         shutil.copy(fixture_xml, tmp_path / "coverage.xml")
 
@@ -161,8 +157,8 @@ class TestCoverageAnalyzerFilePriority:
         fixture_xml = FIXTURES_DIR / "coverage.xml"
         fixture_db = FIXTURES_DIR / ".coverage"
 
-        if not fixture_xml.exists() or not fixture_db.exists():
-            pytest.skip("fixtures not found")
+        assert fixture_xml.exists(), f"coverage.xml fixture not found at {fixture_xml}"
+        assert fixture_db.exists(), f".coverage fixture not found at {fixture_db}"
 
         shutil.copy(fixture_xml, tmp_path / "coverage.xml")
         shutil.copy(fixture_db, tmp_path / ".coverage")

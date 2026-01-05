@@ -16,16 +16,14 @@ class TestContextCoverageAnalyzer:
     def fixture_transcript_path(self):
         """Path to the real transcript fixture."""
         path = Path(__file__).parent / "fixtures" / "transcript.jsonl"
-        if not path.exists():
-            pytest.skip("transcript.jsonl fixture missing")
+        assert path.exists(), f"transcript.jsonl fixture missing at {path}"
         return path
 
     @pytest.fixture
     def test_repo_path(self, tmp_path):
         """Create a temporary clone of the repo to match transcript context."""
         source_repo = Path.cwd()
-        if not (source_repo / ".git").exists():
-            pytest.skip("Must run from within the repository")
+        assert (source_repo / ".git").exists(), "Test must run from within the repository"
 
         dest_repo_path = tmp_path / "repo"
         subprocess.run(["git", "clone", str(source_repo), str(dest_repo_path)], check=True, capture_output=True)

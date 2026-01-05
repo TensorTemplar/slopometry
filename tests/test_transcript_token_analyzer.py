@@ -59,8 +59,7 @@ class TestTranscriptTokenAnalyzer:
     def fixture_transcript_path(self):
         """Path to the real transcript fixture."""
         path = Path(__file__).parent / "fixtures" / "transcript.jsonl"
-        if not path.exists():
-            pytest.skip("transcript.jsonl fixture missing")
+        assert path.exists(), f"transcript.jsonl fixture missing at {path}"
         return path
 
     def test_analyze_transcript__parses_real_session(self, fixture_transcript_path):
@@ -195,8 +194,7 @@ class TestConvenienceFunction:
     def fixture_transcript_path(self):
         """Path to the real transcript fixture."""
         path = Path(__file__).parent / "fixtures" / "transcript.jsonl"
-        if not path.exists():
-            pytest.skip("transcript.jsonl fixture missing")
+        assert path.exists(), f"transcript.jsonl fixture missing at {path}"
         return path
 
     def test_analyze_transcript_tokens__returns_token_usage(self, fixture_transcript_path):
@@ -214,8 +212,7 @@ class TestRealTranscriptAnalysis:
     def fixture_transcript_path(self):
         """Path to the real transcript fixture."""
         path = Path(__file__).parent / "fixtures" / "transcript.jsonl"
-        if not path.exists():
-            pytest.skip("transcript.jsonl fixture missing")
+        assert path.exists(), f"transcript.jsonl fixture missing at {path}"
         return path
 
     def test_real_transcript__has_exploration_tokens(self, fixture_transcript_path):

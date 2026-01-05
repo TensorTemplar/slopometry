@@ -527,7 +527,6 @@ def _get_related_files_via_imports(edited_files: set[str], working_directory: st
     analyzer._build_import_graph()
 
     for edited_file in edited_files:
-        # Dependents (files that import the edited file) could break from our changes
         dependents = analyzer._reverse_import_graph.get(edited_file, set())
         related.update(dependents)
 
@@ -585,9 +584,7 @@ def format_code_smell_feedback(
             raise ValueError("working_directory is required when edited_files is provided")
         related_via_imports = _get_related_files_via_imports(edited_files, working_directory)
 
-    # (label, related_file_count, change, guidance, related_files)
     blocking_smells: list[tuple[str, int, int, str, list[str]]] = []
-    # (label, count, change, files, guidance) - files and guidance included for actionable feedback
     other_smells: list[tuple[str, int, int, list[str], str]] = []
 
     # NOTE: getattr usage below is intentional - we iterate over model_fields dynamically
@@ -639,19 +636,19 @@ def format_code_smell_feedback(
                 lines.append(f"     → {guidance}")
         lines.append("")
 
-    # Only show other_smells if there are actual changes (non-zero deltas)
     other_smells_with_changes = [
         (label, count, change, files, guidance) for label, count, change, files, guidance in other_smells if change != 0
     ]
     if other_smells_with_changes:
         if not blocking_smells:
             lines.append("")
-        lines.append("**Code Smells** (changes in non-edited files):")
+        lines.append(
+            "**Code Smells** (Any increase requires review, irrespective of which session edited related files):"
+        )
         lines.append("")
         for label, count, change, files, guidance in other_smells_with_changes:
             change_str = f" (+{change})" if change > 0 else f" ({change})"
             lines.append(f"   • **{label}**: {count}{change_str}")
-            # Show files where changes likely occurred (limited to 3 for brevity)
             for f in files[:3]:
                 lines.append(f"     - {truncate_path(f, max_width=60)}")
             if len(files) > 3:

@@ -3,11 +3,23 @@
 import logging
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import click
 from click.shell_completion import CompletionItem
 from rich.console import Console
+
+from slopometry.core.complexity_analyzer import ComplexityAnalyzer
+from slopometry.core.database import EventDatabase
+from slopometry.core.git_tracker import GitOperationError, GitTracker
+from slopometry.core.language_guard import check_language_support
+from slopometry.core.models import ComplexityDelta, LeaderboardEntry, ProjectLanguage
+from slopometry.core.working_tree_extractor import WorkingTreeExtractor
+from slopometry.summoner.services.baseline_service import BaselineService
+from slopometry.summoner.services.current_impact_service import CurrentImpactService
+from slopometry.summoner.services.impact_calculator import ImpactCalculator
+from slopometry.summoner.services.qpe_calculator import QPECalculator
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +29,10 @@ from slopometry.display.formatters import (
     create_nfp_objectives_table,
     create_progress_history_table,
     create_user_story_entries_table,
+    display_baseline_comparison,
+    display_current_impact_analysis,
+    display_leaderboard,
+    display_qpe_score,
 )
 from slopometry.summoner.services.experiment_service import ExperimentService
 from slopometry.summoner.services.llm_service import LLMService
@@ -49,8 +65,6 @@ def complete_nfp_id(ctx: click.Context, param: click.Parameter, incomplete: str)
 def complete_feature_id(ctx: click.Context, param: click.Parameter, incomplete: str) -> list[str]:
     """Complete feature IDs from the database."""
     try:
-        from slopometry.core.database import EventDatabase
-
         db = EventDatabase()
         repo_path = Path.cwd()
         feature_ids = db.get_feature_ids_for_completion(repo_path)
@@ -61,8 +75,6 @@ def complete_feature_id(ctx: click.Context, param: click.Parameter, incomplete: 
 
 def complete_user_story_entry_id(ctx: click.Context, param: click.Parameter, incomplete: str) -> list[str]:
     """Complete user story entry IDs from the database."""
-    from slopometry.core.database import EventDatabase
-
     try:
         db = EventDatabase()
         entry_ids = db.get_user_story_entry_ids_for_completion()
@@ -123,6 +135,13 @@ def run_experiments(commits: int, max_workers: int, repo_path: Path | None) -> N
     if repo_path is None:
         repo_path = Path.cwd()
 
+    guard = check_language_support(repo_path, ProjectLanguage.PYTHON)
+    if warning := guard.format_warning():
+        console.print(f"[dim]{warning}[/dim]")
+    if not guard.allowed:
+        console.print("[yellow]run-experiments requires Python files for complexity analysis.[/yellow]")
+        return
+
     experiment_service = ExperimentService()
 
     console.print(f"[bold]Running {commits} experiments with up to {max_workers} workers[/bold]")
@@ -158,6 +177,13 @@ def analyze_commits(start: str | None, end: str | None, repo_path: Path | None) 
     if repo_path is None:
         repo_path = Path.cwd()
 
+    guard = check_language_support(repo_path, ProjectLanguage.PYTHON)
+    if warning := guard.format_warning():
+        console.print(f"[dim]{warning}[/dim]")
+    if not guard.allowed:
+        console.print("[yellow]analyze-commits requires Python files for complexity analysis.[/yellow]")
+        return
+
     if start is None:
         start = "HEAD~10"
     if end is None:
@@ -181,13 +207,6 @@ def analyze_commits(start: str | None, end: str | None, repo_path: Path | None) 
 
 def _show_commit_range_baseline_comparison(repo_path: Path, start: str, end: str) -> None:
     """Show baseline comparison for analyzed commit range."""
-    from slopometry.core.complexity_analyzer import ComplexityAnalyzer
-    from slopometry.core.git_tracker import GitTracker
-    from slopometry.core.models import ComplexityDelta
-    from slopometry.display.formatters import display_baseline_comparison
-    from slopometry.summoner.services.baseline_service import BaselineService
-    from slopometry.summoner.services.impact_calculator import ImpactCalculator
-
     console.print("\n[yellow]Computing baseline comparison...[/yellow]")
 
     baseline_service = BaselineService()
@@ -199,9 +218,6 @@ def _show_commit_range_baseline_comparison(repo_path: Path, start: str, end: str
 
     git_tracker = GitTracker(repo_path)
     analyzer = ComplexityAnalyzer(working_directory=repo_path)
-
-    import shutil
-    import subprocess
 
     start_sha_result = subprocess.run(
         ["git", "rev-parse", start],
@@ -223,43 +239,40 @@ def _show_commit_range_baseline_comparison(repo_path: Path, start: str, end: str
     start_sha = start_sha_result.stdout.strip()
     end_sha = end_sha_result.stdout.strip()
 
-    start_dir = git_tracker.extract_files_from_commit(start_sha)
-    end_dir = git_tracker.extract_files_from_commit(end_sha)
-
-    if not start_dir or not end_dir:
-        console.print("[yellow]Could not extract commits for baseline comparison.[/yellow]")
-        return
-
     try:
-        start_metrics = analyzer.analyze_extended_complexity(start_dir)
-        end_metrics = analyzer.analyze_extended_complexity(end_dir)
+        with git_tracker.extract_files_from_commit_ctx(start_sha) as start_dir:
+            with git_tracker.extract_files_from_commit_ctx(end_sha) as end_dir:
+                if not start_dir or not end_dir:
+                    console.print("[yellow]No Python files found in commits for baseline comparison.[/yellow]")
+                    return
 
-        range_delta = ComplexityDelta(
-            total_complexity_change=end_metrics.total_complexity - start_metrics.total_complexity,
-            avg_complexity_change=end_metrics.average_complexity - start_metrics.average_complexity,
-            total_volume_change=end_metrics.total_volume - start_metrics.total_volume,
-            avg_volume_change=end_metrics.average_volume - start_metrics.average_volume,
-            total_difficulty_change=end_metrics.total_difficulty - start_metrics.total_difficulty,
-            avg_difficulty_change=end_metrics.average_difficulty - start_metrics.average_difficulty,
-            total_effort_change=end_metrics.total_effort - start_metrics.total_effort,
-            total_mi_change=end_metrics.total_mi - start_metrics.total_mi,
-            avg_mi_change=end_metrics.average_mi - start_metrics.average_mi,
-            net_files_change=end_metrics.total_files_analyzed - start_metrics.total_files_analyzed,
-        )
+                start_metrics = analyzer.analyze_extended_complexity(start_dir)
+                end_metrics = analyzer.analyze_extended_complexity(end_dir)
 
-        impact_calculator = ImpactCalculator()
-        assessment = impact_calculator.calculate_impact(range_delta, baseline)
+                range_delta = ComplexityDelta(
+                    total_complexity_change=end_metrics.total_complexity - start_metrics.total_complexity,
+                    avg_complexity_change=end_metrics.average_complexity - start_metrics.average_complexity,
+                    total_volume_change=end_metrics.total_volume - start_metrics.total_volume,
+                    avg_volume_change=end_metrics.average_volume - start_metrics.average_volume,
+                    total_difficulty_change=end_metrics.total_difficulty - start_metrics.total_difficulty,
+                    avg_difficulty_change=end_metrics.average_difficulty - start_metrics.average_difficulty,
+                    total_effort_change=end_metrics.total_effort - start_metrics.total_effort,
+                    total_mi_change=end_metrics.total_mi - start_metrics.total_mi,
+                    avg_mi_change=end_metrics.average_mi - start_metrics.average_mi,
+                    net_files_change=end_metrics.total_files_analyzed - start_metrics.total_files_analyzed,
+                )
 
-        console.print(f"\n[bold]Commit Range Baseline Comparison ({start}..{end})[/bold]")
-        display_baseline_comparison(
-            baseline=baseline,
-            assessment=assessment,
-            title="Commit Range Impact",
-        )
+                impact_calculator = ImpactCalculator()
+                assessment = impact_calculator.calculate_impact(range_delta, baseline)
 
-    finally:
-        shutil.rmtree(start_dir, ignore_errors=True)
-        shutil.rmtree(end_dir, ignore_errors=True)
+                console.print(f"\n[bold]Commit Range Baseline Comparison ({start}..{end})[/bold]")
+                display_baseline_comparison(
+                    baseline=baseline,
+                    assessment=assessment,
+                    title="Commit Range Impact",
+                )
+    except GitOperationError as e:
+        console.print(f"[red]Git operation failed: {e}[/red]")
 
 
 @summoner.command("current-impact")
@@ -300,13 +313,15 @@ def current_impact(
       - MINOR_DEGRADATION: 0.5 to 1.0 std dev worse
       - SIGNIFICANT_DEGRADATION: > 1.0 std dev worse
     """
-    from slopometry.core.working_tree_extractor import WorkingTreeExtractor
-    from slopometry.display.formatters import display_current_impact_analysis
-    from slopometry.summoner.services.baseline_service import BaselineService
-    from slopometry.summoner.services.current_impact_service import CurrentImpactService
-
     if repo_path is None:
         repo_path = Path.cwd()
+
+    guard = check_language_support(repo_path, ProjectLanguage.PYTHON)
+    if warning := guard.format_warning():
+        console.print(f"[dim]{warning}[/dim]")
+    if not guard.allowed:
+        console.print("[yellow]current-impact requires Python files for complexity analysis.[/yellow]")
+        return
 
     extractor = WorkingTreeExtractor(repo_path)
 
@@ -348,7 +363,6 @@ def current_impact(
             console.print("[red]Failed to analyze uncommitted changes.[/red]")
             return
 
-        # Add test coverage if available from existing coverage files
         try:
             from slopometry.core.coverage_analyzer import CoverageAnalyzer
 
@@ -440,8 +454,6 @@ def userstorify(
         if base_commit or head_commit:
             console.print("[red]Cannot specify both --feature-id and --base-commit/--head-commit[/red]")
             sys.exit(1)
-
-        from slopometry.core.database import EventDatabase
 
         db = EventDatabase()
 
@@ -733,8 +745,6 @@ def user_story_export(output: str | None, upload_to_hf: bool, hf_repo: str | Non
 @click.argument("entry_id", shell_complete=complete_user_story_entry_id)
 def show_user_story(entry_id: str) -> None:
     """Show detailed information for a user story entry."""
-    from slopometry.core.database import EventDatabase
-
     db = EventDatabase()
 
     match len(entry_id):
@@ -882,3 +892,164 @@ def delete_nfp(nfp_id: str, yes: bool) -> None:
 
     except Exception as e:
         console.print(f"[red]Failed to delete NFP: {e}[/red]")
+
+
+@summoner.command("qpe")
+@click.option(
+    "--repo-path",
+    "-r",
+    type=click.Path(exists=True, path_type=Path),
+    help="Repository path (default: current directory)",
+)
+@click.option(
+    "--json",
+    "output_json",
+    is_flag=True,
+    help="Output as JSON for programmatic consumption (GRPO integration)",
+)
+def qpe(repo_path: Path | None, output_json: bool) -> None:
+    """Show Quality-Per-Effort score for current codebase.
+
+    QPE is a principled metric that:
+    - Uses MI as sole quality signal (no double-counting with CC/Volume)
+    - Normalizes by Halstead Effort for fair comparison
+    - Includes code smell penalties with explicit weights
+
+    Higher QPE = better quality per unit effort.
+
+    Use --json for machine-readable output in GRPO pipelines.
+    """
+    if repo_path is None:
+        repo_path = Path.cwd()
+
+    guard = check_language_support(repo_path, ProjectLanguage.PYTHON)
+    if warning := guard.format_warning():
+        if not output_json:
+            console.print(f"[dim]{warning}[/dim]")
+    if not guard.allowed:
+        if output_json:
+            print('{"error": "Python files not detected in repository"}')
+        else:
+            console.print("[yellow]QPE requires Python files for complexity analysis.[/yellow]")
+        return
+
+    try:
+        if not output_json:
+            console.print("[bold]Computing Quality-Per-Effort score[/bold]")
+            console.print(f"Repository: {repo_path}")
+
+        analyzer = ComplexityAnalyzer(working_directory=repo_path)
+        metrics = analyzer.analyze_extended_complexity()
+
+        qpe_calculator = QPECalculator()
+        qpe_score = qpe_calculator.calculate_qpe(metrics)
+
+        if output_json:
+            print(qpe_score.model_dump_json(indent=2))
+        else:
+            display_qpe_score(qpe_score, metrics)
+
+    except Exception as e:
+        if output_json:
+            # Simple JSON error output without importing json module
+            escaped_msg = str(e).replace('"', '\\"')
+            print(f'{{"error": "{escaped_msg}"}}')
+        else:
+            console.print(f"[red]Failed to compute QPE: {e}[/red]")
+        sys.exit(1)
+
+
+@summoner.command("compare-projects")
+@click.option(
+    "--append",
+    "-a",
+    "append_paths",
+    multiple=True,
+    type=click.Path(exists=True, path_type=Path),
+    help="Add project(s) to the leaderboard. Can be used multiple times.",
+)
+def compare_projects(append_paths: tuple[Path, ...]) -> None:
+    """Show QPE leaderboard or add projects to it.
+
+    Without --append: Shows the current leaderboard ranking.
+    With --append: Computes QPE for specified project(s), saves to leaderboard,
+    and shows updated rankings.
+
+    Example:
+        slopometry summoner compare-projects
+
+        slopometry summoner compare-projects --append .
+
+        slopometry summoner compare-projects -a /path/to/project1 -a /path/to/project2
+    """
+    db = EventDatabase()
+
+    if append_paths:
+        qpe_calculator = QPECalculator()
+
+        for project_path in append_paths:
+            project_path = project_path.resolve()
+
+            guard = check_language_support(project_path, ProjectLanguage.PYTHON)
+            if warning := guard.format_warning():
+                console.print(f"[dim]{project_path.name}: {warning}[/dim]")
+            if not guard.allowed:
+                console.print(f"[yellow]{project_path.name}: Skipped (no Python files detected)[/yellow]")
+                continue
+
+            console.print(f"[dim]Analyzing {project_path.name}...[/dim]")
+
+            result = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=project_path,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                console.print(f"[red]Error: {project_path.name} is not a git repository[/red]")
+                sys.exit(1)
+
+            commit_sha_full = result.stdout.strip()
+            commit_sha_short = commit_sha_full[:7]
+
+            date_result = subprocess.run(
+                ["git", "log", "-1", "--format=%ct", "HEAD"],
+                cwd=project_path,
+                capture_output=True,
+                text=True,
+            )
+            if date_result.returncode == 0 and date_result.stdout.strip():
+                commit_date = datetime.fromtimestamp(int(date_result.stdout.strip()))
+            else:
+                commit_date = datetime.now()  # Fallback if git log fails
+
+            analyzer = ComplexityAnalyzer(working_directory=project_path)
+            metrics = analyzer.analyze_extended_complexity()
+            qpe_score = qpe_calculator.calculate_qpe(metrics)
+
+            entry = LeaderboardEntry(
+                project_name=project_path.name,
+                project_path=str(project_path),
+                commit_sha_short=commit_sha_short,
+                commit_sha_full=commit_sha_full,
+                measured_at=commit_date,
+                qpe_score=qpe_score.qpe,
+                mi_normalized=qpe_score.mi_normalized,
+                smell_penalty=qpe_score.smell_penalty,
+                adjusted_quality=qpe_score.adjusted_quality,
+                effort_factor=qpe_score.effort_factor,
+                total_effort=metrics.total_effort,
+                metrics_json=metrics.model_dump_json(),
+            )
+            db.save_leaderboard_entry(entry)
+            console.print(f"[green]Added {project_path.name} (QPE: {qpe_score.qpe:.4f})[/green]")
+
+        console.print()
+
+    leaderboard = db.get_leaderboard()
+
+    if not leaderboard:
+        console.print("[dim]Leaderboard is empty. Use --append to add projects.[/dim]")
+        sys.exit(0)
+
+    display_leaderboard(leaderboard)
