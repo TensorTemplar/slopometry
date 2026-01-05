@@ -276,7 +276,8 @@ class TestFormatCodeSmellFeedback:
         assert has_blocking is False
         assert "Orphan Comments" in feedback
         assert "(+2)" in feedback
-        assert "changes in non-edited files" in feedback
+        assert "Code Smells" in feedback
+        assert "src/foo.py" in feedback
 
     def test_format_code_smell_feedback__includes_actionable_guidance(self):
         """Test that actionable guidance from SmellField is included."""

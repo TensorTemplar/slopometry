@@ -9,6 +9,9 @@ import click
 from click.shell_completion import CompletionItem
 from rich.console import Console
 
+from slopometry.core.language_guard import check_language_support
+from slopometry.core.models import ProjectLanguage
+
 logger = logging.getLogger(__name__)
 
 from slopometry.display.formatters import (
@@ -123,6 +126,14 @@ def run_experiments(commits: int, max_workers: int, repo_path: Path | None) -> N
     if repo_path is None:
         repo_path = Path.cwd()
 
+    # Language guard - requires Python for complexity analysis
+    guard = check_language_support(repo_path, ProjectLanguage.PYTHON)
+    if warning := guard.format_warning():
+        console.print(f"[dim]{warning}[/dim]")
+    if not guard.allowed:
+        console.print("[yellow]run-experiments requires Python files for complexity analysis.[/yellow]")
+        return
+
     experiment_service = ExperimentService()
 
     console.print(f"[bold]Running {commits} experiments with up to {max_workers} workers[/bold]")
@@ -157,6 +168,14 @@ def analyze_commits(start: str | None, end: str | None, repo_path: Path | None) 
     """Analyze complexity evolution across a chain of commits."""
     if repo_path is None:
         repo_path = Path.cwd()
+
+    # Language guard - requires Python for complexity analysis
+    guard = check_language_support(repo_path, ProjectLanguage.PYTHON)
+    if warning := guard.format_warning():
+        console.print(f"[dim]{warning}[/dim]")
+    if not guard.allowed:
+        console.print("[yellow]analyze-commits requires Python files for complexity analysis.[/yellow]")
+        return
 
     if start is None:
         start = "HEAD~10"
@@ -307,6 +326,14 @@ def current_impact(
 
     if repo_path is None:
         repo_path = Path.cwd()
+
+    # Language guard - requires Python for complexity analysis
+    guard = check_language_support(repo_path, ProjectLanguage.PYTHON)
+    if warning := guard.format_warning():
+        console.print(f"[dim]{warning}[/dim]")
+    if not guard.allowed:
+        console.print("[yellow]current-impact requires Python files for complexity analysis.[/yellow]")
+        return
 
     extractor = WorkingTreeExtractor(repo_path)
 
@@ -882,3 +909,173 @@ def delete_nfp(nfp_id: str, yes: bool) -> None:
 
     except Exception as e:
         console.print(f"[red]Failed to delete NFP: {e}[/red]")
+
+
+@summoner.command("qpe")
+@click.option(
+    "--repo-path",
+    "-r",
+    type=click.Path(exists=True, path_type=Path),
+    help="Repository path (default: current directory)",
+)
+@click.option(
+    "--json",
+    "output_json",
+    is_flag=True,
+    help="Output as JSON for programmatic consumption (GRPO integration)",
+)
+def qpe(repo_path: Path | None, output_json: bool) -> None:
+    """Show Quality-Per-Effort score for current codebase.
+
+    QPE is a principled metric that:
+    - Uses MI as sole quality signal (no double-counting with CC/Volume)
+    - Normalizes by Halstead Effort for fair comparison
+    - Includes code smell penalties with explicit weights
+
+    Higher QPE = better quality per unit effort.
+
+    Use --json for machine-readable output in GRPO pipelines.
+    """
+    from slopometry.core.complexity_analyzer import ComplexityAnalyzer
+    from slopometry.display.formatters import display_qpe_score
+    from slopometry.summoner.services.qpe_calculator import QPECalculator
+
+    if repo_path is None:
+        repo_path = Path.cwd()
+
+    # Language guard - requires Python for complexity analysis
+    guard = check_language_support(repo_path, ProjectLanguage.PYTHON)
+    if warning := guard.format_warning():
+        if not output_json:
+            console.print(f"[dim]{warning}[/dim]")
+    if not guard.allowed:
+        if output_json:
+            print('{"error": "Python files not detected in repository"}')
+        else:
+            console.print("[yellow]QPE requires Python files for complexity analysis.[/yellow]")
+        return
+
+    try:
+        if not output_json:
+            console.print("[bold]Computing Quality-Per-Effort score[/bold]")
+            console.print(f"Repository: {repo_path}")
+
+        analyzer = ComplexityAnalyzer(working_directory=repo_path)
+        metrics = analyzer.analyze_extended_complexity()
+
+        qpe_calculator = QPECalculator()
+        qpe_score = qpe_calculator.calculate_qpe(metrics)
+
+        if output_json:
+            # Machine-readable output for GRPO integration
+            print(qpe_score.model_dump_json(indent=2))
+        else:
+            display_qpe_score(qpe_score, metrics)
+
+    except Exception as e:
+        if output_json:
+            # Simple JSON error output without importing json module
+            escaped_msg = str(e).replace('"', '\\"')
+            print(f'{{"error": "{escaped_msg}"}}')
+        else:
+            console.print(f"[red]Failed to compute QPE: {e}[/red]")
+        sys.exit(1)
+
+
+@summoner.command("compare-projects")
+@click.option(
+    "--append",
+    "-a",
+    "append_paths",
+    multiple=True,
+    type=click.Path(exists=True, path_type=Path),
+    help="Add project(s) to the leaderboard. Can be used multiple times.",
+)
+def compare_projects(append_paths: tuple[Path, ...]) -> None:
+    """Show QPE leaderboard or add projects to it.
+
+    Without --append: Shows the current leaderboard ranking.
+    With --append: Computes QPE for specified project(s), saves to leaderboard,
+    and shows updated rankings.
+
+    Example:
+        slopometry summoner compare-projects
+
+        slopometry summoner compare-projects --append .
+
+        slopometry summoner compare-projects -a /path/to/project1 -a /path/to/project2
+    """
+    import subprocess
+    from datetime import datetime
+
+    from slopometry.core.complexity_analyzer import ComplexityAnalyzer
+    from slopometry.core.database import EventDatabase
+    from slopometry.core.models import LeaderboardEntry
+    from slopometry.display.formatters import display_leaderboard
+    from slopometry.summoner.services.qpe_calculator import QPECalculator
+
+    db = EventDatabase()
+
+    if append_paths:
+        qpe_calculator = QPECalculator()
+
+        for project_path in append_paths:
+            project_path = project_path.resolve()
+
+            # Language guard - requires Python for complexity analysis
+            guard = check_language_support(project_path, ProjectLanguage.PYTHON)
+            if warning := guard.format_warning():
+                console.print(f"[dim]{project_path.name}: {warning}[/dim]")
+            if not guard.allowed:
+                console.print(f"[yellow]{project_path.name}: Skipped (no Python files detected)[/yellow]")
+                continue
+
+            console.print(f"[dim]Analyzing {project_path.name}...[/dim]")
+
+            # Get git commit hash
+            result = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=project_path,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                console.print(f"[red]Error: {project_path.name} is not a git repository[/red]")
+                sys.exit(1)
+
+            commit_sha_full = result.stdout.strip()
+            commit_sha_short = commit_sha_full[:7]
+
+            # Compute metrics and QPE
+            analyzer = ComplexityAnalyzer(working_directory=project_path)
+            metrics = analyzer.analyze_extended_complexity()
+            qpe_score = qpe_calculator.calculate_qpe(metrics)
+
+            # Create and save leaderboard entry
+            entry = LeaderboardEntry(
+                project_name=project_path.name,
+                project_path=str(project_path),
+                commit_sha_short=commit_sha_short,
+                commit_sha_full=commit_sha_full,
+                measured_at=datetime.now(),
+                qpe_score=qpe_score.qpe,
+                mi_normalized=qpe_score.mi_normalized,
+                smell_penalty=qpe_score.smell_penalty,
+                adjusted_quality=qpe_score.adjusted_quality,
+                effort_factor=qpe_score.effort_factor,
+                total_effort=metrics.total_effort,
+                metrics_json=metrics.model_dump_json(),
+            )
+            db.save_leaderboard_entry(entry)
+            console.print(f"[green]Added {project_path.name} (QPE: {qpe_score.qpe:.4f})[/green]")
+
+        console.print()
+
+    # Show current leaderboard
+    leaderboard = db.get_leaderboard()
+
+    if not leaderboard:
+        console.print("[dim]Leaderboard is empty. Use --append to add projects.[/dim]")
+        sys.exit(0)
+
+    display_leaderboard(leaderboard)

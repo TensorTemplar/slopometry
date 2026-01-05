@@ -35,6 +35,13 @@ def SmellField(
     )
 
 
+class ProjectLanguage(str, Enum):
+    """Supported languages for complexity analysis."""
+
+    PYTHON = "python"
+    # RUST = "rust"  # Future: Add when rust analyzer ready
+
+
 class ProjectSource(str, Enum):
     """Source of project identification."""
 
@@ -554,20 +561,24 @@ class ExperimentRun(BaseModel):
 
 
 class ExperimentProgress(BaseModel):
-    """Tracks real-time progress with CLI metric."""
+    """Tracks real-time progress with CLI and QPE metrics."""
 
     experiment_id: str
     timestamp: datetime = Field(default_factory=datetime.now)
     current_metrics: ExtendedComplexityMetrics
     target_metrics: ExtendedComplexityMetrics  # From HEAD commit
 
+    # Legacy CLI metrics (deprecated - use qpe_score instead)
     cli_score: float = Field(
-        default=0.0, description="Numeric objective: 1.0 = perfect match, <0 = overshooting target"
+        default=0.0, description="DEPRECATED: Use qpe_score. 1.0 = perfect match, <0 = overshooting"
     )
-
     complexity_score: float = 0.0
     halstead_score: float = 0.0
     maintainability_score: float = 0.0
+
+    # QPE metrics (principled replacement for CLI)
+    qpe_score: float | None = Field(default=None, description="Quality-per-effort score (higher is better)")
+    smell_penalty: float | None = Field(default=None, description="Penalty from code smells (0-0.5 range)")
 
 
 class CommitComplexitySnapshot(BaseModel):
@@ -906,6 +917,71 @@ class ImpactAssessment(BaseModel):
         return ZScoreInterpretation.from_z_score(self.mi_z_score, verbose)
 
 
+class QPEScore(BaseModel):
+    """Quality-Per-Effort score for principled code quality comparison.
+
+    QPE provides a single metric that:
+    - Uses MI as the sole quality signal (no double-counting with CC/Volume)
+    - Normalizes by Halstead Effort for fair cross-project comparison
+    - Includes code smell penalties with explicit weights
+    - Produces bounded output suitable for GRPO advantage calculation
+    """
+
+    qpe: float = Field(description="Quality-per-effort score (higher is better)")
+    mi_normalized: float = Field(description="Maintainability Index normalized to 0-1")
+    smell_penalty: float = Field(description="Penalty from code smells (0-0.5 range)")
+    adjusted_quality: float = Field(description="MI after smell penalty applied")
+    effort_factor: float = Field(description="log(total_halstead_effort + 1)")
+
+    # Component breakdown for debugging
+    smell_counts: dict[str, int] = Field(
+        default_factory=dict, description="Individual smell counts contributing to penalty"
+    )
+
+
+class ProjectQPEResult(BaseModel):
+    """QPE result for a single project, used in cross-project comparison."""
+
+    project_path: str = Field(description="Path to the project")
+    project_name: str = Field(description="Name of the project")
+    qpe_score: QPEScore = Field(description="QPE score for this project")
+    metrics: ExtendedComplexityMetrics = Field(description="Full metrics for this project")
+
+
+class CrossProjectComparison(BaseModel):
+    """Result of comparing multiple projects using QPE.
+
+    Projects are ranked by QPE from highest to lowest.
+    """
+
+    compared_at: datetime = Field(default_factory=datetime.now)
+    total_projects: int = Field(description="Total number of projects compared")
+
+    # Flat rankings sorted by QPE (highest first)
+    rankings: list[ProjectQPEResult] = Field(default_factory=list, description="Projects ranked by QPE, highest first")
+
+
+class LeaderboardEntry(BaseModel):
+    """A persistent record of a project's QPE score at a specific commit.
+
+    Used for tracking QPE scores over time and comparing projects.
+    """
+
+    id: int | None = Field(default=None, description="Database ID")
+    project_name: str = Field(description="Name of the project")
+    project_path: str = Field(description="Absolute path to the project")
+    commit_sha_short: str = Field(description="7-character short git hash")
+    commit_sha_full: str = Field(description="Full git hash for deduplication")
+    measured_at: datetime = Field(default_factory=datetime.now, description="When the measurement was taken")
+    qpe_score: float = Field(description="Quality-per-effort score")
+    mi_normalized: float = Field(description="Maintainability Index normalized to 0-1")
+    smell_penalty: float = Field(description="Penalty from code smells")
+    adjusted_quality: float = Field(description="MI after smell penalty applied")
+    effort_factor: float = Field(description="log(total_halstead_effort + 1)")
+    total_effort: float = Field(description="Total Halstead Effort")
+    metrics_json: str = Field(description="Full ExtendedComplexityMetrics as JSON")
+
+
 class StagedChangesAnalysis(BaseModel):
     """Complete analysis of staged changes against repository baseline.
 
@@ -1021,3 +1097,22 @@ class ContextCoverage(BaseModel):
     def total_blind_spots(self) -> int:
         """Total number of related files that were never read."""
         return len(self.blind_spots)
+
+
+class LanguageGuardResult(BaseModel):
+    """Result of language guard check for complexity analysis features."""
+
+    allowed: bool = Field(description="Whether the required language is available for analysis")
+    required_language: ProjectLanguage = Field(description="The language required by the feature")
+    detected_supported: set[ProjectLanguage] = Field(
+        default_factory=set, description="Languages detected in repo that are supported"
+    )
+    detected_unsupported: set[str] = Field(
+        default_factory=set, description="Language names detected but not supported (e.g., 'Rust', 'Go')"
+    )
+
+    def format_warning(self) -> str | None:
+        """Return warning message if unsupported languages found, else None."""
+        if not self.detected_unsupported:
+            return None
+        return f"Found {', '.join(sorted(self.detected_unsupported))} files but analysis not yet supported"

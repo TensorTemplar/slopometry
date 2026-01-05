@@ -59,11 +59,14 @@ def truncate_path(path: str, max_width: int = 55) -> str:
 
 from slopometry.core.models import (
     ContextCoverage,
+    CrossProjectComparison,
     CurrentChangesAnalysis,
+    ExtendedComplexityMetrics,
     GalenMetrics,
     ImpactAssessment,
     ImpactCategory,
     PlanEvolution,
+    QPEScore,
     RepoBaseline,
     SessionStatistics,
     StagedChangesAnalysis,
@@ -1266,3 +1269,140 @@ def display_baseline_comparison_compact(
     lines.append(f"Session Impact: {category_display} ({assessment.impact_score:+.2f})")
 
     return "\n".join(lines)
+
+
+def display_qpe_score(
+    qpe_score: "QPEScore",
+    metrics: "ExtendedComplexityMetrics",
+) -> None:
+    """Display Quality-Per-Effort score with component breakdown.
+
+    Args:
+        qpe_score: Computed QPE score with components
+        metrics: Extended complexity metrics for context
+    """
+
+    console.print("\n[bold]Quality-Per-Effort Score[/bold]")
+
+    # Main QPE score display
+    qpe_color = "green" if qpe_score.qpe > 0.05 else "yellow" if qpe_score.qpe > 0.02 else "red"
+    console.print(f"  [bold]QPE:[/bold] [{qpe_color}]{qpe_score.qpe:.4f}[/{qpe_color}]")
+
+    # Component breakdown table
+    component_table = Table(title="QPE Components", show_header=True)
+    component_table.add_column("Component", style="cyan")
+    component_table.add_column("Value", justify="right")
+    component_table.add_column("Description", style="dim")
+
+    component_table.add_row(
+        "MI (normalized)",
+        f"{qpe_score.mi_normalized:.3f}",
+        f"Maintainability Index / 100 (raw: {metrics.average_mi:.1f})",
+    )
+
+    smell_color = "green" if qpe_score.smell_penalty < 0.1 else "yellow" if qpe_score.smell_penalty < 0.3 else "red"
+    component_table.add_row(
+        "Smell Penalty",
+        f"[{smell_color}]{qpe_score.smell_penalty:.3f}[/{smell_color}]",
+        "Weighted code smell deduction (0-0.5)",
+    )
+
+    component_table.add_row(
+        "Adjusted Quality",
+        f"{qpe_score.adjusted_quality:.3f}",
+        "MI × (1 - smell_penalty)",
+    )
+
+    component_table.add_row(
+        "Effort Factor",
+        f"{qpe_score.effort_factor:.2f}",
+        f"log(Halstead Effort + 1), raw: {metrics.total_effort:.0f}",
+    )
+
+    console.print(component_table)
+
+    # Smell breakdown if any
+    if any(count > 0 for count in qpe_score.smell_counts.values()):
+        smell_table = Table(title="Code Smell Breakdown", show_header=True)
+        smell_table.add_column("Smell", style="cyan")
+        smell_table.add_column("Count", justify="right")
+
+        for smell_name, count in sorted(qpe_score.smell_counts.items(), key=lambda x: -x[1]):
+            if count > 0:
+                smell_table.add_row(smell_name.replace("_", " ").title(), str(count))
+
+        console.print(smell_table)
+
+    console.print("\n[dim]Higher QPE = better quality per unit effort[/dim]")
+
+
+def display_cross_project_comparison(comparison: "CrossProjectComparison") -> None:
+    """Display cross-project comparison results ranked by QPE.
+
+    Args:
+        comparison: Cross-project comparison results
+    """
+    console.print(f"\n[bold]Cross-Project Comparison ({comparison.total_projects} projects)[/bold]")
+    console.print(f"[dim]Compared at: {comparison.compared_at.strftime('%Y-%m-%d %H:%M:%S')}[/dim]\n")
+
+    table = Table(show_header=True)
+    table.add_column("Rank", justify="right", style="bold")
+    table.add_column("Project", style="cyan")
+    table.add_column("QPE", justify="right")
+    table.add_column("MI", justify="right")
+    table.add_column("Smell Penalty", justify="right")
+    table.add_column("Effort", justify="right")
+
+    for rank, result in enumerate(comparison.rankings, 1):
+        rank_style = "green" if rank == 1 else "yellow" if rank == 2 else ""
+        qpe_color = "green" if result.qpe_score.qpe > 0.05 else "yellow" if result.qpe_score.qpe > 0.02 else "red"
+        smell_color = (
+            "green"
+            if result.qpe_score.smell_penalty < 0.1
+            else "yellow"
+            if result.qpe_score.smell_penalty < 0.3
+            else "red"
+        )
+
+        table.add_row(
+            f"[{rank_style}]#{rank}[/{rank_style}]" if rank_style else f"#{rank}",
+            result.project_name,
+            f"[{qpe_color}]{result.qpe_score.qpe:.4f}[/{qpe_color}]",
+            f"{result.metrics.average_mi:.1f}",
+            f"[{smell_color}]{result.qpe_score.smell_penalty:.3f}[/{smell_color}]",
+            f"{result.metrics.total_effort:.0f}",
+        )
+
+    console.print(table)
+    console.print("\n[dim]Higher QPE = better quality per unit effort[/dim]")
+
+
+def display_leaderboard(entries: list) -> None:
+    """Display the QPE leaderboard.
+
+    Args:
+        entries: List of LeaderboardEntry objects, already sorted by QPE
+    """
+    console.print("\n[bold]QPE Leaderboard[/bold]\n")
+
+    table = Table(show_header=True)
+    table.add_column("Rank", justify="right", style="bold")
+    table.add_column("Project", style="cyan")
+    table.add_column("QPE", justify="right")
+    table.add_column("Commit", justify="center")
+    table.add_column("Date", justify="center")
+
+    for rank, entry in enumerate(entries, 1):
+        rank_style = "green" if rank == 1 else "yellow" if rank == 2 else "blue" if rank == 3 else ""
+        qpe_color = "green" if entry.qpe_score > 0.05 else "yellow" if entry.qpe_score > 0.02 else "red"
+
+        table.add_row(
+            f"[{rank_style}]#{rank}[/{rank_style}]" if rank_style else f"#{rank}",
+            entry.project_name,
+            f"[{qpe_color}]{entry.qpe_score:.4f}[/{qpe_color}]",
+            f"[dim]{entry.commit_sha_short}[/dim]",
+            entry.measured_at.strftime("%Y-%m-%d"),
+        )
+
+    console.print(table)
+    console.print("\n[dim]Higher QPE = better quality per unit effort. Use --append to add projects.[/dim]")

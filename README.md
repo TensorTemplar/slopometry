@@ -140,9 +140,6 @@ slopometry solo show <session_id>
 # Alias for latest session, same as solo show <session_id>
 slopometry latest
 
-# Analyze the last 100 commits for trend analysis caching vs. current changes (can take a while)
-slopometry summoner current-impact
-
 # Save session artifacts (transcript, plans, todos) to .slopometry/<session_id>/
 slopometry solo save-transcript  # latest
 slopometry solo save-transcript <session_id>
@@ -194,15 +191,11 @@ Slopometry can be configured using environment variables or a `.env` file:
 # Create config directory and copy example config
 mkdir -p ~/.config/slopometry
 
-# For solo-leveler users (basic session tracking):
+# Copy example config
 curl -o ~/.config/slopometry/.env https://raw.githubusercontent.com/TensorTemplar/slopometry/main/.env.solo.example
-
-# For summoner users (advanced experimentation):
-curl -o ~/.config/slopometry/.env https://raw.githubusercontent.com/TensorTemplar/slopometry/main/.env.summoner.example
 
 # Or if you have the repo cloned:
 # cp .env.solo.example ~/.config/slopometry/.env
-# cp .env.summoner.example ~/.config/slopometry/.env
 
 # Edit ~/.config/slopometry/.env with your preferences
 ```
@@ -216,24 +209,6 @@ cd slopometry
 uv sync --extra dev
 uv run pytest
 ```
-
-### Running Tests with LLM Integration
-
-By default, LLM integration tests are skipped because `offline_mode` is enabled. To run the full test suite including LLM tests:
-
-```bash
-# Set up credentials in .env (copy from example)
-cp .env.summoner.example .env
-# Edit .env with your LLM proxy credentials:
-# - SLOPOMETRY_LLM_PROXY_URL
-# - SLOPOMETRY_LLM_PROXY_API_KEY
-# - SLOPOMETRY_LLM_RESPONSES_URL
-
-# Run tests with offline mode disabled
-SLOPOMETRY_OFFLINE_MODE=false uv run pytest tests/test_llm_integration.py -v
-```
-
-The integration tests make real API calls to configured LLM providers and verify that agents return valid responses.
 
 Customize via `.env` file or environment variables:
 

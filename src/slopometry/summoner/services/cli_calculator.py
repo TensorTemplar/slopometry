@@ -1,19 +1,56 @@
-"""CLI (Completeness Likelihood Improval) calculator for experiment tracking."""
+"""CLI (Completeness Likelihood Improval) calculator for experiment tracking.
 
-from slopometry.core.models import ExtendedComplexityMetrics
+DEPRECATED: The CLI score has known issues:
+- Double-counting: CC + Halstead + MI, but MI already incorporates CC and Volume
+- Scale-sensitive: Ratio-based scoring penalizes differently based on target magnitude
+- Unbounded output: Not suitable for stable RL training
+
+Use QPECalculator from slopometry.summoner.services.qpe_calculator instead.
+"""
+
+import warnings
+
+from slopometry.core.models import ExtendedComplexityMetrics, QPEScore
+from slopometry.summoner.services.qpe_calculator import QPECalculator
 
 
 class CLICalculator:
-    """Calculates Completeness Likelihood Improval score."""
+    """Calculates Completeness Likelihood Improval score.
+
+    DEPRECATED: Use QPECalculator instead. See qpe_calculator.py for the
+    principled replacement that:
+    - Uses MI as sole quality signal (no double-counting)
+    - Normalizes by Halstead Effort for fair comparison
+    - Produces bounded output suitable for GRPO
+    """
+
+    def __init__(self) -> None:
+        self._qpe_calculator = QPECalculator()
+
+    def calculate_qpe(self, metrics: ExtendedComplexityMetrics) -> QPEScore:
+        """Calculate Quality-Per-Effort score (recommended).
+
+        This is the principled replacement for calculate_cli().
+
+        Args:
+            metrics: Extended complexity metrics for the codebase
+
+        Returns:
+            QPEScore with component breakdown
+        """
+        return self._qpe_calculator.calculate_qpe(metrics)
 
     def calculate_cli(
         self, current: ExtendedComplexityMetrics, target: ExtendedComplexityMetrics
     ) -> tuple[float, dict[str, float]]:
-        """
-        Calculate CLI score where:
-        - 1.0 = perfect match to target
-        - 0.0-1.0 = approaching target
-        - <0 = overshooting target (penalized)
+        """Calculate CLI score (DEPRECATED - use calculate_qpe instead).
+
+        Issues with this method:
+        - Double-counts CC and Volume (already in MI)
+        - Scale-sensitive ratio comparisons
+        - Unbounded output not suitable for RL
+
+        Use calculate_qpe() for principled quality measurement.
 
         Args:
             current: Current metrics from agent's code
@@ -22,6 +59,11 @@ class CLICalculator:
         Returns:
             Tuple of (cli_score, component_scores)
         """
+        warnings.warn(
+            "calculate_cli() is deprecated. Use calculate_qpe() for principled quality measurement.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         complexity_ratio = current.total_complexity / max(target.total_complexity, 1)
         complexity_score = self._score_with_penalty(complexity_ratio, optimal=1.0)
 

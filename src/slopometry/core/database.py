@@ -23,6 +23,7 @@ from slopometry.core.models import (
     HistoricalMetricStats,
     HookEvent,
     HookEventType,
+    LeaderboardEntry,
     NextFeaturePrediction,
     PlanEvolution,
     Project,
@@ -967,8 +968,9 @@ class EventDatabase:
                 """
                 INSERT INTO experiment_progress (
                     experiment_id, timestamp, current_metrics, target_metrics,
-                    cli_score, complexity_score, halstead_score, maintainability_score
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    cli_score, complexity_score, halstead_score, maintainability_score,
+                    qpe_score, smell_penalty, effort_tier
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     progress.experiment_id,
@@ -979,6 +981,9 @@ class EventDatabase:
                     progress.complexity_score,
                     progress.halstead_score,
                     progress.maintainability_score,
+                    progress.qpe_score,
+                    progress.smell_penalty,
+                    progress.effort_tier.value if progress.effort_tier else None,
                 ),
             )
             conn.commit()
@@ -1012,9 +1017,9 @@ class EventDatabase:
         with self._get_db_connection() as conn:
             row = conn.execute(
                 """
-                SELECT * FROM experiment_progress 
-                WHERE experiment_id = ? 
-                ORDER BY timestamp DESC 
+                SELECT * FROM experiment_progress
+                WHERE experiment_id = ?
+                ORDER BY timestamp DESC
                 LIMIT 1
             """,
                 (experiment_id,),
@@ -1022,8 +1027,6 @@ class EventDatabase:
 
             if not row:
                 return None
-
-            from slopometry.core.models import ExtendedComplexityMetrics
 
             return ExperimentProgress(
                 experiment_id=row[1],
@@ -1034,6 +1037,8 @@ class EventDatabase:
                 complexity_score=row[6],
                 halstead_score=row[7],
                 maintainability_score=row[8],
+                qpe_score=row[9] if len(row) > 9 else None,
+                smell_penalty=row[10] if len(row) > 10 else None,
             )
 
     def create_commit_chain(self, repository_path: str, base_commit: str, head_commit: str, commit_count: int) -> int:
@@ -1645,6 +1650,116 @@ class EventDatabase:
                 ),
             )
             conn.commit()
+
+    # ==================== QPE Leaderboard ====================
+
+    def save_leaderboard_entry(self, entry: LeaderboardEntry) -> None:
+        """Save or update a leaderboard entry.
+
+        Uses UPSERT semantics - if an entry for this project/commit exists,
+        it will be updated with the new values.
+        """
+        with self._get_db_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO qpe_leaderboard (
+                    project_name, project_path, commit_sha_short, commit_sha_full,
+                    measured_at, qpe_score, mi_normalized, smell_penalty,
+                    adjusted_quality, effort_factor, total_effort, metrics_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(project_path, commit_sha_full) DO UPDATE SET
+                    project_name = excluded.project_name,
+                    measured_at = excluded.measured_at,
+                    qpe_score = excluded.qpe_score,
+                    mi_normalized = excluded.mi_normalized,
+                    smell_penalty = excluded.smell_penalty,
+                    adjusted_quality = excluded.adjusted_quality,
+                    effort_factor = excluded.effort_factor,
+                    total_effort = excluded.total_effort,
+                    metrics_json = excluded.metrics_json
+                """,
+                (
+                    entry.project_name,
+                    entry.project_path,
+                    entry.commit_sha_short,
+                    entry.commit_sha_full,
+                    entry.measured_at.isoformat(),
+                    entry.qpe_score,
+                    entry.mi_normalized,
+                    entry.smell_penalty,
+                    entry.adjusted_quality,
+                    entry.effort_factor,
+                    entry.total_effort,
+                    entry.metrics_json,
+                ),
+            )
+            conn.commit()
+
+    def get_leaderboard(self) -> list[LeaderboardEntry]:
+        """Get all leaderboard entries, sorted by QPE score (highest first)."""
+        with self._get_db_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, project_name, project_path, commit_sha_short, commit_sha_full,
+                       measured_at, qpe_score, mi_normalized, smell_penalty,
+                       adjusted_quality, effort_factor, total_effort, metrics_json
+                FROM qpe_leaderboard
+                ORDER BY qpe_score DESC
+                """
+            ).fetchall()
+
+            return [
+                LeaderboardEntry(
+                    id=row[0],
+                    project_name=row[1],
+                    project_path=row[2],
+                    commit_sha_short=row[3],
+                    commit_sha_full=row[4],
+                    measured_at=datetime.fromisoformat(row[5]),
+                    qpe_score=row[6],
+                    mi_normalized=row[7],
+                    smell_penalty=row[8],
+                    adjusted_quality=row[9],
+                    effort_factor=row[10],
+                    total_effort=row[11],
+                    metrics_json=row[12],
+                )
+                for row in rows
+            ]
+
+    def get_project_history(self, project_path: str) -> list[LeaderboardEntry]:
+        """Get all leaderboard entries for a specific project, ordered by date."""
+        with self._get_db_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, project_name, project_path, commit_sha_short, commit_sha_full,
+                       measured_at, qpe_score, mi_normalized, smell_penalty,
+                       adjusted_quality, effort_factor, total_effort, metrics_json
+                FROM qpe_leaderboard
+                WHERE project_path = ?
+                ORDER BY measured_at DESC
+                """,
+                (project_path,),
+            ).fetchall()
+
+            return [
+                LeaderboardEntry(
+                    id=row[0],
+                    project_name=row[1],
+                    project_path=row[2],
+                    commit_sha_short=row[3],
+                    commit_sha_full=row[4],
+                    measured_at=datetime.fromisoformat(row[5]),
+                    qpe_score=row[6],
+                    mi_normalized=row[7],
+                    smell_penalty=row[8],
+                    adjusted_quality=row[9],
+                    effort_factor=row[10],
+                    total_effort=row[11],
+                    metrics_json=row[12],
+                )
+                for row in rows
+            ]
 
 
 class SessionManager:

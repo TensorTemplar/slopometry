@@ -646,7 +646,7 @@ def format_code_smell_feedback(
     if other_smells_with_changes:
         if not blocking_smells:
             lines.append("")
-        lines.append("**Code Smells** (changes in non-edited files):")
+        lines.append("**Code Smells** (review if increased):")
         lines.append("")
         for label, count, change, files, guidance in other_smells_with_changes:
             change_str = f" (+{change})" if change > 0 else f" ({change})"
