@@ -10,40 +10,16 @@ import click
 from click.shell_completion import CompletionItem
 from rich.console import Console
 
-from slopometry.core.complexity_analyzer import ComplexityAnalyzer
-from slopometry.core.database import EventDatabase
-from slopometry.core.git_tracker import GitOperationError, GitTracker
-from slopometry.core.language_guard import check_language_support
-from slopometry.core.models import ComplexityDelta, LeaderboardEntry, ProjectLanguage
-from slopometry.core.working_tree_extractor import WorkingTreeExtractor
-from slopometry.summoner.services.baseline_service import BaselineService
-from slopometry.summoner.services.current_impact_service import CurrentImpactService
-from slopometry.summoner.services.impact_calculator import ImpactCalculator
-from slopometry.summoner.services.qpe_calculator import QPECalculator
-
-logger = logging.getLogger(__name__)
-
-from slopometry.display.formatters import (
-    create_experiment_table,
-    create_features_table,
-    create_nfp_objectives_table,
-    create_progress_history_table,
-    create_user_story_entries_table,
-    display_baseline_comparison,
-    display_current_impact_analysis,
-    display_leaderboard,
-    display_qpe_score,
-)
-from slopometry.summoner.services.experiment_service import ExperimentService
-from slopometry.summoner.services.llm_service import LLMService
-from slopometry.summoner.services.nfp_service import NFPService
-from slopometry.summoner.services.user_story_service import UserStoryService
+# Imports moved inside functions to optimize startup time
 
 console = Console()
+logger = logging.getLogger(__name__)
 
 
 def complete_experiment_id(ctx: click.Context, param: click.Parameter, incomplete: str) -> list[str]:
     """Complete experiment IDs from the database."""
+    from slopometry.summoner.services.experiment_service import ExperimentService
+
     try:
         experiment_service = ExperimentService()
         experiments = experiment_service.list_experiments()
@@ -54,6 +30,8 @@ def complete_experiment_id(ctx: click.Context, param: click.Parameter, incomplet
 
 def complete_nfp_id(ctx: click.Context, param: click.Parameter, incomplete: str) -> list[str]:
     """Complete NFP objective IDs from the database."""
+    from slopometry.summoner.services.nfp_service import NFPService
+
     try:
         nfp_service = NFPService()
         objectives = nfp_service.list_nfp_objectives()
@@ -64,6 +42,8 @@ def complete_nfp_id(ctx: click.Context, param: click.Parameter, incomplete: str)
 
 def complete_feature_id(ctx: click.Context, param: click.Parameter, incomplete: str) -> list[str]:
     """Complete feature IDs from the database."""
+    from slopometry.core.database import EventDatabase
+
     try:
         db = EventDatabase()
         repo_path = Path.cwd()
@@ -75,6 +55,8 @@ def complete_feature_id(ctx: click.Context, param: click.Parameter, incomplete: 
 
 def complete_user_story_entry_id(ctx: click.Context, param: click.Parameter, incomplete: str) -> list[str]:
     """Complete user story entry IDs from the database."""
+    from slopometry.core.database import EventDatabase
+
     try:
         db = EventDatabase()
         entry_ids = db.get_user_story_entry_ids_for_completion()
@@ -132,6 +114,10 @@ def summoner() -> None:
 )
 def run_experiments(commits: int, max_workers: int, repo_path: Path | None) -> None:
     """Run parallel experiments across git commits to track and analyze code complexity evolution patterns."""
+    from slopometry.core.language_guard import check_language_support
+    from slopometry.core.models import ProjectLanguage
+    from slopometry.summoner.services.experiment_service import ExperimentService
+
     if repo_path is None:
         repo_path = Path.cwd()
 
@@ -174,6 +160,10 @@ def run_experiments(commits: int, max_workers: int, repo_path: Path | None) -> N
 )
 def analyze_commits(start: str | None, end: str | None, repo_path: Path | None) -> None:
     """Analyze complexity evolution across a chain of commits."""
+    from slopometry.core.language_guard import check_language_support
+    from slopometry.core.models import ProjectLanguage
+    from slopometry.summoner.services.experiment_service import ExperimentService
+
     if repo_path is None:
         repo_path = Path.cwd()
 
@@ -207,6 +197,13 @@ def analyze_commits(start: str | None, end: str | None, repo_path: Path | None) 
 
 def _show_commit_range_baseline_comparison(repo_path: Path, start: str, end: str) -> None:
     """Show baseline comparison for analyzed commit range."""
+    from slopometry.core.complexity_analyzer import ComplexityAnalyzer
+    from slopometry.core.git_tracker import GitOperationError, GitTracker
+    from slopometry.core.models import ComplexityDelta
+    from slopometry.display.formatters import display_baseline_comparison
+    from slopometry.summoner.services.baseline_service import BaselineService
+    from slopometry.summoner.services.impact_calculator import ImpactCalculator
+
     console.print("\n[yellow]Computing baseline comparison...[/yellow]")
 
     baseline_service = BaselineService()
@@ -316,6 +313,13 @@ def current_impact(
     if repo_path is None:
         repo_path = Path.cwd()
 
+    from slopometry.core.language_guard import check_language_support
+    from slopometry.core.models import ProjectLanguage
+    from slopometry.core.working_tree_extractor import WorkingTreeExtractor
+    from slopometry.display.formatters import display_current_impact_analysis
+    from slopometry.summoner.services.baseline_service import BaselineService
+    from slopometry.summoner.services.current_impact_service import CurrentImpactService
+
     guard = check_language_support(repo_path, ProjectLanguage.PYTHON)
     if warning := guard.format_warning():
         console.print(f"[dim]{warning}[/dim]")
@@ -385,6 +389,9 @@ def current_impact(
 @summoner.command("list-experiments")
 def list_experiments() -> None:
     """List all experiment runs."""
+    from slopometry.display.formatters import create_experiment_table
+    from slopometry.summoner.services.experiment_service import ExperimentService
+
     experiment_service = ExperimentService()
     experiments_data = experiment_service.list_experiments()
 
@@ -400,6 +407,9 @@ def list_experiments() -> None:
 @click.argument("experiment_id", shell_complete=complete_experiment_id)
 def show_experiment(experiment_id: str) -> None:
     """Show detailed progress for an experiment."""
+    from slopometry.display.formatters import create_progress_history_table
+    from slopometry.summoner.services.experiment_service import ExperimentService
+
     experiment_service = ExperimentService()
 
     result = experiment_service.get_experiment_details(experiment_id)
@@ -445,6 +455,9 @@ def userstorify(
     base_commit: str | None, head_commit: str | None, feature_id: str | None, repo_path: Path | None
 ) -> None:
     """Generate user stories from commits using configured AI agents and save permanently to user story collection."""
+    from slopometry.core.database import EventDatabase
+    from slopometry.summoner.services.llm_service import LLMService
+
     if repo_path is None:
         repo_path = Path.cwd()
 
@@ -532,6 +545,8 @@ def userstorify(
 @click.option("--unrated-only", is_flag=True, help="Show only unrated entries (rating = 3)")
 def rate_user_stories(limit: int, filter_model: str | None, unrated_only: bool) -> None:
     """Rate existing user stories in the user story collection."""
+    from slopometry.summoner.services.user_story_service import UserStoryService
+
     user_story_service = UserStoryService()
 
     try:
@@ -622,6 +637,9 @@ def rate_user_stories(limit: int, filter_model: str | None, unrated_only: bool) 
 )
 def list_features(limit: int, repo_path: Path | None) -> None:
     """List detected feature boundaries from merge commits."""
+    from slopometry.display.formatters import create_features_table
+    from slopometry.summoner.services.llm_service import LLMService
+
     if repo_path is None:
         repo_path = Path.cwd()
 
@@ -653,6 +671,8 @@ def list_features(limit: int, repo_path: Path | None) -> None:
 @summoner.command("user-story-stats")
 def user_story_stats() -> None:
     """Show statistics about the collected user stories."""
+    from slopometry.summoner.services.user_story_service import UserStoryService
+
     user_story_service = UserStoryService()
 
     try:
@@ -680,10 +700,17 @@ def user_story_stats() -> None:
 @click.option("--limit", "-l", default=10, help="Number of entries to show (default: 10)")
 def list_user_stories(limit: int) -> None:
     """Show recent user story entries."""
+    from slopometry.display.formatters import create_user_story_entries_table
+    from slopometry.summoner.services.user_story_service import UserStoryService
+
     user_story_service = UserStoryService()
 
     try:
         entries = user_story_service.get_user_story_entries(limit)
+
+        if not entries:
+            console.print("[yellow]No user story entries found[/yellow]")
+            return
 
         if not entries:
             console.print("[yellow]No user story entries found[/yellow]")
@@ -703,6 +730,8 @@ def list_user_stories(limit: int) -> None:
 @click.option("--hf-repo", help="Hugging Face user story repository (e.g., username/repository-name)")
 def user_story_export(output: str | None, upload_to_hf: bool, hf_repo: str | None) -> None:
     """Export user stories to Parquet format."""
+    from slopometry.summoner.services.user_story_service import UserStoryService
+
     user_story_service = UserStoryService()
 
     if output is None:
@@ -745,6 +774,8 @@ def user_story_export(output: str | None, upload_to_hf: bool, hf_repo: str | Non
 @click.argument("entry_id", shell_complete=complete_user_story_entry_id)
 def show_user_story(entry_id: str) -> None:
     """Show detailed information for a user story entry."""
+    from slopometry.core.database import EventDatabase
+
     db = EventDatabase()
 
     match len(entry_id):
@@ -795,6 +826,8 @@ def show_user_story(entry_id: str) -> None:
 @click.option("--repo-path", "-r", type=click.Path(exists=True, path_type=Path), help="Repository path filter")
 def list_nfp(repo_path: Path | None) -> None:
     """List all NFP objectives."""
+    from slopometry.summoner.services.nfp_service import NFPService
+
     nfp_service = NFPService()
 
     try:
@@ -806,6 +839,8 @@ def list_nfp(repo_path: Path | None) -> None:
             return
 
         objectives_data = nfp_service.prepare_objectives_data_for_display(objectives)
+        from slopometry.display.formatters import create_nfp_objectives_table
+
         table = create_nfp_objectives_table(objectives_data)
         console.print(table)
 
@@ -817,6 +852,8 @@ def list_nfp(repo_path: Path | None) -> None:
 @click.argument("nfp_id", shell_complete=complete_nfp_id)
 def show_nfp(nfp_id: str) -> None:
     """Show detailed information for an NFP objective."""
+    from slopometry.summoner.services.nfp_service import NFPService
+
     nfp_service = NFPService()
 
     try:
@@ -869,6 +906,8 @@ def show_nfp(nfp_id: str) -> None:
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt")
 def delete_nfp(nfp_id: str, yes: bool) -> None:
     """Delete an NFP objective and all its user stories."""
+    from slopometry.summoner.services.nfp_service import NFPService
+
     nfp_service = NFPService()
 
     if not yes:
@@ -922,6 +961,9 @@ def qpe(repo_path: Path | None, output_json: bool) -> None:
     if repo_path is None:
         repo_path = Path.cwd()
 
+    from slopometry.core.language_guard import check_language_support
+    from slopometry.core.models import ProjectLanguage
+
     guard = check_language_support(repo_path, ProjectLanguage.PYTHON)
     if warning := guard.format_warning():
         if not output_json:
@@ -938,6 +980,9 @@ def qpe(repo_path: Path | None, output_json: bool) -> None:
             console.print("[bold]Computing Quality-Per-Effort score[/bold]")
             console.print(f"Repository: {repo_path}")
 
+        from slopometry.core.complexity_analyzer import ComplexityAnalyzer
+        from slopometry.summoner.services.qpe_calculator import QPECalculator
+
         analyzer = ComplexityAnalyzer(working_directory=repo_path)
         metrics = analyzer.analyze_extended_complexity()
 
@@ -947,6 +992,8 @@ def qpe(repo_path: Path | None, output_json: bool) -> None:
         if output_json:
             print(qpe_score.model_dump_json(indent=2))
         else:
+            from slopometry.display.formatters import display_qpe_score
+
             display_qpe_score(qpe_score, metrics)
 
     except Exception as e:
@@ -982,9 +1029,17 @@ def compare_projects(append_paths: tuple[Path, ...]) -> None:
 
         slopometry summoner compare-projects -a /path/to/project1 -a /path/to/project2
     """
+    from slopometry.core.database import EventDatabase
+    from slopometry.display.formatters import display_leaderboard
+
     db = EventDatabase()
 
     if append_paths:
+        from slopometry.core.complexity_analyzer import ComplexityAnalyzer
+        from slopometry.core.language_guard import check_language_support
+        from slopometry.core.models import LeaderboardEntry, ProjectLanguage
+        from slopometry.summoner.services.qpe_calculator import QPECalculator
+
         qpe_calculator = QPECalculator()
 
         for project_path in append_paths:

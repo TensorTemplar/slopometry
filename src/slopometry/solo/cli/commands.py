@@ -6,10 +6,7 @@ from pathlib import Path
 import click
 from rich.console import Console
 
-from slopometry.core.settings import settings
-from slopometry.display.formatters import create_sessions_table, display_session_summary
-from slopometry.solo.services.hook_service import HookService
-from slopometry.solo.services.session_service import SessionService
+# Imports moved inside functions to optimize startup time
 
 console = Console()
 logger = logging.getLogger(__name__)
@@ -17,6 +14,8 @@ logger = logging.getLogger(__name__)
 
 def complete_session_id(ctx: click.Context, param: click.Parameter, incomplete: str) -> list[str]:
     """Complete session IDs from the database."""
+    from slopometry.solo.services.session_service import SessionService
+
     try:
         session_service = SessionService()
         sessions = session_service.list_sessions()
@@ -50,6 +49,7 @@ def _warn_if_not_in_path() -> None:
 def install(global_: bool) -> None:
     """Install slopometry hooks into Claude Code settings to automatically track all sessions and tool usage."""
     from slopometry.core.settings import get_default_config_dir, get_default_data_dir
+    from slopometry.solo.services.hook_service import HookService
 
     hook_service = HookService()
     success, message = hook_service.install_hooks(global_)
@@ -73,6 +73,8 @@ def install(global_: bool) -> None:
 )
 def uninstall(global_: bool) -> None:
     """Remove slopometry hooks from Claude Code settings to completely stop automatic session tracking."""
+    from slopometry.solo.services.hook_service import HookService
+
     hook_service = HookService()
     success, message = hook_service.uninstall_hooks(global_)
 
@@ -86,6 +88,9 @@ def uninstall(global_: bool) -> None:
 @click.option("--limit", default=None, type=int, help="Number of recent sessions to show")
 def list_sessions(limit: int) -> None:
     """List recent Claude Code sessions."""
+    from slopometry.display.formatters import create_sessions_table
+    from slopometry.solo.services.session_service import SessionService
+
     session_service = SessionService()
     sessions_data = session_service.get_sessions_for_display(limit=limit)
 
@@ -105,6 +110,9 @@ def list_sessions(limit: int) -> None:
 def show(session_id: str, smell_details: bool, file_details: bool) -> None:
     """Show detailed statistics for a session."""
     import time
+
+    from slopometry.display.formatters import display_session_summary
+    from slopometry.solo.services.session_service import SessionService
 
     start_time = time.perf_counter()
 
@@ -136,6 +144,9 @@ def show(session_id: str, smell_details: bool, file_details: bool) -> None:
 def latest(smell_details: bool, file_details: bool) -> None:
     """Show detailed statistics for the most recent session."""
     import time
+
+    from slopometry.display.formatters import display_session_summary
+    from slopometry.solo.services.session_service import SessionService
 
     start_time = time.perf_counter()
 
@@ -226,8 +237,11 @@ def cleanup(session_id: str | None, all_sessions: bool, yes: bool) -> None:
 
     If SESSION_ID is provided, delete that specific session.
     If --all is provided, delete all sessions.
+    If --all is provided, delete all sessions.
     Otherwise, show usage help.
     """
+    from slopometry.solo.services.session_service import SessionService
+
     session_service = SessionService()
 
     if session_id and all_sessions:
@@ -283,6 +297,10 @@ def cleanup(session_id: str | None, all_sessions: bool, yes: bool) -> None:
 @click.command()
 def status() -> None:
     """Show installation status and hook configuration."""
+    from slopometry.core.settings import settings
+    from slopometry.solo.services.hook_service import HookService
+    from slopometry.solo.services.session_service import SessionService
+
     hook_service = HookService()
     status_info = hook_service.get_installation_status()
 
@@ -316,6 +334,8 @@ def status() -> None:
 @click.option("--enable/--disable", default=None, help="Enable or disable stop event feedback")
 def feedback(enable: bool | None) -> None:
     """Configure complexity feedback on stop events."""
+    from slopometry.core.settings import settings
+
     if enable is None:
         current_status = "enabled" if settings.enable_complexity_feedback else "disabled"
         console.print(f"[bold]Complexity feedback is currently {current_status}[/bold]")
@@ -390,6 +410,7 @@ def feedback(enable: bool | None) -> None:
 def migrations() -> None:
     """Show database migration status."""
     from slopometry.core.migrations import MigrationRunner
+    from slopometry.solo.services.session_service import SessionService
 
     session_service = SessionService()
     migration_runner = MigrationRunner(session_service.db.db_path)
@@ -456,6 +477,8 @@ def save_transcript(session_id: str | None, output_dir: str, yes: bool) -> None:
     """
     import shutil
     from pathlib import Path
+
+    from slopometry.solo.services.session_service import SessionService
 
     session_service = SessionService()
 

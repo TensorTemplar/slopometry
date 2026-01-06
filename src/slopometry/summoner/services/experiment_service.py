@@ -5,7 +5,6 @@ from pathlib import Path
 
 from slopometry.core.database import EventDatabase
 from slopometry.core.models import ExperimentDisplayData, ProgressDisplayData
-from slopometry.summoner.services.experiment_orchestrator import ExperimentOrchestrator
 
 
 class ExperimentService:
@@ -16,6 +15,8 @@ class ExperimentService:
 
     def run_parallel_experiments(self, repo_path: Path, commits: int, max_workers: int) -> dict:
         """Run parallel experiments across git commits."""
+        from slopometry.summoner.services.experiment_orchestrator import ExperimentOrchestrator
+
         orchestrator = ExperimentOrchestrator(repo_path)
 
         commit_pairs = []
@@ -28,6 +29,8 @@ class ExperimentService:
 
     def analyze_commit_chain(self, repo_path: Path, base_commit: str, head_commit: str) -> None:
         """Analyze complexity evolution across a chain of commits."""
+        from slopometry.summoner.services.experiment_orchestrator import ExperimentOrchestrator
+
         orchestrator = ExperimentOrchestrator(repo_path)
         orchestrator.analyze_commit_chain(base_commit, head_commit)
 

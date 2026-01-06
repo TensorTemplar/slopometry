@@ -623,7 +623,7 @@ def format_code_smell_feedback(
 
     if blocking_smells:
         lines.append("")
-        lines.append("**ACTION REQUIRED** - The following issues are in files you edited:")
+        lines.append("**ACTION REQUIRED** - The following issues are in files that are in scope for this PR:")
         lines.append("")
         for label, file_count, change, guidance, related_files in blocking_smells:
             change_str = f" (+{change})" if change > 0 else f" ({change})" if change < 0 else ""
