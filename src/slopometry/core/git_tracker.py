@@ -404,10 +404,14 @@ class GitTracker:
                 except (subprocess.TimeoutExpired, subprocess.SubprocessError):
                     failed_files.append(file_path)
 
+            # Don't error on files that don't exist in this commit
+            # (e.g., newly added files when extracting from parent commit)
             if not any(temp_dir.rglob("*.py")):
-                shutil.rmtree(temp_dir, ignore_errors=True)
-                if failed_files:
-                    raise GitOperationError(f"Failed to extract any files from {commit_ref}. Failed: {failed_files}")
+                if failed_files and len(failed_files) == len(file_paths):
+                    raise GitOperationError(
+                        f"Failed to extract any files from {commit_ref}. "
+                        f"These files may not exist in this commit. Failed: {failed_files}"
+                    )
                 return None
 
             return temp_dir

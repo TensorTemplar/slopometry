@@ -27,7 +27,7 @@ class TestMigrations:
 
             applied = runner.run_migrations()
 
-            assert len(applied) == 7
+            assert len(applied) == 8
             assert any("001" in migration and "transcript_path" in migration for migration in applied)
             assert any("002" in migration and "code quality cache" in migration for migration in applied)
             assert any("003" in migration and "working_tree_hash" in migration for migration in applied)
@@ -35,6 +35,7 @@ class TestMigrations:
             assert any("005" in migration and "oldest_commit" in migration for migration in applied)
             assert any("006" in migration and "qpe_score" in migration for migration in applied)
             assert any("007" in migration and "qpe_leaderboard" in migration for migration in applied)
+            assert any("008" in migration and "unique constraint" in migration for migration in applied)
 
             with runner._get_db_connection() as conn:
                 cursor = conn.execute("PRAGMA table_info(hook_events)")
@@ -64,12 +65,12 @@ class TestMigrations:
             applied_first = runner.run_migrations()
             applied_second = runner.run_migrations()
 
-            assert len(applied_first) == 7
+            assert len(applied_first) == 8
             assert len(applied_second) == 0
 
             status = runner.get_migration_status()
-            assert status["total"] == 7
-            assert len(status["applied"]) == 7
+            assert status["total"] == 8
+            assert len(status["applied"]) == 8
             assert len(status["pending"]) == 0
 
     def test_migration_runner__tracks_migration_status(self):
@@ -94,12 +95,12 @@ class TestMigrations:
 
             status_after = runner.get_migration_status()
 
-            assert status_before["total"] == 7
+            assert status_before["total"] == 8
             assert len(status_before["applied"]) == 0
-            assert len(status_before["pending"]) == 7
+            assert len(status_before["pending"]) == 8
 
-            assert status_after["total"] == 7
-            assert len(status_after["applied"]) == 7
+            assert status_after["total"] == 8
+            assert len(status_after["applied"]) == 8
             assert len(status_after["pending"]) == 0
 
             migration_001 = next((m for m in status_after["applied"] if m["version"] == "001"), None)
@@ -125,7 +126,7 @@ class TestMigrations:
 
             applied = runner.run_migrations()
 
-            assert len(applied) == 7
+            assert len(applied) == 8
 
             with runner._get_db_connection() as conn:
                 cursor = conn.execute("PRAGMA table_info(hook_events)")

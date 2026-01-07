@@ -4,16 +4,7 @@ import os
 from pathlib import Path
 
 from slopometry.core.database import EventDatabase
-from slopometry.core.models import UserStoryEntry
 from slopometry.core.settings import settings
-from slopometry.summoner.services.llm_wrapper import (
-    calculate_stride_size,
-    get_commit_diff,
-    get_feature_boundaries,
-    get_user_story_agent,
-    get_user_story_prompt,
-    resolve_commit_reference,
-)
 
 
 class LLMService:
@@ -30,6 +21,15 @@ class LLMService:
         Returns:
             Tuple of (successful_generations, error_messages)
         """
+        from slopometry.core.models import UserStoryEntry
+        from slopometry.summoner.services.llm_wrapper import (
+            calculate_stride_size,
+            get_commit_diff,
+            get_user_story_agent,
+            get_user_story_prompt,
+            resolve_commit_reference,
+        )
+
         original_dir = os.getcwd()
         error_messages: list[str] = []
 
@@ -74,6 +74,7 @@ class LLMService:
 
     def get_feature_boundaries(self, repo_path: Path, limit: int = 20) -> list:
         """Get detected feature boundaries from merge commits."""
+        from slopometry.summoner.services.llm_wrapper import get_feature_boundaries
 
         cached_features = self.db.get_feature_boundaries(repo_path)
         if cached_features:
@@ -114,6 +115,8 @@ class LLMService:
 
     def get_commit_info_for_display(self, base_commit: str, head_commit: str) -> dict:
         """Get commit information for display purposes."""
+        from slopometry.summoner.services.llm_wrapper import calculate_stride_size, resolve_commit_reference
+
         try:
             resolved_base = resolve_commit_reference(base_commit)
             resolved_head = resolve_commit_reference(head_commit)

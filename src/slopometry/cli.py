@@ -97,11 +97,20 @@ def shell_completion(shell: str) -> None:
         console.print("_SLOPOMETRY_COMPLETE=bash_source slopometry > ~/.slopometry-complete.sh")
         console.print("echo 'source ~/.slopometry-complete.sh' >> ~/.bashrc")
     elif shell == "zsh":
-        console.print("[bold]Add this to your ~/.zshrc:[/bold]")
+        console.print("[bold]Manual Installation (Recommended for Oh My Zsh):[/bold]")
+        console.print("mkdir -p ~/.oh-my-zsh/completions")
+        console.print(
+            "_SLOPOMETRY_COMPLETE=zsh_source slopometry | sed '/commands\\[slopometry\\]/d' > "
+            "~/.oh-my-zsh/completions/_slopometry"
+        )
+        console.print("\n[dim]Note: You may need to run 'compinit' or restart your shell.[/dim]")
+
+        console.print("\n[bold]Configuration (Cleanup):[/bold]")
+        console.print("To hide internal functions like '_slopometry' from tab completion, add this to your ~/.zshrc:")
+        console.print("zstyle ':completion:*:*:-command-:*:*' ignored-patterns '_slopometry*'")
+
+        console.print("\n[bold]Alternative (Direct Eval):[/bold]")
         console.print('eval "$(_SLOPOMETRY_COMPLETE=zsh_source slopometry)"')
-        console.print("\n[bold]Or install directly:[/bold]")
-        console.print("_SLOPOMETRY_COMPLETE=zsh_source slopometry > ~/.slopometry-complete.zsh")
-        console.print("echo 'source ~/.slopometry-complete.zsh' >> ~/.zshrc")
     elif shell == "fish":
         console.print("[bold]Add this to your fish config:[/bold]")
         console.print("_SLOPOMETRY_COMPLETE=fish_source slopometry | source")

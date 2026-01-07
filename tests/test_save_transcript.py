@@ -116,7 +116,7 @@ class TestSaveTranscript:
         )
 
         with (
-            patch("slopometry.solo.cli.commands.SessionService") as mock_service_class,
+            patch("slopometry.solo.services.session_service.SessionService") as mock_service_class,
             patch("slopometry.solo.cli.commands._find_plan_names_from_transcript", return_value=[]),
             patch("slopometry.solo.cli.commands._find_session_todos", return_value=[]),
         ):
@@ -158,7 +158,7 @@ class TestSaveTranscript:
         )
 
         with (
-            patch("slopometry.solo.cli.commands.SessionService") as mock_service_class,
+            patch("slopometry.solo.services.session_service.SessionService") as mock_service_class,
             patch.object(Path, "home", return_value=tmp_path),
             patch("slopometry.solo.cli.commands._find_session_todos", return_value=[]),
         ):
@@ -200,7 +200,7 @@ class TestSaveTranscript:
         )
 
         with (
-            patch("slopometry.solo.cli.commands.SessionService") as mock_service_class,
+            patch("slopometry.solo.services.session_service.SessionService") as mock_service_class,
             patch.object(Path, "home", return_value=tmp_path),
             patch("slopometry.solo.cli.commands._find_plan_names_from_transcript", return_value=[]),
         ):
@@ -236,7 +236,7 @@ class TestSaveTranscript:
         )
 
         with (
-            patch("slopometry.solo.cli.commands.SessionService") as mock_service_class,
+            patch("slopometry.solo.services.session_service.SessionService") as mock_service_class,
             patch.object(Path, "home", return_value=tmp_path),
             patch("slopometry.solo.cli.commands._find_session_todos", return_value=[]),
         ):
@@ -257,7 +257,7 @@ class TestSaveTranscript:
         """Test error handling when session doesn't exist."""
         session_id = "non-existent"
 
-        with patch("slopometry.solo.cli.commands.SessionService") as mock_service_class:
+        with patch("slopometry.solo.services.session_service.SessionService") as mock_service_class:
             mock_service = Mock()
             mock_service_class.return_value = mock_service
             mock_service.get_session_statistics.return_value = None
@@ -278,7 +278,7 @@ class TestSaveTranscript:
             transcript_path=None,
         )
 
-        with patch("slopometry.solo.cli.commands.SessionService") as mock_service_class:
+        with patch("slopometry.solo.services.session_service.SessionService") as mock_service_class:
             mock_service = Mock()
             mock_service_class.return_value = mock_service
             mock_service.get_session_statistics.return_value = mock_stats
@@ -305,7 +305,7 @@ class TestSaveTranscript:
         )
 
         with (
-            patch("slopometry.solo.cli.commands.SessionService") as mock_service_class,
+            patch("slopometry.solo.services.session_service.SessionService") as mock_service_class,
             patch("slopometry.solo.cli.commands._find_plan_names_from_transcript", return_value=[]),
             patch("slopometry.solo.cli.commands._find_session_todos", return_value=[]),
         ):
@@ -338,7 +338,7 @@ class TestSaveTranscript:
         )
 
         with (
-            patch("slopometry.solo.cli.commands.SessionService") as mock_service_class,
+            patch("slopometry.solo.services.session_service.SessionService") as mock_service_class,
             patch("slopometry.solo.cli.commands._find_plan_names_from_transcript", return_value=[]),
             patch("slopometry.solo.cli.commands._find_session_todos", return_value=[]),
         ):
@@ -356,7 +356,7 @@ class TestSaveTranscript:
 
     def test_save_transcript__shows_error_when_no_sessions_exist(self):
         """Test error handling when no sessions exist at all."""
-        with patch("slopometry.solo.cli.commands.SessionService") as mock_service_class:
+        with patch("slopometry.solo.services.session_service.SessionService") as mock_service_class:
             mock_service = Mock()
             mock_service_class.return_value = mock_service
             mock_service.get_most_recent_session.return_value = None
@@ -381,7 +381,7 @@ class TestSaveTranscript:
             total_events=42,
         )
 
-        with patch("slopometry.solo.cli.commands.SessionService") as mock_service_class:
+        with patch("slopometry.solo.services.session_service.SessionService") as mock_service_class:
             mock_service = Mock()
             mock_service_class.return_value = mock_service
             mock_service.get_most_recent_session.return_value = session_id
