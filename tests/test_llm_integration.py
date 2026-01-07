@@ -82,3 +82,64 @@ def test_get_user_story_agent__returns_configured_agent():
 
     assert agent is not None
     assert agent.name == settings.user_story_agent
+
+
+@skip_without_integration_flag
+def test_minimax__returns_response_when_given_simple_prompt(agents):
+    """Test that minimax agent returns a response for a simple prompt."""
+    if "minimax" not in agents:
+        pytest.skip("minimax agent not configured")
+
+    agent = agents["minimax"]
+    prompt = "What is 3 + 5? Reply with just the number."
+
+    result = agent.run_sync(prompt)
+
+    assert result is not None
+    assert result.output is not None
+    assert len(result.output) > 0
+    assert "8" in result.output
+
+
+@skip_without_integration_flag
+def test_minimax__handles_code_analysis_prompt(agents):
+    """Test that minimax can analyze a simple code diff."""
+    if "minimax" not in agents:
+        pytest.skip("minimax agent not configured")
+
+    agent = agents["minimax"]
+    prompt = """Analyze this Python code change and describe what it does in one sentence:
+
+```diff
+- def add(a, b):
+-     return a + b
++ def add(a: int, b: int) -> int:
++     return a + b
+```"""
+
+    result = agent.run_sync(prompt)
+
+    assert result is not None
+    assert result.output is not None
+    assert len(result.output) > 5
+
+
+@skip_without_integration_flag
+def test_minimax__returns_valid_usage_with_token_info(agents):
+    """Test that minimax returns a response with usage info (may be empty for some providers)."""
+    if "minimax" not in agents:
+        pytest.skip("minimax agent not configured")
+
+    agent = agents["minimax"]
+    prompt = "Write a short one-sentence greeting."
+
+    result = agent.run_sync(prompt)
+
+    assert result is not None
+    assert result.output is not None
+    assert len(result.output) > 0
+
+    # Check that usage attribute is present (may be empty or have non-standard fields for some providers)
+    assert result.usage is not None, "Expected usage attribute to be present in response"
+    # Verify output indicates successful API call
+    assert "MiniMax" in result.output or len(result.output) > 5

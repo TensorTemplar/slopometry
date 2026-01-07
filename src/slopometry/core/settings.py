@@ -6,7 +6,7 @@ import warnings
 from pathlib import Path
 
 from dotenv import dotenv_values
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -91,6 +91,10 @@ class Settings(BaseSettings):
     llm_proxy_url: str = ""
     llm_proxy_api_key: str = ""
     llm_responses_url: str = ""
+    anthropic_url: str = Field(
+        default="", description="Base URL for Anthropic-compatible API endpoint (e.g. sglang MiniMax endpoint)"
+    )
+    anthropic_api_key: SecretStr = Field(default=SecretStr(""), description="API key for Anthropic-compatible provider")
     interactive_rating_enabled: bool = False
 
     hf_token: str = ""
@@ -103,7 +107,7 @@ class Settings(BaseSettings):
 
     user_story_agent: str = Field(
         default="gpt_oss_120b",
-        description="Agent to use for user story generation. Options: gpt_oss_120b, gemini",
+        description="Agent to use for user story generation. Options: gpt_oss_120b, gemini, minimax",
     )
 
     enable_working_at_microsoft: bool = Field(

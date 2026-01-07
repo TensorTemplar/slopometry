@@ -1644,8 +1644,8 @@ class EventDatabase:
     def save_leaderboard_entry(self, entry: LeaderboardEntry) -> None:
         """Save or update a leaderboard entry.
 
-        Uses UPSERT semantics - if an entry for this project/commit exists,
-        it will be updated with the new values.
+        Uses UPSERT semantics - if an entry for this project_path exists,
+        it will be updated with the new values (including new commit info).
         """
         with self._get_db_connection() as conn:
             conn.execute(
@@ -1655,8 +1655,10 @@ class EventDatabase:
                     measured_at, qpe_score, mi_normalized, smell_penalty,
                     adjusted_quality, effort_factor, total_effort, metrics_json
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(project_path, commit_sha_full) DO UPDATE SET
+                ON CONFLICT(project_path) DO UPDATE SET
                     project_name = excluded.project_name,
+                    commit_sha_short = excluded.commit_sha_short,
+                    commit_sha_full = excluded.commit_sha_full,
                     measured_at = excluded.measured_at,
                     qpe_score = excluded.qpe_score,
                     mi_normalized = excluded.mi_normalized,

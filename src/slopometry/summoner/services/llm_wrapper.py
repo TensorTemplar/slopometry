@@ -5,7 +5,9 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 from pydantic_ai import Agent
+from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel, OpenAIResponsesModelSettings
+from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 
 from slopometry.core.models import FeatureBoundary, MergeCommit
@@ -22,16 +24,19 @@ class OfflineModeError(Exception):
         )
 
 
-def _create_providers() -> tuple[OpenAIProvider, OpenAIProvider]:
+def _create_providers() -> tuple[OpenAIProvider, OpenAIProvider, AnthropicProvider]:
     """Create LLM providers. Only called when offline_mode is disabled."""
     llm_gateway = OpenAIProvider(base_url=settings.llm_proxy_url, api_key=settings.llm_proxy_api_key)
     responses_api_gateway = OpenAIProvider(base_url=settings.llm_responses_url, api_key=settings.llm_proxy_api_key)
-    return llm_gateway, responses_api_gateway
+    anthropic_gateway = AnthropicProvider(
+        base_url=settings.anthropic_url, api_key=settings.anthropic_api_key.get_secret_value()
+    )
+    return llm_gateway, responses_api_gateway, anthropic_gateway
 
 
 def _create_agents() -> dict[str, Agent]:
     """Create all available agents. Only called when offline_mode is disabled."""
-    llm_gateway, responses_api_gateway = _create_providers()
+    llm_gateway, responses_api_gateway, anthropic_gateway = _create_providers()
 
     return {
         "gpt_oss_120b": Agent(
@@ -49,6 +54,12 @@ def _create_agents() -> dict[str, Agent]:
         "gemini": Agent(
             name="gemini",
             model=OpenAIChatModel(model_name="gemini-3-pro-preview", provider=llm_gateway),
+        ),
+        "minimax": Agent(
+            name="minimax",
+            model=AnthropicModel("minimax:MiniMax-M1.1", provider=anthropic_gateway),
+            retries=2,
+            end_strategy="exhaustive",
         ),
     }
 

@@ -1,21 +1,20 @@
-"""Test user story export functionality."""
+"""Test database functionality."""
 
 import tempfile
+from datetime import datetime
 from pathlib import Path
 
 from slopometry.core.database import EventDatabase
-from slopometry.core.models import UserStoryEntry
+from slopometry.core.models import LeaderboardEntry, UserStoryEntry
 
 
 def test_user_story_export_functionality():
     """Test exporting user stories with existing or minimal test data."""
     db = EventDatabase()
 
-    # Check if we have existing user story entries
     stats = db.get_user_story_stats()
 
     if stats["total_entries"] == 0:
-        # Create a minimal test entry if none exist
         test_entry = UserStoryEntry(
             base_commit="test-base",
             head_commit="test-head",
@@ -29,26 +28,21 @@ def test_user_story_export_functionality():
         )
         db.save_user_story_entry(test_entry)
 
-    # Test export functionality
     with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp:
         output_path = Path(tmp.name)
 
     try:
-        # Export the user stories
         count = db.export_user_stories(output_path)
 
-        # Verify export worked
         assert count >= 1, f"Expected at least 1 entry, got {count}"
         assert output_path.exists(), "Export file was not created"
         assert output_path.stat().st_size > 0, "Export file is empty"
 
-        # Verify we can read it back with pandas if available
         try:
             import pandas as pd
 
             df = pd.read_parquet(output_path)
 
-            # Check structure
             expected_columns = [
                 "id",
                 "created_at",
@@ -63,16 +57,12 @@ def test_user_story_export_functionality():
                 "repository_path",
             ]
             assert all(col in df.columns for col in expected_columns)
-
-            # Check we have data
             assert len(df) >= 1
 
         except ImportError:
-            # If pandas not available, just check file exists
             pass
 
     finally:
-        # Cleanup
         if output_path.exists():
             output_path.unlink()
 
@@ -81,7 +71,6 @@ def test_user_story_stats():
     """Test user story statistics calculation."""
     db = EventDatabase()
 
-    # Get stats (should have entries from previous test or real usage)
     stats = db.get_user_story_stats()
 
     assert stats["total_entries"] >= 0
@@ -92,19 +81,69 @@ def test_user_story_stats():
 
 
 def test_user_story_generation_cli_integration():
-    """Test that the CLI command for generating user story entries works."""
+    """Test that the CLI command for generating user story entries works.
+
+    Note: Does not run the actual command as it requires LLM access.
+    """
     from click.testing import CliRunner
 
     from slopometry.cli import cli
 
     runner = CliRunner()
 
-    # Test the userstorify command help (now under summoner subcommand)
     result = runner.invoke(cli, ["summoner", "userstorify", "--help"])
     assert result.exit_code == 0
     assert "Generate user stories from commits using configured AI agents" in result.output
     assert "--base-commit" in result.output
     assert "--head-commit" in result.output
 
-    # Note: We don't run the actual command here as it requires LLM access
-    # and would be slow/expensive. The command is tested manually.
+
+def test_leaderboard_upsert__updates_existing_project_on_new_commit():
+    """Test that saving a leaderboard entry with same project_path but different commit updates the entry."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db = EventDatabase(db_path=Path(tmp_dir) / "test.db")
+
+        project_path = "/test/project"
+        entry_v1 = LeaderboardEntry(
+            project_name="test-project",
+            project_path=project_path,
+            commit_sha_short="abc1234",
+            commit_sha_full="abc1234567890",
+            measured_at=datetime(2023, 1, 1),
+            qpe_score=0.5,
+            mi_normalized=0.6,
+            smell_penalty=0.1,
+            adjusted_quality=0.7,
+            effort_factor=1.2,
+            total_effort=1000.0,
+            metrics_json="{}",
+        )
+        db.save_leaderboard_entry(entry_v1)
+
+        leaderboard = db.get_leaderboard()
+        assert len(leaderboard) == 1
+        assert leaderboard[0].commit_sha_short == "abc1234"
+        assert leaderboard[0].qpe_score == 0.5
+
+        entry_v2 = LeaderboardEntry(
+            project_name="test-project",
+            project_path=project_path,
+            commit_sha_short="def5678",
+            commit_sha_full="def5678901234",
+            measured_at=datetime(2024, 6, 1),
+            qpe_score=0.8,
+            mi_normalized=0.7,
+            smell_penalty=0.05,
+            adjusted_quality=0.85,
+            effort_factor=1.1,
+            total_effort=1200.0,
+            metrics_json='{"updated": true}',
+        )
+        db.save_leaderboard_entry(entry_v2)
+
+        leaderboard = db.get_leaderboard()
+        assert len(leaderboard) == 1, "Should update existing entry, not create duplicate"
+        assert leaderboard[0].commit_sha_short == "def5678"
+        assert leaderboard[0].commit_sha_full == "def5678901234"
+        assert leaderboard[0].qpe_score == 0.8
+        assert leaderboard[0].measured_at == datetime(2024, 6, 1)

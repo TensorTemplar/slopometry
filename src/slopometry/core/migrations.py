@@ -215,7 +215,6 @@ class Migration006AddQPEColumns(Migration):
 
     def up(self, conn: sqlite3.Connection) -> None:
         """Add QPE columns to experiment_progress table."""
-        # Check if table exists first
         cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='experiment_progress'")
         if not cursor.fetchone():
             return  # Table doesn't exist yet, skip migration
@@ -233,7 +232,6 @@ class Migration006AddQPEColumns(Migration):
                 if "duplicate column name" not in str(e).lower():
                     raise
 
-        # Add index for QPE score queries
         conn.execute("CREATE INDEX IF NOT EXISTS idx_progress_qpe ON experiment_progress(experiment_id, qpe_score)")
 
 
@@ -269,10 +267,68 @@ class Migration007AddQPELeaderboard(Migration):
             )
         """)
 
-        # Index for ranking queries
         conn.execute("CREATE INDEX IF NOT EXISTS idx_leaderboard_qpe ON qpe_leaderboard(qpe_score DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_leaderboard_project ON qpe_leaderboard(project_path, measured_at)")
 
-        # Index for project history queries
+
+class Migration008FixLeaderboardUniqueConstraint(Migration):
+    """Fix leaderboard unique constraint to allow updating entries when commit changes.
+
+    The original constraint UNIQUE(project_path, commit_sha_full) prevented updates
+    when a project's commit changed (e.g., after git pull). This migration changes
+    the constraint to just UNIQUE(project_path) so --append refreshes existing entries.
+    """
+
+    @property
+    def version(self) -> str:
+        return "008"
+
+    @property
+    def description(self) -> str:
+        return "Fix qpe_leaderboard unique constraint to project_path only"
+
+    def up(self, conn: sqlite3.Connection) -> None:
+        """Recreate qpe_leaderboard with corrected unique constraint."""
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='qpe_leaderboard'")
+        if not cursor.fetchone():
+            return
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS qpe_leaderboard_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_name TEXT NOT NULL,
+                project_path TEXT NOT NULL UNIQUE,
+                commit_sha_short TEXT NOT NULL,
+                commit_sha_full TEXT NOT NULL,
+                measured_at TEXT NOT NULL,
+                qpe_score REAL NOT NULL,
+                mi_normalized REAL NOT NULL,
+                smell_penalty REAL NOT NULL,
+                adjusted_quality REAL NOT NULL,
+                effort_factor REAL NOT NULL,
+                total_effort REAL NOT NULL,
+                metrics_json TEXT NOT NULL
+            )
+        """)
+
+        conn.execute("""
+            INSERT OR REPLACE INTO qpe_leaderboard_new (
+                project_name, project_path, commit_sha_short, commit_sha_full,
+                measured_at, qpe_score, mi_normalized, smell_penalty,
+                adjusted_quality, effort_factor, total_effort, metrics_json
+            )
+            SELECT project_name, project_path, commit_sha_short, commit_sha_full,
+                   measured_at, qpe_score, mi_normalized, smell_penalty,
+                   adjusted_quality, effort_factor, total_effort, metrics_json
+            FROM qpe_leaderboard
+            GROUP BY project_path
+            HAVING measured_at = MAX(measured_at)
+        """)
+
+        conn.execute("DROP TABLE qpe_leaderboard")
+        conn.execute("ALTER TABLE qpe_leaderboard_new RENAME TO qpe_leaderboard")
+
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_leaderboard_qpe ON qpe_leaderboard(qpe_score DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_leaderboard_project ON qpe_leaderboard(project_path, measured_at)")
 
 
@@ -289,6 +345,7 @@ class MigrationRunner:
             Migration005AddGalenRateColumns(),
             Migration006AddQPEColumns(),
             Migration007AddQPELeaderboard(),
+            Migration008FixLeaderboardUniqueConstraint(),
         ]
 
     @contextmanager
