@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "slopometry"
-version = "20260107-1"
+version = "20260108-1"
 description = "Opinionated code quality metrics for code agents and humans"
 readme = "README.md"
 requires-python = ">=3.13"
