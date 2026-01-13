@@ -55,7 +55,8 @@ def install(global_: bool) -> None:
     success, message = hook_service.install_hooks(global_)
 
     if success:
-        console.print(f"[green]{message}[/green]")
+        for line in message.split("\n"):
+            console.print(f"[green]{line}[/green]")
         console.print("[cyan]All Claude Code sessions will now be automatically tracked[/cyan]")
         console.print(f"[dim]Config: {get_default_config_dir()}[/dim]")
         console.print(f"[dim]Data:   {get_default_data_dir()}[/dim]")

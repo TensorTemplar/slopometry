@@ -21,7 +21,6 @@ def test_install_hooks__writes_local_configuration(tmp_path, monkeypatch):
     assert "hooks" in data
     assert "PreToolUse" in data["hooks"]
 
-    # Check content of a hook
     matching_hook = False
     for item in data["hooks"]["PreToolUse"]:
         for h in item.get("hooks", []):
@@ -35,7 +34,6 @@ def test_install_hooks__is_idempotent_and_preserves_other_hooks(tmp_path, monkey
     monkeypatch.chdir(tmp_path)
     service = HookService()
 
-    # Pre-populate with another hook
     settings_dir = tmp_path / ".claude"
     settings_dir.mkdir()
     settings_file = settings_dir / "settings.json"
@@ -44,13 +42,11 @@ def test_install_hooks__is_idempotent_and_preserves_other_hooks(tmp_path, monkey
     with open(settings_file, "w") as f:
         json.dump(initial_data, f)
 
-    # Install
     service.install_hooks(global_=False)
 
     with open(settings_file) as f:
         data = json.load(f)
 
-    # Should have both
     commands = []
     for item in data["hooks"]["PreToolUse"]:
         for h in item.get("hooks", []):
@@ -65,19 +61,88 @@ def test_uninstall_hooks__removes_slopometry_hooks_only(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     service = HookService()
 
-    # Install first
     service.install_hooks(global_=False)
-
-    # Uninstall
     success, msg = service.uninstall_hooks(global_=False)
     assert success
 
     with open(tmp_path / ".claude" / "settings.json") as f:
         data = json.load(f)
 
-    # Should be empty or no slopometry hooks
     if "hooks" in data:
         for hook_type, configs in data["hooks"].items():
             for config in configs:
                 for h in config.get("hooks", []):
                     assert "slopometry hook-" not in h.get("command", "")
+
+
+def test_update_gitignore__creates_new_file_when_missing(tmp_path, monkeypatch):
+    """Creates .gitignore with slopometry entry when file doesn't exist."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".git").mkdir()
+
+    service = HookService()
+    updated, message = service._update_gitignore(tmp_path)
+
+    assert updated is True
+    assert ".slopometry/" in message
+
+    gitignore = (tmp_path / ".gitignore").read_text()
+    assert ".slopometry/" in gitignore
+    assert "# slopometry" in gitignore
+
+
+def test_update_gitignore__appends_to_existing_file(tmp_path, monkeypatch):
+    """Appends to existing .gitignore without duplicating."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".gitignore").write_text("*.pyc\n__pycache__/\n")
+
+    service = HookService()
+    updated, message = service._update_gitignore(tmp_path)
+
+    assert updated is True
+    gitignore = (tmp_path / ".gitignore").read_text()
+    assert "*.pyc" in gitignore
+    assert ".slopometry/" in gitignore
+
+
+def test_update_gitignore__skips_if_already_present(tmp_path, monkeypatch):
+    """Does not add duplicate entry if already present."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".git").mkdir()
+    (tmp_path / ".gitignore").write_text(".slopometry/\n")
+
+    service = HookService()
+    updated, message = service._update_gitignore(tmp_path)
+
+    assert updated is False
+    assert message is None
+
+    gitignore = (tmp_path / ".gitignore").read_text()
+    assert gitignore.count(".slopometry/") == 1
+
+
+def test_update_gitignore__skips_non_git_directory(tmp_path, monkeypatch):
+    """Does not create .gitignore in non-git directories."""
+    monkeypatch.chdir(tmp_path)
+
+    service = HookService()
+    updated, message = service._update_gitignore(tmp_path)
+
+    assert updated is False
+    assert message is None
+    assert not (tmp_path / ".gitignore").exists()
+
+
+def test_install_hooks__updates_gitignore_for_local_install(tmp_path, monkeypatch):
+    """Local install should update .gitignore if in git repo."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".git").mkdir()
+
+    service = HookService()
+    success, message = service.install_hooks(global_=False)
+
+    assert success is True
+    assert ".slopometry/" in message
+    assert (tmp_path / ".gitignore").exists()
+    assert ".slopometry/" in (tmp_path / ".gitignore").read_text()

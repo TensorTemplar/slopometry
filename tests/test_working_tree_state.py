@@ -1,3 +1,4 @@
+import subprocess
 import tempfile
 import time
 from pathlib import Path
@@ -6,11 +7,35 @@ from unittest.mock import patch
 from slopometry.core.working_tree_state import WorkingTreeStateCalculator
 
 
+def _init_git_repo(path: Path) -> None:
+    """Initialize a git repo with config.
+
+    All git config is scoped to the repo (--local) to avoid mutating user environment.
+    """
+    subprocess.run(["git", "init"], cwd=path, capture_output=True, check=True)
+    # Use --local to ensure config is scoped to this repo only
+    # Use example.com (RFC 2606 reserved domain for testing)
+    subprocess.run(
+        ["git", "config", "--local", "user.email", "test@example.com"], cwd=path, capture_output=True, check=True
+    )
+    subprocess.run(["git", "config", "--local", "user.name", "Test User"], cwd=path, capture_output=True, check=True)
+    # Disable GPG signing for tests (local scope)
+    subprocess.run(["git", "config", "--local", "commit.gpgsign", "false"], cwd=path, capture_output=True, check=True)
+
+
+def _commit_all(path: Path, message: str = "commit") -> None:
+    """Add all files and commit."""
+    subprocess.run(["git", "add", "."], cwd=path, capture_output=True)
+    subprocess.run(["git", "commit", "-m", message], cwd=path, capture_output=True)
+
+
 def test_calculate_working_tree_hash__generates_consistent_hash():
-    """Test working tree hash consistency."""
+    """Test working tree hash consistency when no files are modified."""
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_path = Path(temp_dir)
+        _init_git_repo(temp_path)
         (temp_path / "test.py").write_text("content")
+        _commit_all(temp_path)
 
         calculator = WorkingTreeStateCalculator(temp_dir)
         hash1 = calculator.calculate_working_tree_hash("commit1")
@@ -21,22 +46,70 @@ def test_calculate_working_tree_hash__generates_consistent_hash():
         assert len(hash1) == 16
 
 
-def test_calculate_working_tree_hash__changes_on_modification():
-    """Test hash changes when file modifies."""
+def test_calculate_working_tree_hash__changes_on_content_modification():
+    """Test hash changes when file content changes (not just mtime)."""
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_path = Path(temp_dir)
+        _init_git_repo(temp_path)
         f = temp_path / "test.py"
         f.write_text("content 1")
+        _commit_all(temp_path)
+
+        # Modify file content (this will show in git diff)
+        f.write_text("content 2")
 
         calculator = WorkingTreeStateCalculator(temp_dir)
         hash1 = calculator.calculate_working_tree_hash("commit1")
 
-        # Force mtime update (some filesystems are fast)
-        time.sleep(0.01)
-        f.write_text("content 2")
+        # Change content again
+        f.write_text("content 3")
 
         hash2 = calculator.calculate_working_tree_hash("commit1")
-        assert hash1 != hash2
+        assert hash1 != hash2, "Different content should produce different hash"
+
+
+def test_calculate_working_tree_hash__stable_when_no_changes():
+    """Test hash is stable when there are no uncommitted changes."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+        _init_git_repo(temp_path)
+        f = temp_path / "test.py"
+        f.write_text("content")
+        _commit_all(temp_path)
+
+        calculator = WorkingTreeStateCalculator(temp_dir)
+
+        # Multiple calls with no changes
+        hash1 = calculator.calculate_working_tree_hash("commit1")
+        hash2 = calculator.calculate_working_tree_hash("commit1")
+        hash3 = calculator.calculate_working_tree_hash("commit1")
+
+        assert hash1 == hash2 == hash3, "Hash should be stable with no changes"
+
+
+def test_calculate_working_tree_hash__mtime_only_change_same_hash():
+    """Test that mtime-only changes (same content) produce the same hash.
+
+    This verifies content-based hashing instead of mtime-based hashing.
+    """
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+        _init_git_repo(temp_path)
+        f = temp_path / "test.py"
+        f.write_text("content")
+        _commit_all(temp_path)
+
+        # Modify file to get it tracked, then revert
+        f.write_text("modified")
+        calculator = WorkingTreeStateCalculator(temp_dir)
+        hash1 = calculator.calculate_working_tree_hash("commit1")
+
+        # Write same content (different mtime)
+        time.sleep(0.01)
+        f.write_text("modified")  # Same content
+
+        hash2 = calculator.calculate_working_tree_hash("commit1")
+        assert hash1 == hash2, "Same content should produce same hash (content-based)"
 
 
 def test_get_python_files__excludes_ignored_directories():

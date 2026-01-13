@@ -277,6 +277,13 @@ def _get_feedback_cache_path(working_directory: str) -> Path:
 def _compute_feedback_cache_key(working_directory: str, edited_files: set[str], feedback_hash: str) -> str:
     """Compute a cache key for the current state.
 
+    Uses language-aware change detection to avoid cache invalidation from
+    non-source file changes (like uv.lock, submodules, build artifacts, etc.).
+
+    The languages parameter defaults to None (all supported languages).
+    Currently only Python is supported; future languages will be auto-detected
+    via LanguageDetector when added to the registry.
+
     Args:
         working_directory: Path to the working directory
         edited_files: Set of edited file paths
@@ -288,14 +295,20 @@ def _compute_feedback_cache_key(working_directory: str, edited_files: set[str], 
     tracker = GitTracker(Path(working_directory))
     git_state = tracker.get_git_state()
     commit_sha = git_state.commit_sha or "unknown"
-    wt_calculator = WorkingTreeStateCalculator(working_directory)
-    working_tree_hash = (
-        wt_calculator.calculate_working_tree_hash(commit_sha) if git_state.has_uncommitted_changes else "clean"
-    )
-    files_key = ",".join(sorted(edited_files))
 
+    # Use all supported languages (currently Python only)
+    # Future: could use LanguageDetector to auto-detect project languages
+    wt_calculator = WorkingTreeStateCalculator(working_directory, languages=None)
+
+    # Only compute working tree hash if there are source file changes
+    # (not just any file like uv.lock, submodules, or build artifacts)
+    has_source_changes = bool(wt_calculator._get_modified_source_files_from_git())
+    working_tree_hash = wt_calculator.calculate_working_tree_hash(commit_sha) if has_source_changes else "clean"
+
+    files_key = ",".join(sorted(edited_files))
     key_parts = f"{commit_sha}:{working_tree_hash}:{files_key}:{feedback_hash}"
-    return hashlib.sha256(key_parts.encode()).hexdigest()[:16]
+    # Use blake2b for arm64/amd64 performance
+    return hashlib.blake2b(key_parts.encode(), digest_size=8).hexdigest()
 
 
 def _is_feedback_cached(working_directory: str, cache_key: str) -> bool:
@@ -386,12 +399,17 @@ def handle_stop_event(session_id: str, parsed_input: "StopInput | SubagentStopIn
 
     if feedback_parts:
         feedback = "\n\n".join(feedback_parts)
+
+        # Hash feedback content BEFORE adding session-specific metadata
+        # This ensures cache hits work across different sessions with same feedback
+        # Use blake2b for arm64/amd64 performance
+        feedback_hash = hashlib.blake2b(feedback.encode(), digest_size=8).hexdigest()
+
         feedback += (
             f"\n\n---\n**Session**: `{session_id}` | Details: `slopometry solo show {session_id} --smell-details`"
         )
 
         # Check cache - skip if same feedback was already shown for this state
-        feedback_hash = hashlib.sha256(feedback.encode()).hexdigest()[:16]
         cache_key = _compute_feedback_cache_key(stats.working_directory, edited_files, feedback_hash)
 
         if _is_feedback_cached(stats.working_directory, cache_key):
