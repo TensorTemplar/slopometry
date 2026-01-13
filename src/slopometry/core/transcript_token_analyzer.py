@@ -1,10 +1,47 @@
 """Transcript token analyzer for extracting and categorizing token usage."""
 
 import json
+import logging
 from pathlib import Path
+from typing import Any
+
+from pydantic import BaseModel, Field
 
 from slopometry.core.models import TokenUsage, ToolType
 from slopometry.core.plan_analyzer import PlanAnalyzer
+
+logger = logging.getLogger(__name__)
+
+
+class MessageUsage(BaseModel):
+    """Token usage from an assistant message."""
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+
+class AssistantMessage(BaseModel):
+    """Assistant message with usage and content."""
+
+    usage: MessageUsage = Field(default_factory=MessageUsage)
+    content: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ToolUseResult(BaseModel):
+    """Result from a tool use (subagent tokens)."""
+
+    totalTokens: int = 0  # camelCase matches transcript format
+
+
+class TranscriptEvent(BaseModel, extra="allow"):
+    """A single event from transcript.jsonl.
+
+    Uses extra="allow" to tolerate additional fields from Claude Code.
+    """
+
+    type: str | None = None
+    message: AssistantMessage | None = None
+    toolUseResult: ToolUseResult | None = None  # camelCase matches transcript
 
 
 class TranscriptTokenAnalyzer:
@@ -30,51 +67,51 @@ class TranscriptTokenAnalyzer:
             with open(transcript_path, encoding="utf-8") as f:
                 for line in f:
                     try:
-                        event = json.loads(line)
-                    except json.JSONDecodeError:
+                        raw_event = json.loads(line)
+                        event = TranscriptEvent.model_validate(raw_event)
+                    except (json.JSONDecodeError, Exception):
                         continue
 
                     self._process_event(event, usage)
 
-        except (OSError, json.JSONDecodeError):
-            pass
+        except OSError as e:
+            logger.warning(f"Failed to read transcript file {transcript_path}: {e}")
 
         return usage
 
-    def _process_event(self, event: dict, usage: TokenUsage) -> None:
+    def _process_event(self, event: TranscriptEvent, usage: TokenUsage) -> None:
         """Process a single transcript event and update token usage.
 
         Args:
-            event: Parsed JSON event from transcript
+            event: Parsed transcript event
             usage: TokenUsage to update
         """
-        event_type = event.get("type")
-
-        if event_type == "assistant":
+        if event.type == "assistant":
             self._process_assistant_message(event, usage)
-        elif event_type == "user":
+        elif event.type == "user":
             self._process_tool_result(event, usage)
 
-    def _process_assistant_message(self, event: dict, usage: TokenUsage) -> None:
+    def _process_assistant_message(self, event: TranscriptEvent, usage: TokenUsage) -> None:
         """Process an assistant message to extract and categorize tokens.
 
         Args:
             event: Assistant message event
             usage: TokenUsage to update
         """
-        message = event.get("message", {})
-        msg_usage = message.get("usage", {})
-
-        if not msg_usage:
+        if not event.message:
             return
 
-        input_tokens = msg_usage.get("input_tokens", 0)
-        output_tokens = msg_usage.get("output_tokens", 0)
+        msg_usage = event.message.usage
+        if not msg_usage.input_tokens and not msg_usage.output_tokens:
+            return
+
+        input_tokens = msg_usage.input_tokens
+        output_tokens = msg_usage.output_tokens
 
         usage.total_input_tokens += input_tokens
         usage.total_output_tokens += output_tokens
 
-        content = message.get("content", [])
+        content = event.message.content
         tool_categories = self._get_tool_categories(content)
 
         if not tool_categories:
@@ -146,7 +183,7 @@ class TranscriptTokenAnalyzer:
 
         return "implementation"
 
-    def _process_tool_result(self, event: dict, usage: TokenUsage) -> None:
+    def _process_tool_result(self, event: TranscriptEvent, usage: TokenUsage) -> None:
         """Process tool result to capture subagent tokens.
 
         Subagent tokens are tracked separately in subagent_tokens field,
@@ -157,11 +194,8 @@ class TranscriptTokenAnalyzer:
             event: User message event (containing tool_result)
             usage: TokenUsage to update
         """
-        tool_use_result = event.get("toolUseResult", {})
-        if isinstance(tool_use_result, dict):
-            total_tokens = tool_use_result.get("totalTokens", 0)
-            if total_tokens:
-                usage.subagent_tokens += total_tokens
+        if event.toolUseResult and event.toolUseResult.totalTokens:
+            usage.subagent_tokens += event.toolUseResult.totalTokens
 
 
 def analyze_transcript_tokens(transcript_path: Path) -> TokenUsage:

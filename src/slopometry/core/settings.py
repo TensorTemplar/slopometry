@@ -76,6 +76,15 @@ class Settings(BaseSettings):
 
     backup_existing_settings: bool = True
 
+    gitignore_entry: str = Field(
+        default=".slopometry/",
+        description="Entry to add to .gitignore on local install",
+    )
+    gitignore_comment: str = Field(
+        default="# slopometry session cache (auto-generated)",
+        description="Comment added above gitignore entry",
+    )
+
     event_display_limit: int = 50
     recent_sessions_limit: int = 10
 
