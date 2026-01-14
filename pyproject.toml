@@ -40,6 +40,18 @@ dependencies = [
     "tiktoken>=0.7.0",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "mypy>=1.0.0",
+    "ruff>=0.0.244",
+    "isort>=5.12.0",
+    "pre-commit>=4.2.0",
+    "pytest>=8.3.5",
+    "pytest-cov>=4.1.0",
+    "types-toml>=0.10.8.20240310",
+    "pyrefly>=0.46.0",
+]
+
 [project.urls]
 Homepage = "https://github.com/TensorTemplar/slopometry"
 Repository = "https://github.com/TensorTemplar/slopometry.git"
@@ -114,15 +126,3 @@ precision = 2
 
 [tool.coverage.html]
 directory = "htmlcov"
-
-[dependency-groups]
-dev = [
-    "mypy>=1.0.0",
-    "ruff>=0.0.244",
-    "isort>=5.12.0",
-    "pre-commit>=4.2.0",
-    "pytest>=8.3.5",
-    "pytest-cov>=4.1.0",
-    "types-toml>=0.10.8.20240310",
-    "pyrefly>=0.45.2",
-]

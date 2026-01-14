@@ -5,10 +5,10 @@ from datetime import datetime
 from pathlib import Path
 
 from slopometry.core.database import EventDatabase
-from slopometry.core.models import LeaderboardEntry, UserStoryEntry
+from slopometry.core.models import HookEvent, HookEventType, LeaderboardEntry, ToolType, UserStoryEntry
 
 
-def test_user_story_export_functionality():
+def test_user_story_export_functionality() -> None:
     """Test exporting user stories with existing or minimal test data."""
     db = EventDatabase()
 
@@ -67,7 +67,7 @@ def test_user_story_export_functionality():
             output_path.unlink()
 
 
-def test_user_story_stats():
+def test_user_story_stats() -> None:
     """Test user story statistics calculation."""
     db = EventDatabase()
 
@@ -80,7 +80,7 @@ def test_user_story_stats():
     assert "rating_distribution" in stats
 
 
-def test_user_story_generation_cli_integration():
+def test_user_story_generation_cli_integration() -> None:
     """Test that the CLI command for generating user story entries works.
 
     Note: Does not run the actual command as it requires LLM access.
@@ -98,7 +98,7 @@ def test_user_story_generation_cli_integration():
     assert "--head-commit" in result.output
 
 
-def test_leaderboard_upsert__updates_existing_project_on_new_commit():
+def test_leaderboard_upsert__updates_existing_project_on_new_commit() -> None:
     """Test that saving a leaderboard entry with same project_path but different commit updates the entry."""
     with tempfile.TemporaryDirectory() as tmp_dir:
         db = EventDatabase(db_path=Path(tmp_dir) / "test.db")
@@ -147,3 +147,97 @@ def test_leaderboard_upsert__updates_existing_project_on_new_commit():
         assert leaderboard[0].commit_sha_full == "def5678901234"
         assert leaderboard[0].qpe_score == 0.8
         assert leaderboard[0].measured_at == datetime(2024, 6, 1)
+
+
+def test_list_sessions_by_repository__filters_correctly() -> None:
+    """Sessions should be filtered by working directory."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db = EventDatabase(db_path=Path(tmp_dir) / "test.db")
+
+        # Session 1 - in repo A
+        db.save_event(
+            HookEvent(
+                session_id="session-repo-a",
+                event_type=HookEventType.PRE_TOOL_USE,
+                sequence_number=1,
+                working_directory="/path/to/repo-a",
+                tool_name="Read",
+                tool_type=ToolType.READ,
+            )
+        )
+
+        # Session 2 - in repo B
+        db.save_event(
+            HookEvent(
+                session_id="session-repo-b",
+                event_type=HookEventType.PRE_TOOL_USE,
+                sequence_number=1,
+                working_directory="/path/to/repo-b",
+                tool_name="Read",
+                tool_type=ToolType.READ,
+            )
+        )
+
+        # Session 3 - also in repo A
+        db.save_event(
+            HookEvent(
+                session_id="session-repo-a-2",
+                event_type=HookEventType.PRE_TOOL_USE,
+                sequence_number=1,
+                working_directory="/path/to/repo-a",
+                tool_name="Write",
+                tool_type=ToolType.WRITE,
+            )
+        )
+
+        sessions = db.list_sessions_by_repository(Path("/path/to/repo-a"))
+
+        assert len(sessions) == 2
+        assert "session-repo-a" in sessions
+        assert "session-repo-a-2" in sessions
+        assert "session-repo-b" not in sessions
+
+
+def test_list_sessions_by_repository__returns_empty_for_unknown_repo() -> None:
+    """Unknown repository should return empty list."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db = EventDatabase(db_path=Path(tmp_dir) / "test.db")
+
+        # Create a session in a known repo
+        db.save_event(
+            HookEvent(
+                session_id="session-known",
+                event_type=HookEventType.PRE_TOOL_USE,
+                sequence_number=1,
+                working_directory="/path/to/known-repo",
+                tool_name="Read",
+                tool_type=ToolType.READ,
+            )
+        )
+
+        sessions = db.list_sessions_by_repository(Path("/path/to/unknown"))
+
+        assert sessions == []
+
+
+def test_list_sessions_by_repository__respects_limit() -> None:
+    """Session list should respect the limit parameter."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db = EventDatabase(db_path=Path(tmp_dir) / "test.db")
+
+        # Create 3 sessions in the same repo
+        for i in range(3):
+            db.save_event(
+                HookEvent(
+                    session_id=f"session-{i}",
+                    event_type=HookEventType.PRE_TOOL_USE,
+                    sequence_number=1,
+                    working_directory="/path/to/repo",
+                    tool_name="Read",
+                    tool_type=ToolType.READ,
+                )
+            )
+
+        sessions = db.list_sessions_by_repository(Path("/path/to/repo"), limit=2)
+
+        assert len(sessions) == 2

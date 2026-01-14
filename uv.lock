@@ -2855,7 +2855,7 @@ dependencies = [
     { name = "toml" },
 ]
 
-[package.dev-dependencies]
+[package.optional-dependencies]
 dev = [
     { name = "isort" },
     { name = "mypy" },
@@ -2873,29 +2873,26 @@ requires-dist = [
     { name = "coverage", specifier = ">=7.0.0" },
     { name = "datasets", specifier = ">=2.14.0" },
     { name = "huggingface-hub", specifier = ">=0.20.0" },
+    { name = "isort", marker = "extra == 'dev'", specifier = ">=5.12.0" },
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.0.0" },
     { name = "pandas", specifier = ">=2.0.0" },
+    { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=4.2.0" },
     { name = "pyarrow", specifier = ">=14.0.0" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pydantic-ai", specifier = ">=1.33.0" },
     { name = "pydantic-settings", specifier = ">=2.0" },
+    { name = "pyrefly", marker = "extra == 'dev'", specifier = ">=0.46.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3.5" },
+    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.1.0" },
     { name = "radon", specifier = ">=6.0.1" },
     { name = "rich", specifier = ">=13.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.0.244" },
     { name = "sqlite-utils", specifier = ">=3.0" },
     { name = "tiktoken", specifier = ">=0.7.0" },
     { name = "toml", specifier = ">=0.10.2" },
+    { name = "types-toml", marker = "extra == 'dev'", specifier = ">=0.10.8.20240310" },
 ]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "isort", specifier = ">=5.12.0" },
-    { name = "mypy", specifier = ">=1.0.0" },
-    { name = "pre-commit", specifier = ">=4.2.0" },
-    { name = "pyrefly", specifier = ">=0.45.2" },
-    { name = "pytest", specifier = ">=8.3.5" },
-    { name = "pytest-cov", specifier = ">=4.1.0" },
-    { name = "ruff", specifier = ">=0.0.244" },
-    { name = "types-toml", specifier = ">=0.10.8.20240310" },
-]
+provides-extras = ["dev"]
 
 [[package]]
 name = "sniffio"

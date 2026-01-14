@@ -9,7 +9,7 @@ from slopometry.core.models import ExtendedComplexityMetrics, UserStoryDisplayDa
 class TestExtendedComplexityMetrics:
     """Test the extended complexity metrics model."""
 
-    def test_model_creation_without_required_fields__raises_validation_error(self):
+    def test_model_creation_without_required_fields__raises_validation_error(self) -> None:
         """Test that ValidationError is raised when required Halstead fields are missing."""
         with pytest.raises(ValidationError) as exc_info:
             ExtendedComplexityMetrics()
@@ -26,7 +26,7 @@ class TestExtendedComplexityMetrics:
         assert "total_mi" in missing_fields
         assert "average_mi" in missing_fields
 
-    def test_model_creation_with_values__creates_metrics_when_values_provided(self):
+    def test_model_creation_with_values__creates_metrics_when_values_provided(self) -> None:
         """Test creating model with specific values when values provided."""
         metrics = ExtendedComplexityMetrics(
             total_complexity=150,
@@ -53,7 +53,7 @@ class TestExtendedComplexityMetrics:
 class TestUserStoryStatistics:
     """Test the user story statistics model."""
 
-    def test_model_creation_with_values__creates_statistics_when_values_provided(self):
+    def test_model_creation_with_values__creates_statistics_when_values_provided(self) -> None:
         """Test creating statistics model with specific values when values provided."""
         stats = UserStoryStatistics(
             total_entries=25,
@@ -73,7 +73,7 @@ class TestUserStoryStatistics:
 class TestUserStoryDisplayData:
     """Test the user story display data model."""
 
-    def test_model_creation__creates_display_data_when_values_provided(self):
+    def test_model_creation__creates_display_data_when_values_provided(self) -> None:
         """Test creating display data model when values provided."""
         display_data = UserStoryDisplayData(
             entry_id="abc12345",

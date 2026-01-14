@@ -294,6 +294,9 @@ class PlanEvolution(BaseModel):
     token_usage: TokenUsage | None = Field(
         default=None, description="Token usage breakdown by exploration vs implementation"
     )
+    plan_files_created: int = Field(default=0, description="Number of plan files written to ~/.claude/plans/")
+    plan_file_paths: list[str] = Field(default_factory=list, description="Paths to plan files created during session")
+    final_todos: list[TodoItem] = Field(default_factory=list, description="Final state of todos at session end")
 
 
 class SessionStatistics(BaseModel):

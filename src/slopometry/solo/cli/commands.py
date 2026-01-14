@@ -13,12 +13,21 @@ logger = logging.getLogger(__name__)
 
 
 def complete_session_id(ctx: click.Context, param: click.Parameter, incomplete: str) -> list[str]:
-    """Complete session IDs from the database."""
+    """Complete session IDs, filtered by current repository if in a git repo."""
+    from slopometry.core.git_tracker import GitTracker
     from slopometry.solo.services.session_service import SessionService
 
     try:
         session_service = SessionService()
-        sessions = session_service.list_sessions()
+        cwd = Path.cwd()
+        git_tracker = GitTracker(cwd)
+        git_state = git_tracker.get_git_state()
+
+        if git_state.is_git_repo:
+            sessions = session_service.list_sessions_by_repository(cwd)
+        else:
+            sessions = session_service.list_sessions()
+
         return [session for session in sessions if session.startswith(incomplete)]
     except Exception:
         return []
@@ -457,15 +466,6 @@ def _find_plan_names_from_transcript(transcript_path: Path) -> list[str]:
     return list(plan_names)
 
 
-def _find_session_todos(session_id: str) -> list[Path]:
-    """Find todo files matching session ID pattern in ~/.claude/todos/."""
-    todos_dir = Path.home() / ".claude" / "todos"
-    if not todos_dir.exists():
-        return []
-
-    return list(todos_dir.glob(f"{session_id}-*.json"))
-
-
 @solo.command()
 @click.argument("session_id", required=False, shell_complete=complete_session_id)
 @click.option("--output-dir", "-o", default=".", help="Directory to save the transcript to (default: current)")
@@ -483,7 +483,6 @@ def save_transcript(session_id: str | None, output_dir: str, yes: bool) -> None:
 
     session_service = SessionService()
 
-    # If no session_id provided, use the latest session
     if not session_id:
         session_id = session_service.get_most_recent_session()
         if not session_id:
@@ -495,7 +494,6 @@ def save_transcript(session_id: str | None, output_dir: str, yes: bool) -> None:
             console.print(f"[red]No data found for latest session {session_id}[/red]")
             return
 
-        # Show session info and ask for confirmation
         console.print(f"[bold]Latest session: {session_id}[/bold]")
         console.print(f"Start time: {stats.start_time.strftime('%Y-%m-%d %H:%M:%S')}")
         console.print(f"Total events: {stats.total_events}")
@@ -543,10 +541,14 @@ def save_transcript(session_id: str | None, output_dir: str, yes: bool) -> None:
                 shutil.copy2(plan_source, plans_dir / plan_name)
                 console.print(f"[green]✓[/green] Saved plan: {plan_name}")
 
-    todo_files = _find_session_todos(session_id)
-    if todo_files:
-        todos_dir = session_dir / "todos"
-        todos_dir.mkdir(exist_ok=True)
-        for todo_file in todo_files:
-            shutil.copy2(todo_file, todos_dir / todo_file.name)
-            console.print(f"[green]✓[/green] Saved todo: {todo_file.name}")
+    # Save final todos from session statistics (Claude Code empties todo files on completion)
+    if stats.plan_evolution and stats.plan_evolution.final_todos:
+        import json
+
+        todos_file = session_dir / "final_todos.json"
+        todos_data = [
+            {"content": todo.content, "status": todo.status, "activeForm": todo.activeForm}
+            for todo in stats.plan_evolution.final_todos
+        ]
+        todos_file.write_text(json.dumps(todos_data, indent=2))
+        console.print(f"[green]✓[/green] Saved {len(todos_data)} todos to: final_todos.json")

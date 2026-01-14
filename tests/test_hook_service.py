@@ -212,4 +212,8 @@ def test_uninstall_hooks__preserves_unknown_fields(tmp_path, monkeypatch):
     assert data["custom_setting"] is True
     assert "CustomHookType" in data["hooks"]
     assert data["hooks"]["CustomHookType"] == [{"hooks": [{"command": "special"}]}]
-    assert any("echo 'user hook'" in h.get("command", "") for item in data["hooks"]["PreToolUse"] for h in item.get("hooks", []))
+    assert any(
+        "echo 'user hook'" in h.get("command", "")
+        for item in data["hooks"]["PreToolUse"]
+        for h in item.get("hooks", [])
+    )
