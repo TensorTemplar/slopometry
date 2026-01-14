@@ -375,18 +375,23 @@ def handle_stop_event(session_id: str, parsed_input: "StopInput | SubagentStopIn
     current_metrics, delta = db.calculate_extended_complexity_metrics(stats.working_directory)
 
     feedback_parts: list[str] = []
+    cache_stable_parts: list[str] = []  # Only code-based feedback (stable between tool calls)
 
     # Get edited files from git (more reliable than transcript-based context coverage)
     edited_files = get_modified_python_files(stats.working_directory)
 
     # Code smells - ALWAYS check (independent of enable_complexity_feedback)
+    # This is stable (based on code state, not session activity)
     if current_metrics:
         smell_feedback, has_smells, _ = format_code_smell_feedback(
             current_metrics, delta, edited_files, session_id, stats.working_directory
         )
         if has_smells:
             feedback_parts.append(smell_feedback)
+            cache_stable_parts.append(smell_feedback)
 
+    # Context coverage - informational but NOT stable (changes with every Read/Glob/Grep)
+    # Excluded from cache hash to avoid invalidation on tool calls
     if settings.enable_complexity_feedback and stats.context_coverage and stats.context_coverage.files_edited:
         context_feedback = format_context_coverage_feedback(stats.context_coverage)
         if context_feedback:
@@ -400,10 +405,11 @@ def handle_stop_event(session_id: str, parsed_input: "StopInput | SubagentStopIn
     if feedback_parts:
         feedback = "\n\n".join(feedback_parts)
 
-        # Hash feedback content BEFORE adding session-specific metadata
-        # This ensures cache hits work across different sessions with same feedback
+        # Hash ONLY code-based feedback (smell_feedback) for cache key
+        # Context coverage changes with every tool call and would invalidate cache
         # Use blake2b for arm64/amd64 performance
-        feedback_hash = hashlib.blake2b(feedback.encode(), digest_size=8).hexdigest()
+        cache_content = "\n\n".join(cache_stable_parts) if cache_stable_parts else ""
+        feedback_hash = hashlib.blake2b(cache_content.encode(), digest_size=8).hexdigest()
 
         feedback += (
             f"\n\n---\n**Session**: `{session_id}` | Details: `slopometry solo show {session_id} --smell-details`"

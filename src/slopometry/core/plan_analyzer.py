@@ -1,5 +1,6 @@
 """Plan evolution analysis for TodoWrite events."""
 
+import re
 from datetime import datetime
 from typing import Any
 
@@ -8,6 +9,8 @@ from slopometry.core.models import PlanEvolution, PlanStep, TodoItem, ToolType
 
 class PlanAnalyzer:
     """Analyzes TodoWrite events to track plan evolution."""
+
+    PLAN_FILE_PATTERN = re.compile(r"\.claude[/\\]plans[/\\][a-zA-Z0-9_-]+\.md$")
 
     SEARCH_TOOLS = {
         ToolType.GREP,
@@ -58,6 +61,7 @@ class PlanAnalyzer:
         self.events_since_last_todo = 0
         self.search_events_since_last_todo = 0
         self.implementation_events_since_last_todo = 0
+        self.plan_file_paths: set[str] = set()
 
     def analyze_todo_write_event(self, tool_input: dict[str, Any], timestamp: datetime) -> None:
         """Analyze a TodoWrite event and track plan evolution.
@@ -87,6 +91,18 @@ class PlanAnalyzer:
         self.search_events_since_last_todo = 0
         self.implementation_events_since_last_todo = 0
 
+    def analyze_write_event(self, tool_input: dict[str, Any]) -> None:
+        """Track Write events that create plan files.
+
+        Detects writes to ~/.claude/plans/*.md and records the file paths.
+
+        Args:
+            tool_input: The tool input containing file_path
+        """
+        file_path = tool_input.get("file_path", "")
+        if self.PLAN_FILE_PATTERN.search(file_path):
+            self.plan_file_paths.add(file_path)
+
     def increment_event_count(
         self, tool_type: ToolType | None = None, tool_input: dict[str, Any] | None = None
     ) -> None:
@@ -114,8 +130,16 @@ class PlanAnalyzer:
         Returns:
             PlanEvolution with aggregated statistics
         """
-        if not self.plan_steps:
+        if not self.plan_steps and not self.plan_file_paths:
             return PlanEvolution()
+
+        if not self.plan_steps:
+            # No TodoWrite events, but may have plan files
+            return PlanEvolution(
+                plan_files_created=len(self.plan_file_paths),
+                plan_file_paths=sorted(self.plan_file_paths),
+                final_todos=list(self.previous_todos.values()),
+            )
 
         all_todo_contents = set()
         completed_todo_contents = set()
@@ -158,6 +182,9 @@ class PlanAnalyzer:
             total_search_events=total_search_events,
             total_implementation_events=total_implementation_events,
             exploration_percentage=exploration_percentage,
+            plan_files_created=len(self.plan_file_paths),
+            plan_file_paths=sorted(self.plan_file_paths),
+            final_todos=list(self.previous_todos.values()),
         )
 
     def _calculate_plan_step(self, current_todos: dict[str, TodoItem], timestamp: datetime) -> PlanStep | None:

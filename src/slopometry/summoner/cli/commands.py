@@ -290,10 +290,16 @@ def _show_commit_range_baseline_comparison(repo_path: Path, start: str, end: str
     default=4,
     help="Maximum parallel workers for baseline computation (default: 4)",
 )
+@click.option(
+    "--file-details",
+    is_flag=True,
+    help="Show detailed file lists (blind spots)",
+)
 def current_impact(
     repo_path: Path | None,
     recompute_baseline: bool,
     max_workers: int,
+    file_details: bool,
 ) -> None:
     """Analyze impact of uncommitted changes against repository baseline.
 
@@ -379,7 +385,7 @@ def current_impact(
         except Exception as e:
             logger.debug(f"Coverage analysis failed (optional): {e}")
 
-        display_current_impact_analysis(analysis)
+        display_current_impact_analysis(analysis, show_file_details=file_details)
 
     except Exception as e:
         console.print(f"[red]Failed to analyze uncommitted changes: {e}[/red]")
@@ -707,10 +713,6 @@ def list_user_stories(limit: int) -> None:
 
     try:
         entries = user_story_service.get_user_story_entries(limit)
-
-        if not entries:
-            console.print("[yellow]No user story entries found[/yellow]")
-            return
 
         if not entries:
             console.print("[yellow]No user story entries found[/yellow]")
@@ -1108,3 +1110,111 @@ def compare_projects(append_paths: tuple[Path, ...]) -> None:
         sys.exit(0)
 
     display_leaderboard(leaderboard)
+
+
+@summoner.command("save-compacts")
+@click.option(
+    "--output-dir",
+    "-o",
+    type=click.Path(path_type=Path),
+    default=".",
+    help="Output directory (default: current)",
+)
+@click.option(
+    "--repo-path",
+    "-r",
+    type=click.Path(exists=True, path_type=Path),
+    help="Repository path (default: current directory)",
+)
+def save_compacts(output_dir: Path, repo_path: Path | None) -> None:
+    """Save compact events from all sessions related to this project.
+
+    Finds transcripts from both SQLite database and Claude Code default
+    location (~/.claude/transcripts/), filters to those matching the
+    current project's working directory, and saves compact events.
+
+    Output structure:
+        .slopometry/compacts/<session-id>/
+            compact_<line_number>.json
+    """
+    from slopometry.core.compact_analyzer import (
+        CompactEventAnalyzer,
+        discover_transcripts,
+        find_compact_instructions,
+    )
+    from slopometry.core.database import EventDatabase
+    from slopometry.core.models import SavedCompact
+
+    if repo_path is None:
+        repo_path = Path.cwd()
+
+    db = EventDatabase()
+    analyzer = CompactEventAnalyzer()
+
+    console.print(f"[bold]Discovering transcripts for: {repo_path}[/bold]")
+    transcripts = discover_transcripts(repo_path, db)
+
+    if not transcripts:
+        console.print("[yellow]No transcripts found for this project[/yellow]")
+        return
+
+    console.print(f"Found {len(transcripts)} transcript(s)")
+
+    compacts_dir = output_dir / ".slopometry" / "compacts"
+    total_compacts = 0
+
+    for transcript in transcripts:
+        compacts = analyzer.analyze_transcript(transcript)
+        if not compacts:
+            continue
+
+        session_id = _extract_session_id_from_transcript(transcript)
+        session_dir = compacts_dir / session_id
+        session_dir.mkdir(parents=True, exist_ok=True)
+
+        for compact in compacts:
+            instructions = find_compact_instructions(transcript, compact.line_number)
+
+            saved = SavedCompact(
+                transcript_path=str(transcript),
+                line_number=compact.line_number,
+                timestamp=compact.timestamp,
+                trigger=compact.trigger,
+                pre_tokens=compact.pre_tokens,
+                summary_content=compact.summary_content,
+                instructions=instructions,
+                version=compact.version,
+                git_branch=compact.git_branch,
+            )
+
+            output_file = session_dir / f"compact_{compact.line_number}.json"
+            output_file.write_text(saved.model_dump_json(indent=2))
+            total_compacts += 1
+
+            trigger_label = f"[yellow]{compact.trigger}[/yellow]"
+            console.print(f"  Saved compact at line {compact.line_number} ({trigger_label})")
+
+        console.print(f"[green]✓[/green] Session {session_id}: {len(compacts)} compact(s)")
+
+    if total_compacts > 0:
+        console.print(f"\n[bold green]Saved {total_compacts} compact(s) to {compacts_dir}[/bold green]")
+    else:
+        console.print("[yellow]No compact events found in any transcript[/yellow]")
+
+
+def _extract_session_id_from_transcript(transcript_path: Path) -> str:
+    """Extract session ID from transcript path or content."""
+    import json
+
+    try:
+        with open(transcript_path, encoding="utf-8") as f:
+            first_line = f.readline()
+            if first_line:
+                data = json.loads(first_line)
+                session_id = data.get("sessionId")
+                if session_id:
+                    return session_id
+    except (OSError, json.JSONDecodeError) as e:
+        logger.warning(f"Failed to extract session ID from {transcript_path}: {e}")
+
+    return transcript_path.stem

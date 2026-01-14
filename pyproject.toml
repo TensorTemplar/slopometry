@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "slopometry"
-version = "20260113-1"
+version = "20260114-1"
 description = "Opinionated code quality metrics for code agents and humans"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -38,6 +38,17 @@ dependencies = [
     "huggingface-hub>=0.20.0",
     "coverage>=7.0.0",
     "tiktoken>=0.7.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.0.244",
+    "isort>=5.12.0",
+    "pre-commit>=4.2.0",
+    "pytest>=8.3.5",
+    "pytest-cov>=4.1.0",
+    "types-toml>=0.10.8.20240310",
+    "pyrefly>=0.46.0",
 ]
 
 [project.urls]
@@ -114,15 +125,3 @@ precision = 2
 
 [tool.coverage.html]
 directory = "htmlcov"
-
-[dependency-groups]
-dev = [
-    "mypy>=1.0.0",
-    "ruff>=0.0.244",
-    "isort>=5.12.0",
-    "pre-commit>=4.2.0",
-    "pytest>=8.3.5",
-    "pytest-cov>=4.1.0",
-    "types-toml>=0.10.8.20240310",
-    "pyrefly>=0.45.2",
-]

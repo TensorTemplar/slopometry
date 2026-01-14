@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
   test:
     runs-on: slopometry-linux-x64
@@ -26,4 +30,81 @@ jobs:
 
       - name: Run tests
         run: uv run pytest --cov-report=xml
+
+  qpe:
+    name: Slopometry QPE
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install slopometry from checkout
+        run: uv tool install .
+
+      - name: Run QPE check
+        id: qpe
+        run: |
+          slopometry summoner qpe
+          echo "json=$(slopometry summoner qpe --json | jq -c)" >> $GITHUB_OUTPUT
+
+      - name: Comment on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const qpe = ${{ steps.qpe.outputs.json }};
+            const smells = Object.entries(qpe.smell_counts)
+              .filter(([_, v]) => v > 0)
+              .sort((a, b) => b[1] - a[1])
+              .map(([k, v]) => `| ${k.replace(/_/g, ' ')} | ${v} |`)
+              .join('\n');
+
+            const body = `## 📊 Slopometry QPE Report
+
+            **QPE Score: ${qpe.qpe.toFixed(4)}**
+
+            | Metric | Value | Description |
+            |--------|-------|-------------|
+            | MI (normalized) | ${qpe.mi_normalized.toFixed(3)} | Maintainability Index / 100 |
+            | Smell Penalty | ${qpe.smell_penalty.toFixed(3)} | Weighted code smell deduction |
+            | Adjusted Quality | ${qpe.adjusted_quality.toFixed(3)} | MI × (1 - smell_penalty) |
+            | Effort Factor | ${qpe.effort_factor.toFixed(2)} | log(Halstead Effort + 1) |
+
+            <details>
+            <summary>Code Smell Breakdown</summary>
+
+            | Smell | Count |
+            |-------|-------|
+            ${smells}
+
+            </details>
+
+            > Higher QPE = better quality per unit effort`;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const existing = comments.find(c => c.body.includes('Slopometry QPE Report'));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body
+              });
+            }
 

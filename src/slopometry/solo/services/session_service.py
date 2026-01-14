@@ -1,5 +1,7 @@
 """Session management service for solo-leveler features."""
 
+from pathlib import Path
+
 from slopometry.core.database import EventDatabase
 from slopometry.core.models import SessionStatistics
 
@@ -13,6 +15,18 @@ class SessionService:
     def list_sessions(self, limit: int | None = None) -> list[str]:
         """List recent sessions, optionally limited."""
         return self.db.list_sessions(limit=limit)
+
+    def list_sessions_by_repository(self, repository_path: Path, limit: int | None = None) -> list[str]:
+        """List sessions that occurred in a specific repository.
+
+        Args:
+            repository_path: The repository path to filter by
+            limit: Optional limit on number of sessions to return
+
+        Returns:
+            List of session IDs that started in this repository
+        """
+        return self.db.list_sessions_by_repository(repository_path, limit=limit)
 
     def get_session_statistics(self, session_id: str) -> SessionStatistics | None:
         """Get detailed statistics for a session."""

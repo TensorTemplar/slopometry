@@ -9,31 +9,113 @@ from pydantic import BaseModel, Field
 from slopometry.core.settings import get_default_config_dir, get_default_data_dir, settings
 
 
-class HookCommand(BaseModel):
+class HookCommand(BaseModel, extra="allow"):
     """A single hook command to execute."""
 
     type: str = "command"
     command: str
 
 
-class HookConfig(BaseModel):
+class HookConfig(BaseModel, extra="allow"):
     """Configuration for a hook event handler."""
 
-    matcher: str | None = None  # Only for PreToolUse/PostToolUse
+    matcher: str | None = None
     hooks: list[HookCommand]
+
+    def is_slopometry_hook(self) -> bool:
+        """Check if this config contains slopometry hooks."""
+        return any("slopometry hook-" in hook.command for hook in self.hooks)
 
 
 class ClaudeSettingsHooks(BaseModel, extra="allow"):
-    """Hooks section of Claude Code settings.json.
-
-    Uses extra="allow" to tolerate unknown hook types from future Claude versions.
-    """
+    """Hooks section of Claude Code settings.json."""
 
     PreToolUse: list[HookConfig] = Field(default_factory=list)
     PostToolUse: list[HookConfig] = Field(default_factory=list)
     Notification: list[HookConfig] = Field(default_factory=list)
     Stop: list[HookConfig] = Field(default_factory=list)
     SubagentStop: list[HookConfig] = Field(default_factory=list)
+
+    def _all_hook_lists(self) -> list[tuple[str, list[HookConfig]]]:
+        """Return all hook lists with their names for iteration."""
+        return [
+            ("PreToolUse", self.PreToolUse),
+            ("PostToolUse", self.PostToolUse),
+            ("Notification", self.Notification),
+            ("Stop", self.Stop),
+            ("SubagentStop", self.SubagentStop),
+        ]
+
+    def remove_slopometry_hooks(self) -> bool:
+        """Remove all slopometry hooks. Returns True if any removed."""
+        removed = False
+        for name, configs in self._all_hook_lists():
+            original_len = len(configs)
+            filtered = [c for c in configs if not c.is_slopometry_hook()]
+            if len(filtered) < original_len:
+                removed = True
+            match name:
+                case "PreToolUse":
+                    self.PreToolUse = filtered
+                case "PostToolUse":
+                    self.PostToolUse = filtered
+                case "Notification":
+                    self.Notification = filtered
+                case "Stop":
+                    self.Stop = filtered
+                case "SubagentStop":
+                    self.SubagentStop = filtered
+        return removed
+
+    def add_slopometry_hooks(self, hook_configs: dict[str, list[dict]]) -> None:
+        """Add slopometry hooks, replacing any existing ones."""
+        self.remove_slopometry_hooks()
+        for hook_type, configs in hook_configs.items():
+            parsed = [HookConfig.model_validate(c) for c in configs]
+            match hook_type:
+                case "PreToolUse":
+                    self.PreToolUse.extend(parsed)
+                case "PostToolUse":
+                    self.PostToolUse.extend(parsed)
+                case "Notification":
+                    self.Notification.extend(parsed)
+                case "Stop":
+                    self.Stop.extend(parsed)
+                case "SubagentStop":
+                    self.SubagentStop.extend(parsed)
+
+    def has_slopometry_hooks(self) -> bool:
+        """Check if any slopometry hooks are installed."""
+        for _, configs in self._all_hook_lists():
+            for config in configs:
+                if config.is_slopometry_hook():
+                    return True
+        return False
+
+
+class ClaudePermissions(BaseModel, extra="allow"):
+    """Permissions section of Claude Code settings.json."""
+
+    allow: list[str] = Field(default_factory=list)
+
+
+class ClaudeSettings(BaseModel, extra="allow"):
+    """Complete Claude Code settings.json structure."""
+
+    hooks: ClaudeSettingsHooks = Field(default_factory=ClaudeSettingsHooks)
+    permissions: ClaudePermissions = Field(default_factory=ClaudePermissions)
+
+    @classmethod
+    def load(cls, path: Path) -> "ClaudeSettings":
+        """Load settings from file."""
+        if not path.exists():
+            return cls()
+        return cls.model_validate_json(path.read_text())
+
+    def save(self, path: Path) -> None:
+        """Save settings to file."""
+        path.parent.mkdir(exist_ok=True)
+        path.write_text(self.model_dump_json(indent=2, exclude_defaults=True))
 
 
 class HookService:
@@ -99,22 +181,6 @@ class HookService:
             "SubagentStop": [{"hooks": [{"type": "command", "command": base_command.format("subagent-stop")}]}],
         }
 
-    @staticmethod
-    def _is_slopometry_hook_config(config: dict) -> bool:
-        """Check if a hook config dict contains slopometry hooks.
-
-        Args:
-            config: Raw hook config dict from settings.json
-
-        Returns:
-            True if this config contains slopometry hook commands
-        """
-        try:
-            parsed = HookConfig.model_validate(config)
-            return any("slopometry hook-" in hook.command for hook in parsed.hooks)
-        except Exception:
-            return False
-
     def _ensure_global_directories(self) -> None:
         """Create global config and data directories if they don't exist."""
         config_dir = get_default_config_dir()
@@ -136,49 +202,22 @@ class HookService:
         settings_dir = Path.home() / ".claude" if global_ else Path.cwd() / ".claude"
         settings_file = settings_dir / "settings.json"
 
-        settings_dir.mkdir(exist_ok=True)
+        try:
+            claude_settings = ClaudeSettings.load(settings_file)
+        except (json.JSONDecodeError, ValueError):
+            return False, f"Invalid JSON in {settings_file}"
 
-        existing_settings = {}
-        if settings_file.exists():
-            try:
-                with open(settings_file) as f:
-                    existing_settings = json.load(f)
-            except json.JSONDecodeError:
-                return False, f"Invalid JSON in {settings_file}"
-
-        if "hooks" in existing_settings and settings.backup_existing_settings:
+        if claude_settings.hooks.has_slopometry_hooks() and settings.backup_existing_settings:
             backup_file = settings_dir / f"settings.backup.{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-            with open(backup_file, "w") as f:
-                json.dump(existing_settings, f, indent=2)
+            backup_file.write_text(settings_file.read_text())
 
-        slopometry_hooks = self.create_hook_configuration()
-
-        if "hooks" not in existing_settings:
-            existing_settings["hooks"] = {}
-
-        for hook_type, hook_configs in slopometry_hooks.items():
-            if hook_type not in existing_settings["hooks"]:
-                existing_settings["hooks"][hook_type] = []
-
-            existing_settings["hooks"][hook_type] = [
-                h for h in existing_settings["hooks"][hook_type] if not self._is_slopometry_hook_config(h)
-            ]
-
-            existing_settings["hooks"][hook_type].extend(hook_configs)
-
-        if "permissions" not in existing_settings:
-            existing_settings["permissions"] = {}
-        if "allow" not in existing_settings["permissions"]:
-            existing_settings["permissions"]["allow"] = []
-
-        existing_allows = set(existing_settings["permissions"]["allow"])
-        for cmd in self.WHITELISTED_COMMANDS:
-            if cmd not in existing_allows:
-                existing_settings["permissions"]["allow"].append(cmd)
+        claude_settings.hooks.add_slopometry_hooks(self.create_hook_configuration())
+        claude_settings.permissions.allow = list(
+            set(claude_settings.permissions.allow) | set(self.WHITELISTED_COMMANDS)
+        )
 
         try:
-            with open(settings_file, "w") as f:
-                json.dump(existing_settings, f, indent=2)
+            claude_settings.save(settings_file)
         except Exception as e:
             return False, f"Failed to write settings: {e}"
 
@@ -207,40 +246,17 @@ class HookService:
             return True, f"No settings file found {scope}"
 
         try:
-            with open(settings_file) as f:
-                settings_data = json.load(f)
-        except json.JSONDecodeError:
+            claude_settings = ClaudeSettings.load(settings_file)
+        except (json.JSONDecodeError, ValueError):
             return False, f"Invalid JSON in {settings_file}"
 
-        if "hooks" not in settings_data:
-            return True, "No hooks configuration found"
-
-        removed_any = False
-        for hook_type in settings_data["hooks"]:
-            original_length = len(settings_data["hooks"][hook_type])
-            settings_data["hooks"][hook_type] = [
-                h for h in settings_data["hooks"][hook_type] if not self._is_slopometry_hook_config(h)
-            ]
-            if len(settings_data["hooks"][hook_type]) < original_length:
-                removed_any = True
-
-        settings_data["hooks"] = {k: v for k, v in settings_data["hooks"].items() if v}
-
-        if not settings_data["hooks"]:
-            del settings_data["hooks"]
-
-        if "permissions" in settings_data and "allow" in settings_data["permissions"]:
-            settings_data["permissions"]["allow"] = [
-                cmd for cmd in settings_data["permissions"]["allow"] if cmd not in self.WHITELISTED_COMMANDS
-            ]
-            if not settings_data["permissions"]["allow"]:
-                del settings_data["permissions"]["allow"]
-            if not settings_data["permissions"]:
-                del settings_data["permissions"]
+        removed_any = claude_settings.hooks.remove_slopometry_hooks()
+        claude_settings.permissions.allow = [
+            cmd for cmd in claude_settings.permissions.allow if cmd not in self.WHITELISTED_COMMANDS
+        ]
 
         try:
-            with open(settings_file, "w") as f:
-                json.dump(settings_data, f, indent=2)
+            claude_settings.save(settings_file)
         except Exception as e:
             return False, f"Failed to write settings: {e}"
 
@@ -252,23 +268,13 @@ class HookService:
 
     def check_hooks_installed(self, settings_file: Path) -> bool:
         """Check if slopometry hooks are installed in a settings file."""
-        if not settings_file.exists():
-            return False
-
         try:
-            with open(settings_file) as f:
-                settings_data = json.load(f)
-
-            hooks = settings_data.get("hooks", {})
-            for hook_configs in hooks.values():
-                for hook_config in hook_configs:
-                    if self._is_slopometry_hook_config(hook_config):
-                        return True
-            return False
-        except (json.JSONDecodeError, KeyError):
+            claude_settings = ClaudeSettings.load(settings_file)
+            return claude_settings.hooks.has_slopometry_hooks()
+        except (json.JSONDecodeError, ValueError):
             return False
 
-    def get_installation_status(self) -> dict[str, bool]:
+    def get_installation_status(self) -> dict[str, bool | str]:
         """Get installation status for global and local hooks."""
         global_settings = Path.home() / ".claude" / "settings.json"
         local_settings = Path.cwd() / ".claude" / "settings.json"

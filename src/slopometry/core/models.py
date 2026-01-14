@@ -294,6 +294,40 @@ class PlanEvolution(BaseModel):
     token_usage: TokenUsage | None = Field(
         default=None, description="Token usage breakdown by exploration vs implementation"
     )
+    plan_files_created: int = Field(default=0, description="Number of plan files written to ~/.claude/plans/")
+    plan_file_paths: list[str] = Field(default_factory=list, description="Paths to plan files created during session")
+    final_todos: list[TodoItem] = Field(default_factory=list, description="Final state of todos at session end")
+
+
+class CompactEvent(BaseModel):
+    """Represents a compact event from Claude Code transcript.
+
+    Compact events occur when the conversation is compacted to save context.
+    They consist of a compact_boundary system event followed by an isCompactSummary user message.
+    """
+
+    line_number: int = Field(description="Line number in transcript where compact occurred")
+    trigger: str = Field(description="Trigger type: 'auto' or 'manual'")
+    pre_tokens: int = Field(description="Token count before this compact")
+    summary_content: str = Field(description="The compact summary content")
+    timestamp: datetime = Field(description="When the compact occurred")
+    uuid: str = Field(description="UUID of the compact_boundary event")
+    version: str = Field(default="n/a", description="Claude Code version at compact time")
+    git_branch: str = Field(default="n/a", description="Git branch at compact time")
+
+
+class SavedCompact(BaseModel):
+    """Saved compact event with instructions and results for export."""
+
+    transcript_path: str = Field(description="Path to source transcript")
+    line_number: int = Field(description="Line number in transcript")
+    timestamp: datetime
+    trigger: str
+    pre_tokens: int
+    summary_content: str
+    instructions: str | None = Field(default=None, description="Compact instructions if found")
+    version: str = Field(default="n/a", description="Claude Code version at compact time")
+    git_branch: str = Field(default="n/a", description="Git branch at compact time")
 
 
 class SessionStatistics(BaseModel):
@@ -318,6 +352,9 @@ class SessionStatistics(BaseModel):
     context_coverage: "ContextCoverage | None" = None
     project: Project | None = None
     transcript_path: str | None = None
+    compact_events: list[CompactEvent] = Field(
+        default_factory=list, description="Compacts that occurred during session"
+    )
 
 
 class PreToolUseInput(BaseModel):

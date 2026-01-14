@@ -6,10 +6,9 @@ from unittest.mock import Mock, patch
 
 from click.testing import CliRunner
 
-from slopometry.core.models import SessionStatistics
+from slopometry.core.models import PlanEvolution, SessionStatistics, TodoItem
 from slopometry.solo.cli.commands import (
     _find_plan_names_from_transcript,
-    _find_session_todos,
     save_transcript,
 )
 
@@ -17,7 +16,7 @@ from slopometry.solo.cli.commands import (
 class TestFindPlanNamesFromTranscript:
     """Tests for _find_plan_names_from_transcript helper."""
 
-    def test_find_plan_names__extracts_plan_names_from_transcript(self, tmp_path):
+    def test_find_plan_names__extracts_plan_names_from_transcript(self, tmp_path) -> None:
         """Test extracting plan names from transcript content."""
         transcript = tmp_path / "transcript.jsonl"
         transcript.write_text(
@@ -29,7 +28,7 @@ class TestFindPlanNamesFromTranscript:
 
         assert set(result) == {"reactive-chasing-dawn.md", "elegant-leaping-panda.md"}
 
-    def test_find_plan_names__returns_empty_for_no_plans(self, tmp_path):
+    def test_find_plan_names__returns_empty_for_no_plans(self, tmp_path) -> None:
         """Test returns empty list when no plans found."""
         transcript = tmp_path / "transcript.jsonl"
         transcript.write_text('{"message": "No plan references here"}\n')
@@ -38,7 +37,7 @@ class TestFindPlanNamesFromTranscript:
 
         assert result == []
 
-    def test_find_plan_names__handles_missing_file(self, tmp_path):
+    def test_find_plan_names__handles_missing_file(self, tmp_path) -> None:
         """Test gracefully handles missing transcript file."""
         missing_path = tmp_path / "nonexistent.jsonl"
 
@@ -46,7 +45,7 @@ class TestFindPlanNamesFromTranscript:
 
         assert result == []
 
-    def test_find_plan_names__deduplicates_plan_names(self, tmp_path):
+    def test_find_plan_names__deduplicates_plan_names(self, tmp_path) -> None:
         """Test that duplicate plan names are deduplicated."""
         transcript = tmp_path / "transcript.jsonl"
         transcript.write_text('{"message": "plans/same-plan.md"}\n{"message": "plans/same-plan.md again"}\n')
@@ -56,50 +55,10 @@ class TestFindPlanNamesFromTranscript:
         assert result == ["same-plan.md"]
 
 
-class TestFindSessionTodos:
-    """Tests for _find_session_todos helper."""
-
-    def test_find_session_todos__finds_matching_todos(self, tmp_path):
-        """Test finding todos matching session ID pattern."""
-        session_id = "abc123"
-        todos_dir = tmp_path / ".claude" / "todos"
-        todos_dir.mkdir(parents=True)
-
-        # Create matching todo files
-        (todos_dir / f"{session_id}-agent-{session_id}.json").write_text("[]")
-        (todos_dir / f"{session_id}-agent-other.json").write_text("[]")
-        # Non-matching file
-        (todos_dir / "other-session-agent-xyz.json").write_text("[]")
-
-        with patch.object(Path, "home", return_value=tmp_path):
-            result = _find_session_todos(session_id)
-
-        assert len(result) == 2
-        assert all(session_id in str(p) for p in result)
-
-    def test_find_session_todos__returns_empty_when_no_todos_dir(self, tmp_path):
-        """Test returns empty list when todos directory doesn't exist."""
-        with patch.object(Path, "home", return_value=tmp_path):
-            result = _find_session_todos("any-session")
-
-        assert result == []
-
-    def test_find_session_todos__returns_empty_when_no_matches(self, tmp_path):
-        """Test returns empty list when no matching todos found."""
-        todos_dir = tmp_path / ".claude" / "todos"
-        todos_dir.mkdir(parents=True)
-        (todos_dir / "other-session-agent.json").write_text("[]")
-
-        with patch.object(Path, "home", return_value=tmp_path):
-            result = _find_session_todos("nonexistent-session")
-
-        assert result == []
-
-
 class TestSaveTranscript:
     """Test save-transcript command functionality."""
 
-    def test_save_transcript__creates_session_directory_structure(self, tmp_path):
+    def test_save_transcript__creates_session_directory_structure(self, tmp_path) -> None:
         """Test creating .slopometry/<session-id>/ directory structure."""
         session_id = "test-session-123"
         transcript_path = tmp_path / "transcript.jsonl"
@@ -118,7 +77,6 @@ class TestSaveTranscript:
         with (
             patch("slopometry.solo.services.session_service.SessionService") as mock_service_class,
             patch("slopometry.solo.cli.commands._find_plan_names_from_transcript", return_value=[]),
-            patch("slopometry.solo.cli.commands._find_session_todos", return_value=[]),
         ):
             mock_service = Mock()
             mock_service_class.return_value = mock_service
@@ -136,7 +94,7 @@ class TestSaveTranscript:
         assert (session_dir / "transcript.jsonl").exists()
         assert (session_dir / "transcript.jsonl").read_text() == '{"test": "data"}'
 
-    def test_save_transcript__copies_plans_from_transcript_references(self, tmp_path):
+    def test_save_transcript__copies_plans_from_transcript_references(self, tmp_path) -> None:
         """Test copying plans referenced in transcript."""
         session_id = "test-session-123"
         transcript_path = tmp_path / "transcript.jsonl"
@@ -160,7 +118,6 @@ class TestSaveTranscript:
         with (
             patch("slopometry.solo.services.session_service.SessionService") as mock_service_class,
             patch.object(Path, "home", return_value=tmp_path),
-            patch("slopometry.solo.cli.commands._find_session_todos", return_value=[]),
         ):
             mock_service = Mock()
             mock_service_class.return_value = mock_service
@@ -177,8 +134,10 @@ class TestSaveTranscript:
         assert copied_plan.exists()
         assert copied_plan.read_text() == "# My Plan"
 
-    def test_save_transcript__copies_todos_matching_session_id(self, tmp_path):
-        """Test copying todos that match session ID pattern."""
+    def test_save_transcript__saves_final_todos_from_plan_evolution(self, tmp_path) -> None:
+        """Test saving final_todos.json from plan_evolution."""
+        import json
+
         session_id = "test-session-123"
         transcript_path = tmp_path / "transcript.jsonl"
         transcript_path.write_text('{"test": "data"}')
@@ -186,22 +145,24 @@ class TestSaveTranscript:
         output_dir = tmp_path / "output"
         output_dir.mkdir()
 
-        # Create mock todo files
-        todos_dir = tmp_path / ".claude" / "todos"
-        todos_dir.mkdir(parents=True)
-        todo_file = todos_dir / f"{session_id}-agent-{session_id}.json"
-        todo_file.write_text('[{"task": "test"}]')
+        # Create mock stats with plan_evolution containing final_todos
+        mock_plan_evolution = PlanEvolution(
+            final_todos=[
+                TodoItem(content="Task 1", status="completed", activeForm="Completing task 1"),
+                TodoItem(content="Task 2", status="in_progress", activeForm="Working on task 2"),
+            ]
+        )
 
         mock_stats = SessionStatistics(
             session_id=session_id,
             start_time=datetime.now(),
             working_directory=str(tmp_path),
             transcript_path=str(transcript_path),
+            plan_evolution=mock_plan_evolution,
         )
 
         with (
             patch("slopometry.solo.services.session_service.SessionService") as mock_service_class,
-            patch.object(Path, "home", return_value=tmp_path),
             patch("slopometry.solo.cli.commands._find_plan_names_from_transcript", return_value=[]),
         ):
             mock_service = Mock()
@@ -212,14 +173,20 @@ class TestSaveTranscript:
             result = runner.invoke(save_transcript, [session_id, "-o", str(output_dir)])
 
         assert result.exit_code == 0
-        assert f"Saved todo: {session_id}-agent-{session_id}.json" in result.output
+        assert "Saved 2 todos to: final_todos.json" in result.output
 
-        # Verify todo was copied
-        copied_todo = output_dir / ".slopometry" / session_id / "todos" / f"{session_id}-agent-{session_id}.json"
-        assert copied_todo.exists()
-        assert copied_todo.read_text() == '[{"task": "test"}]'
+        # Verify final_todos.json was created with correct content
+        todos_file = output_dir / ".slopometry" / session_id / "final_todos.json"
+        assert todos_file.exists()
 
-    def test_save_transcript__handles_missing_plans_gracefully(self, tmp_path):
+        saved_todos = json.loads(todos_file.read_text())
+        assert len(saved_todos) == 2
+        assert saved_todos[0]["content"] == "Task 1"
+        assert saved_todos[0]["status"] == "completed"
+        assert saved_todos[1]["content"] == "Task 2"
+        assert saved_todos[1]["status"] == "in_progress"
+
+    def test_save_transcript__handles_missing_plans_gracefully(self, tmp_path) -> None:
         """Test graceful handling when referenced plan doesn't exist."""
         session_id = "test-session-123"
         transcript_path = tmp_path / "transcript.jsonl"
@@ -238,7 +205,6 @@ class TestSaveTranscript:
         with (
             patch("slopometry.solo.services.session_service.SessionService") as mock_service_class,
             patch.object(Path, "home", return_value=tmp_path),
-            patch("slopometry.solo.cli.commands._find_session_todos", return_value=[]),
         ):
             mock_service = Mock()
             mock_service_class.return_value = mock_service
@@ -253,7 +219,7 @@ class TestSaveTranscript:
         # No plan saved message
         assert "Saved plan:" not in result.output
 
-    def test_save_transcript__shows_error_when_session_not_found(self):
+    def test_save_transcript__shows_error_when_session_not_found(self) -> None:
         """Test error handling when session doesn't exist."""
         session_id = "non-existent"
 
@@ -268,7 +234,7 @@ class TestSaveTranscript:
         assert result.exit_code == 0
         assert "No data found for session" in result.output
 
-    def test_save_transcript__shows_error_when_no_transcript_path(self):
+    def test_save_transcript__shows_error_when_no_transcript_path(self) -> None:
         """Test error handling when session has no transcript path."""
         session_id = "test-session"
         mock_stats = SessionStatistics(
@@ -290,7 +256,7 @@ class TestSaveTranscript:
         assert "No transcript path found" in result.output
         assert "older session" in result.output
 
-    def test_save_transcript__uses_latest_session_when_no_id_provided(self, tmp_path):
+    def test_save_transcript__uses_latest_session_when_no_id_provided(self, tmp_path) -> None:
         """Test using latest session when no session ID is provided."""
         session_id = "latest-session-456"
         transcript_path = tmp_path / "transcript.jsonl"
@@ -307,7 +273,6 @@ class TestSaveTranscript:
         with (
             patch("slopometry.solo.services.session_service.SessionService") as mock_service_class,
             patch("slopometry.solo.cli.commands._find_plan_names_from_transcript", return_value=[]),
-            patch("slopometry.solo.cli.commands._find_session_todos", return_value=[]),
         ):
             mock_service = Mock()
             mock_service_class.return_value = mock_service
@@ -323,7 +288,7 @@ class TestSaveTranscript:
         assert "Save transcript for this session?" in result.output
         assert "Saved transcript to:" in result.output
 
-    def test_save_transcript__skips_confirmation_with_yes_flag(self, tmp_path):
+    def test_save_transcript__skips_confirmation_with_yes_flag(self, tmp_path) -> None:
         """Test skipping confirmation with --yes flag."""
         session_id = "latest-session-456"
         transcript_path = tmp_path / "transcript.jsonl"
@@ -340,7 +305,6 @@ class TestSaveTranscript:
         with (
             patch("slopometry.solo.services.session_service.SessionService") as mock_service_class,
             patch("slopometry.solo.cli.commands._find_plan_names_from_transcript", return_value=[]),
-            patch("slopometry.solo.cli.commands._find_session_todos", return_value=[]),
         ):
             mock_service = Mock()
             mock_service_class.return_value = mock_service
@@ -354,7 +318,7 @@ class TestSaveTranscript:
         assert "Save transcript for this session?" not in result.output
         assert "Saved transcript to:" in result.output
 
-    def test_save_transcript__shows_error_when_no_sessions_exist(self):
+    def test_save_transcript__shows_error_when_no_sessions_exist(self) -> None:
         """Test error handling when no sessions exist at all."""
         with patch("slopometry.solo.services.session_service.SessionService") as mock_service_class:
             mock_service = Mock()
@@ -367,7 +331,7 @@ class TestSaveTranscript:
         assert result.exit_code == 0
         assert "No sessions found" in result.output
 
-    def test_save_transcript__cancels_when_user_declines_confirmation(self, tmp_path):
+    def test_save_transcript__cancels_when_user_declines_confirmation(self, tmp_path) -> None:
         """Test cancellation when user declines confirmation for latest session."""
         session_id = "latest-session-456"
         transcript_path = tmp_path / "transcript.jsonl"

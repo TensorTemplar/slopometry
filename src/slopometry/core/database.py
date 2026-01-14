@@ -578,6 +578,16 @@ class EventDatabase:
             logger.debug(f"Failed to calculate plan evolution for session {session_id}: {e}")
             stats.plan_evolution = None
 
+        if stats.transcript_path:
+            try:
+                from slopometry.core.compact_analyzer import analyze_transcript_compacts
+
+                transcript_path = Path(stats.transcript_path)
+                if transcript_path.exists():
+                    stats.compact_events = analyze_transcript_compacts(transcript_path)
+            except Exception as e:
+                logger.debug(f"Failed to analyze compact events for session {session_id}: {e}")
+
         try:
             stats.context_coverage = self._calculate_context_coverage(stats.transcript_path, stats.working_directory)
         except Exception as e:
@@ -673,6 +683,11 @@ class EventDatabase:
                 if tool_name == "TodoWrite":
                     if tool_input:
                         analyzer.analyze_todo_write_event(tool_input, timestamp)
+                elif tool_name == "Write":
+                    # Track Write events for plan files (in addition to counting as implementation)
+                    if tool_input:
+                        analyzer.analyze_write_event(tool_input)
+                    analyzer.increment_event_count(tool_type, tool_input)
                 else:
                     analyzer.increment_event_count(tool_type, tool_input)
 
@@ -808,6 +823,37 @@ class EventDatabase:
             if limit:
                 query += f" LIMIT {limit}"
             rows = conn.execute(query).fetchall()
+            return [row[0] for row in rows]
+
+    def list_sessions_by_repository(self, repository_path: Path, limit: int | None = None) -> list[str]:
+        """List session IDs filtered by repository working directory.
+
+        Sessions are identified by their first event's working_directory.
+
+        Args:
+            repository_path: The repository path to filter by
+            limit: Optional limit on number of sessions to return
+
+        Returns:
+            List of session IDs that started in this repository, ordered by most recent first
+        """
+        with self._get_db_connection() as conn:
+            normalized_path = str(repository_path.resolve())
+
+            query = """
+                SELECT session_id, MIN(timestamp) as first_event
+                FROM hook_events
+                WHERE working_directory = ?
+                GROUP BY session_id
+                ORDER BY first_event DESC
+            """
+            params: list = [normalized_path]
+
+            if limit:
+                query += " LIMIT ?"
+                params.append(limit)
+
+            rows = conn.execute(query, params).fetchall()
             return [row[0] for row in rows]
 
     def get_sessions_summary(self, limit: int | None = None) -> list[dict]:
