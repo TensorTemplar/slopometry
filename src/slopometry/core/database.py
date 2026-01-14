@@ -578,6 +578,16 @@ class EventDatabase:
             logger.debug(f"Failed to calculate plan evolution for session {session_id}: {e}")
             stats.plan_evolution = None
 
+        if stats.transcript_path:
+            try:
+                from slopometry.core.compact_analyzer import analyze_transcript_compacts
+
+                transcript_path = Path(stats.transcript_path)
+                if transcript_path.exists():
+                    stats.compact_events = analyze_transcript_compacts(transcript_path)
+            except Exception as e:
+                logger.debug(f"Failed to analyze compact events for session {session_id}: {e}")
+
         try:
             stats.context_coverage = self._calculate_context_coverage(stats.transcript_path, stats.working_directory)
         except Exception as e:

@@ -9,6 +9,7 @@ from slopometry.core.complexity_analyzer import ComplexityAnalyzer
 from slopometry.core.models import (
     ComplexityDelta,
     CurrentChangesAnalysis,
+    ExtendedComplexityMetrics,
     GalenMetrics,
     RepoBaseline,
 )
@@ -68,7 +69,6 @@ class CurrentImpactService:
         blind_spots = coverage_analyzer.get_affected_dependents(set(changed_files))
 
         filtered_coverage = None
-        filtered_coverage = None
         try:
             from slopometry.core.coverage_analyzer import CoverageAnalyzer
 
@@ -81,16 +81,13 @@ class CurrentImpactService:
                     if file_path in cov_result.file_coverage:
                         filtered_coverage[file_path] = cov_result.file_coverage[file_path]
         except Exception:
-            # Coverage analysis is optional
             pass
 
-        # Calculate token impact
         blind_spot_tokens = 0
         changed_files_tokens = 0
 
-        # Helper to get token count for a file path
         def get_token_count(path_str: str) -> int:
-            # path_str is relative
+            """Get token count for a relative file path."""
             return current_metrics.files_by_token_count.get(path_str, 0)
 
         for file_path in changed_files:
@@ -101,7 +98,6 @@ class CurrentImpactService:
 
         complete_picture_context_size = changed_files_tokens + blind_spot_tokens
 
-        # Calculate Galen metrics based on commit history token growth
         galen_metrics = self._calculate_galen_metrics(baseline, current_metrics)
 
         return CurrentChangesAnalysis(
@@ -123,7 +119,7 @@ class CurrentImpactService:
     def _calculate_galen_metrics(
         self,
         baseline: RepoBaseline,
-        current_metrics,
+        current_metrics: ExtendedComplexityMetrics,
     ) -> GalenMetrics | None:
         """Calculate Galen productivity metrics from commit history token growth.
 
@@ -150,8 +146,8 @@ class CurrentImpactService:
 
     def _compute_delta(
         self,
-        baseline_metrics,
-        current_metrics,
+        baseline_metrics: ExtendedComplexityMetrics,
+        current_metrics: ExtendedComplexityMetrics,
     ) -> ComplexityDelta:
         """Compute complexity delta between baseline and current metrics."""
         return ComplexityDelta(
@@ -166,7 +162,3 @@ class CurrentImpactService:
             avg_mi_change=current_metrics.average_mi - baseline_metrics.average_mi,
             net_files_change=(current_metrics.total_files_analyzed - baseline_metrics.total_files_analyzed),
         )
-
-
-# NOTE: Backwards compatibility alias for renamed service
-StagedImpactService = CurrentImpactService

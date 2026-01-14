@@ -756,6 +756,76 @@ except Exception:
 
         assert visitor.swallowed_exceptions == 0
 
+    def test_visit_try__ignores_except_with_logger_call(self) -> None:
+        """Test that except block with logger.warning() is not flagged."""
+        code = """
+try:
+    risky()
+except Exception:
+    logger.warning("Something went wrong")
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.swallowed_exceptions == 0
+
+    def test_visit_try__ignores_except_with_logging_module(self) -> None:
+        """Test that except block with logging.info() is not flagged."""
+        code = """
+try:
+    risky()
+except Exception:
+    logging.info("Caught exception")
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.swallowed_exceptions == 0
+
+    def test_visit_try__ignores_except_with_print(self) -> None:
+        """Test that except block with print() is not flagged."""
+        code = """
+try:
+    risky()
+except Exception:
+    print("Error occurred")
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.swallowed_exceptions == 0
+
+    def test_visit_try__ignores_except_with_console_print(self) -> None:
+        """Test that except block with console.print() is not flagged."""
+        code = """
+try:
+    risky()
+except Exception:
+    console.print("Error occurred")
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.swallowed_exceptions == 0
+
+    def test_visit_try__ignores_except_with_self_logger(self) -> None:
+        """Test that except block with self.logger.error() is not flagged."""
+        code = """
+try:
+    risky()
+except Exception:
+    self.logger.error("Error occurred")
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.swallowed_exceptions == 0
+
 
 class TestTypeIgnoreDetection:
     """Tests for type: ignore comment detection."""

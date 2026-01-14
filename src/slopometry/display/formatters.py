@@ -7,7 +7,7 @@ from pathlib import Path
 from rich.console import Console
 from rich.table import Table
 
-from slopometry.core.models import ZScoreInterpretation
+from slopometry.core.models import CompactEvent, TokenUsage, ZScoreInterpretation
 from slopometry.core.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -196,6 +196,13 @@ def display_session_summary(
     if stats.tool_usage:
         _display_tool_usage_table(stats.tool_usage)
 
+    if stats.compact_events:
+        _display_compact_events(stats.compact_events)
+
+    token_usage = stats.plan_evolution.token_usage if stats.plan_evolution else None
+    if token_usage or stats.compact_events:
+        _display_token_impact(token_usage, stats.compact_events)
+
     if stats.average_tool_duration_ms:
         console.print(f"\nAverage tool duration: {stats.average_tool_duration_ms:.0f}ms")
 
@@ -212,7 +219,7 @@ def display_session_summary(
         _display_complexity_delta(stats, baseline, assessment, show_file_details=show_file_details)
 
     if stats.context_coverage and stats.context_coverage.files_edited:
-        _display_context_coverage(stats.context_coverage)
+        _display_context_coverage(stats.context_coverage, show_file_details=show_file_details)
 
 
 def _display_events_by_type_table(events_by_type: dict) -> None:
@@ -237,6 +244,68 @@ def _display_tool_usage_table(tool_usage: dict) -> None:
         table.add_row(tool_type.value, str(count))
 
     console.print(table)
+
+
+def _display_compact_events(compact_events: list[CompactEvent]) -> None:
+    """Display compact events table.
+
+    Args:
+        compact_events: List of compact events from the session
+    """
+    if not compact_events:
+        return
+
+    console.print(f"\n[bold]Compacts ({len(compact_events)})[/bold]")
+    table = Table()
+    table.add_column("Time", style="cyan")
+    table.add_column("Trigger", style="yellow")
+    table.add_column("Pre-Tokens", justify="right")
+    table.add_column("Version", style="dim")
+    table.add_column("Branch", style="magenta")
+    table.add_column("Line", justify="right", style="dim")
+
+    for compact in compact_events:
+        table.add_row(
+            compact.timestamp.strftime("%H:%M:%S"),
+            compact.trigger,
+            _format_token_count(compact.pre_tokens),
+            compact.version,
+            compact.git_branch,
+            str(compact.line_number),
+        )
+    console.print(table)
+
+
+def _display_token_impact(token_usage: TokenUsage | None, compact_events: list[CompactEvent]) -> None:
+    """Display token impact section with exploration/implementation breakdown.
+
+    Args:
+        token_usage: Token usage metrics from plan evolution
+        compact_events: List of compact events for calculating 'without compact'
+    """
+    if not token_usage:
+        return
+
+    console.print("\n[bold]Token Impact:[/bold]")
+    token_table = Table(show_header=True)
+    token_table.add_column("Metric", style="cyan")
+    token_table.add_column("Value", justify="right")
+
+    token_table.add_row("Changeset Tokens", _format_token_count(token_usage.total_tokens))
+    token_table.add_row("Exploration Tokens", _format_token_count(token_usage.exploration_tokens))
+    token_table.add_row("Implementation Tokens", _format_token_count(token_usage.implementation_tokens))
+
+    if token_usage.subagent_tokens > 0:
+        token_table.add_row("Subagent Tokens", _format_token_count(token_usage.subagent_tokens))
+
+    if compact_events:
+        tokens_without_compact = sum(c.pre_tokens for c in compact_events)
+        token_table.add_row(
+            "[yellow]Tokens Without Compact[/yellow]",
+            f"[yellow]{_format_token_count(tokens_without_compact)}[/yellow]",
+        )
+
+    console.print(token_table)
 
 
 def _display_git_metrics(stats: SessionStatistics) -> None:
@@ -502,7 +571,9 @@ def _display_complexity_delta(
                 file_changes_table.add_column("Change", justify="right", width=10)
 
                 for file_path, change in sorted_changes:
-                    files_by_complexity = stats.complexity_metrics.files_by_complexity if stats.complexity_metrics else {}
+                    files_by_complexity = (
+                        stats.complexity_metrics.files_by_complexity if stats.complexity_metrics else {}
+                    )
                     current_complexity = files_by_complexity.get(file_path, 0)
                     previous_complexity = current_complexity - change
 
@@ -694,7 +765,7 @@ def _display_work_summary(evolution: PlanEvolution) -> None:
         )
 
 
-def _display_context_coverage(coverage: ContextCoverage) -> None:
+def _display_context_coverage(coverage: ContextCoverage, show_file_details: bool = False) -> None:
     """Display context coverage section showing what files were read before editing."""
     console.print("\n[bold]Context Coverage[/bold]")
     console.print(f"Files edited: {len(coverage.files_edited)}")
@@ -729,9 +800,14 @@ def _display_context_coverage(coverage: ContextCoverage) -> None:
         console.print(table)
 
     if coverage.blind_spots:
-        console.print(f"\n[yellow]Potential blind spots ({len(coverage.blind_spots)} files):[/yellow]")
-        for blind_spot in coverage.blind_spots:
-            console.print(f"  • {truncate_path(blind_spot, max_width=70)}")
+        if show_file_details:
+            console.print(f"\n[yellow]Potential blind spots ({len(coverage.blind_spots)} files):[/yellow]")
+            for blind_spot in coverage.blind_spots:
+                console.print(f"  • {truncate_path(blind_spot, max_width=70)}")
+        else:
+            console.print(
+                f"\n[dim]Potential blind spots: {len(coverage.blind_spots)} files (use --file-details to list)[/dim]"
+            )
 
 
 def _format_coverage_ratio(read: int, total: int) -> str:
@@ -1055,13 +1131,21 @@ def _get_impact_color(category: ImpactCategory) -> str:
             return "white"
 
 
-def display_current_impact_analysis(analysis: CurrentChangesAnalysis) -> None:
-    """Display uncommitted changes impact analysis with Rich formatting."""
+def display_current_impact_analysis(
+    analysis: CurrentChangesAnalysis,
+    compact_events: list[CompactEvent] | None = None,
+    show_file_details: bool = False,
+) -> None:
+    """Display uncommitted changes impact analysis with Rich formatting.
+
+    Args:
+        analysis: The current changes analysis to display
+        compact_events: Optional list of compact events from session transcript
+        show_file_details: Whether to show detailed file lists (blind spots)
+    """
     console.print("\n[bold]Uncommitted Changes Impact Analysis[/bold]")
 
     console.print(f"Repository: {analysis.repository_path}")
-
-    # Dropped list of changed files as requested by user to reduce noise
 
     display_baseline_comparison(
         baseline=analysis.baseline,
@@ -1079,6 +1163,14 @@ def display_current_impact_analysis(analysis: CurrentChangesAnalysis) -> None:
     token_table.add_row(
         "Complete Picture Context Size", f"[bold]{_format_token_count(analysis.complete_picture_context_size)}[/bold]"
     )
+
+    if compact_events:
+        tokens_without_compact = sum(c.pre_tokens for c in compact_events)
+        token_table.add_row(
+            "[yellow]Tokens Without Compact[/yellow]",
+            f"[yellow]{_format_token_count(tokens_without_compact)}[/yellow]",
+        )
+
     console.print(token_table)
 
     if analysis.galen_metrics:
@@ -1132,16 +1224,20 @@ def display_current_impact_analysis(analysis: CurrentChangesAnalysis) -> None:
         console.print(cov_table)
 
     if analysis.blind_spots:
-        console.print(f"\n[yellow]Potential blind spots ({len(analysis.blind_spots)} files):[/yellow]")
-        # Show all blind spots as requested
-        for blind_spot in analysis.blind_spots:
-            console.print(f"  • {truncate_path(blind_spot, max_width=70)}")
+        if show_file_details:
+            console.print(f"\n[yellow]Potential blind spots ({len(analysis.blind_spots)} files):[/yellow]")
+            for blind_spot in analysis.blind_spots:
+                console.print(f"  • {truncate_path(blind_spot, max_width=70)}")
+        else:
+            console.print(
+                f"\n[dim]Potential blind spots: {len(analysis.blind_spots)} files (use --file-details to list)[/dim]"
+            )
 
     filter_set = set(analysis.changed_files) if analysis.changed_files else None
     _display_code_smells_detailed(metrics, filter_files=filter_set)
 
 
-def _display_code_smells_detailed(metrics, filter_files: set[str] | None = None) -> None:
+def _display_code_smells_detailed(metrics: ExtendedComplexityMetrics, filter_files: set[str] | None = None) -> None:
     """Display a detailed table of code smells with complete file lists.
 
     Args:

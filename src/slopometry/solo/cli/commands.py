@@ -2,9 +2,13 @@
 
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import click
 from rich.console import Console
+
+if TYPE_CHECKING:
+    from slopometry.core.models import ImpactAssessment, RepoBaseline, SessionStatistics
 
 # Imports moved inside functions to optimize startup time
 
@@ -200,12 +204,10 @@ def latest(smell_details: bool, file_details: bool) -> None:
             console.print(f"\n[dim]Analysis completed in {elapsed:.1f}s[/dim]")
 
 
-def _compute_session_baseline(stats):
-    """Compute baseline and assessment for a session's complexity delta.
-
-    Returns:
-        Tuple of (baseline, assessment) or (None, None) if unavailable
-    """
+def _compute_session_baseline(
+    stats: "SessionStatistics",
+) -> tuple["RepoBaseline", "ImpactAssessment"] | tuple[None, None]:
+    """Compute baseline and assessment for a session's complexity delta."""
     if not stats.complexity_delta:
         return None, None
 
@@ -246,7 +248,6 @@ def cleanup(session_id: str | None, all_sessions: bool, yes: bool) -> None:
     """Clean up session data.
 
     If SESSION_ID is provided, delete that specific session.
-    If --all is provided, delete all sessions.
     If --all is provided, delete all sessions.
     Otherwise, show usage help.
     """

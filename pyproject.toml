@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "slopometry"
-version = "20260113-1"
+version = "20260114-1"
 description = "Opinionated code quality metrics for code agents and humans"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -42,7 +42,6 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
-    "mypy>=1.0.0",
     "ruff>=0.0.244",
     "isort>=5.12.0",
     "pre-commit>=4.2.0",
