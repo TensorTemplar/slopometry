@@ -146,3 +146,70 @@ def test_install_hooks__updates_gitignore_for_local_install(tmp_path, monkeypatc
     assert ".slopometry/" in message
     assert (tmp_path / ".gitignore").exists()
     assert ".slopometry/" in (tmp_path / ".gitignore").read_text()
+
+
+def test_install_hooks__preserves_unknown_fields(tmp_path, monkeypatch):
+    """Verify install preserves unknown top-level fields and unknown hook types."""
+    monkeypatch.chdir(tmp_path)
+    service = HookService()
+
+    settings_dir = tmp_path / ".claude"
+    settings_dir.mkdir()
+    settings_file = settings_dir / "settings.json"
+
+    initial_data = {
+        "hooks": {
+            "PreToolUse": [{"matcher": ".*", "hooks": [{"command": "echo 'user hook'"}]}],
+            "UnknownHookType": [{"matcher": "special", "hooks": [{"command": "custom"}]}],
+        },
+        "permissions": {"allow": ["Bash(echo:*)"], "deny": ["Bash(rm:*)"]},
+        "unknown_top_level": "should_be_preserved",
+        "another_unknown": {"nested": "value"},
+    }
+    with open(settings_file, "w") as f:
+        json.dump(initial_data, f)
+
+    service.install_hooks(global_=False)
+
+    with open(settings_file) as f:
+        data = json.load(f)
+
+    assert data["unknown_top_level"] == "should_be_preserved"
+    assert data["another_unknown"] == {"nested": "value"}
+    assert "UnknownHookType" in data["hooks"]
+    assert data["hooks"]["UnknownHookType"] == [{"matcher": "special", "hooks": [{"command": "custom"}]}]
+    assert "deny" in data["permissions"]
+    assert data["permissions"]["deny"] == ["Bash(rm:*)"]
+
+
+def test_uninstall_hooks__preserves_unknown_fields(tmp_path, monkeypatch):
+    """Verify uninstall preserves unknown fields."""
+    monkeypatch.chdir(tmp_path)
+    service = HookService()
+
+    settings_dir = tmp_path / ".claude"
+    settings_dir.mkdir()
+    settings_file = settings_dir / "settings.json"
+
+    initial_data = {
+        "hooks": {
+            "PreToolUse": [
+                {"matcher": ".*", "hooks": [{"command": "slopometry hook-pre-tool-use"}]},
+                {"matcher": ".*", "hooks": [{"command": "echo 'user hook'"}]},
+            ],
+            "CustomHookType": [{"hooks": [{"command": "special"}]}],
+        },
+        "custom_setting": True,
+    }
+    with open(settings_file, "w") as f:
+        json.dump(initial_data, f)
+
+    service.uninstall_hooks(global_=False)
+
+    with open(settings_file) as f:
+        data = json.load(f)
+
+    assert data["custom_setting"] is True
+    assert "CustomHookType" in data["hooks"]
+    assert data["hooks"]["CustomHookType"] == [{"hooks": [{"command": "special"}]}]
+    assert any("echo 'user hook'" in h.get("command", "") for item in data["hooks"]["PreToolUse"] for h in item.get("hooks", []))
