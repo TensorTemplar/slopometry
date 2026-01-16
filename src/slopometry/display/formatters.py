@@ -1286,7 +1286,7 @@ def display_baseline_comparison(
 
     if baseline.qpe_stats:
         baseline_table.add_row(
-            "QPE",
+            "QPE (GRPO)",
             f"{baseline.qpe_stats.mean:+.4f}",
             f"±{baseline.qpe_stats.std_dev:.4f}",
             _format_trend(baseline.qpe_stats.trend_coefficient, lower_is_better=False),
@@ -1304,7 +1304,7 @@ def display_baseline_comparison(
 
     qpe_color = "green" if assessment.qpe_z_score > 0 else "red" if assessment.qpe_z_score < 0 else "yellow"
     impact_table.add_row(
-        "QPE",
+        "QPE (GRPO)",
         f"[{qpe_color}]{assessment.qpe_delta:+.4f}[/{qpe_color}]",
         f"{assessment.qpe_z_score:+.2f}",
         _interpret_z_score(assessment.qpe_z_score),
@@ -1340,7 +1340,7 @@ def display_baseline_comparison_compact(
 
     qpe_sign = "↑" if assessment.qpe_z_score > 0 else "↓" if assessment.qpe_z_score < 0 else "→"
     qpe_quality = "good" if assessment.qpe_z_score > 0 else "below avg" if assessment.qpe_z_score < 0 else "avg"
-    lines.append(f"  QPE: {assessment.qpe_delta:+.4f} (Z: {assessment.qpe_z_score:+.2f} {qpe_sign} {qpe_quality})")
+    lines.append(f"  QPE (GRPO): {assessment.qpe_delta:+.4f} (Z: {assessment.qpe_z_score:+.2f} {qpe_sign} {qpe_quality})")
 
     category_display = assessment.impact_category.value.replace("_", " ").upper()
     lines.append(f"Session Impact: {category_display} ({assessment.impact_score:+.2f})")
@@ -1388,7 +1388,7 @@ def display_qpe_score(
     component_table.add_row(
         "Adjusted Quality",
         f"{qpe_score.adjusted_quality:.3f}",
-        "MI × (1 - smell_penalty)",
+        "MI × (1 - smell_penalty) + bonuses",
     )
 
     component_table.add_row(

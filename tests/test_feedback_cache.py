@@ -7,8 +7,6 @@ import tempfile
 import time
 from pathlib import Path
 
-import pytest
-
 from slopometry.core.hook_handler import (
     _compute_feedback_cache_key,
     _get_feedback_cache_path,

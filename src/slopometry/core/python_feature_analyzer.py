@@ -23,7 +23,6 @@ class FeatureStats(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    # Basic counts (no actionable message needed)
     functions_count: int = 0
     classes_count: int = 0
     docstrings_count: int = 0
@@ -36,7 +35,6 @@ class FeatureStats(BaseModel):
     str_type_count: int = 0
     deprecations_count: int = 0
 
-    # Code smells - self-describing via SmellField metadata
     orphan_comment_count: int = SmellField(
         label="Orphan Comments",
         files_field="orphan_comment_files",
@@ -103,11 +101,9 @@ class FeatureStats(BaseModel):
         guidance="Function that just delegates to another with same args; consider removing indirection",
     )
 
-    # LOC metrics (for file filtering)
     total_loc: int = Field(default=0, description="Total lines of code")
-    code_loc: int = Field(default=0, description="Non-blank, non-comment lines")
+    code_loc: int = Field(default=0, description="Non-blank, non-comment lines (for QPE file filtering)")
 
-    # File tracking
     orphan_comment_files: set[str] = Field(default_factory=set)
     untracked_todo_files: set[str] = Field(default_factory=set)
     inline_import_files: set[str] = Field(default_factory=set)
@@ -290,13 +286,11 @@ class PythonFeatureAnalyzer:
 
         start_total = time.perf_counter()
 
-        # Use parallel processing for large file sets
         if len(python_files) >= settings.parallel_file_threshold:
             results = self._analyze_files_parallel(python_files)
         else:
             results = [_analyze_single_file_features(fp) for fp in python_files]
 
-        # Aggregate results
         aggregated = FeatureStats()
         for stats in results:
             if stats is not None:
@@ -714,7 +708,9 @@ class FeatureVisitor(ast.NodeVisitor):
             self.deep_inheritances += 1
 
         # Single-method class: only one method besides __init__
-        methods = [n for n in node.body if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef) and n.name != "__init__"]
+        methods = [
+            n for n in node.body if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef) and n.name != "__init__"
+        ]
         if len(methods) == 1:
             self.single_method_classes += 1
 
@@ -834,17 +830,13 @@ class FeatureVisitor(ast.NodeVisitor):
 
         call = stmt.value
 
-        # Get function's argument names (excluding self/cls)
         func_args = [arg.arg for arg in node.args.args if arg.arg not in ("self", "cls")]
 
-        # Function must have at least one argument to be a meaningful pass-through
         if not func_args:
             return False
 
-        # Get call's positional argument names
         call_args = [arg.id for arg in call.args if isinstance(arg, ast.Name)]
 
-        # Check if call args exactly match function args in order
         return func_args == call_args
 
     def visit_If(self, node: ast.If) -> None:

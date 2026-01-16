@@ -69,9 +69,7 @@ class QPECalculator:
 
         # Use files_by_loc for anti-gaming file filtering, fallback to total_files
         if metrics.files_by_loc:
-            effective_files = sum(
-                1 for loc in metrics.files_by_loc.values() if loc >= settings.qpe_min_loc_per_file
-            )
+            effective_files = sum(1 for loc in metrics.files_by_loc.values() if loc >= settings.qpe_min_loc_per_file)
         else:
             effective_files = metrics.total_files_analyzed
 
@@ -99,7 +97,6 @@ class QPECalculator:
         )
         total_bonus = test_bonus + type_bonus + docstring_bonus
 
-        # Adjusted quality with bonuses
         adjusted_quality = mi_normalized * (1 - smell_penalty) + total_bonus
 
         # Effort normalization using log for diminishing returns
@@ -185,7 +182,6 @@ class CrossProjectComparator:
                 )
             )
 
-        # Sort by QPE (highest first)
         rankings = sorted(results, key=lambda x: x.qpe_score.qpe, reverse=True)
 
         return CrossProjectComparison(
@@ -221,7 +217,6 @@ class CrossProjectComparator:
                 )
             )
 
-        # Sort by QPE (highest first)
         rankings = sorted(results, key=lambda x: x.qpe_score.qpe, reverse=True)
 
         return CrossProjectComparison(

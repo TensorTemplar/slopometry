@@ -825,7 +825,9 @@ class ExtendedComplexityMetrics(ComplexityMetrics):
     type_ignore_files: list[str] = Field(default_factory=list, description="Files with type: ignore")
     dynamic_execution_files: list[str] = Field(default_factory=list, description="Files with eval/exec/compile")
     single_method_class_files: list[str] = Field(default_factory=list, description="Files with single-method classes")
-    deep_inheritance_files: list[str] = Field(default_factory=list, description="Files with deep inheritance (>2 bases)")
+    deep_inheritance_files: list[str] = Field(
+        default_factory=list, description="Files with deep inheritance (>2 bases)"
+    )
     passthrough_wrapper_files: list[str] = Field(default_factory=list, description="Files with pass-through wrappers")
 
     def get_smells(self) -> list["SmellData"]:

@@ -173,7 +173,7 @@ class ComplexityAnalyzer:
                 all_token_counts.append(token_count)
 
             except (SyntaxError, UnicodeDecodeError, OSError) as e:
-                logger.debug(f"Skipping unparseable file {relative_path}: {e}")
+                logger.debug(f"Skipping unparseable file {file_path}: {e}")
                 continue
 
         total_files = len(all_complexities)

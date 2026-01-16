@@ -136,9 +136,7 @@ class Settings(BaseSettings):
     )
 
     # QPE bonus thresholds (coverage % needed to earn bonus)
-    qpe_test_coverage_threshold: float = Field(
-        default=80.0, description="Test coverage % threshold to earn QPE bonus"
-    )
+    qpe_test_coverage_threshold: float = Field(default=80.0, description="Test coverage % threshold to earn QPE bonus")
     qpe_type_coverage_threshold: float = Field(
         default=90.0, description="Type hint coverage % threshold to earn QPE bonus"
     )
@@ -147,9 +145,7 @@ class Settings(BaseSettings):
     )
 
     # QPE bonus amounts (added to adjusted_quality when threshold met)
-    qpe_test_coverage_bonus: float = Field(
-        default=0.05, description="QPE bonus for meeting test coverage threshold"
-    )
+    qpe_test_coverage_bonus: float = Field(default=0.05, description="QPE bonus for meeting test coverage threshold")
     qpe_type_coverage_bonus: float = Field(
         default=0.05, description="QPE bonus for meeting type hint coverage threshold"
     )
@@ -191,12 +187,16 @@ class Settings(BaseSettings):
             if key.upper().startswith(prefix):
                 prefixed_env_vars.add(key.upper())
 
-        for env_file in self.model_config.get("env_file", []):
-            env_path = Path(env_file)
-            if env_path.exists():
-                for key in dotenv_values(env_path):
-                    if key.upper().startswith(prefix):
-                        prefixed_env_vars.add(key.upper())
+        env_files = self.model_config.get("env_file", [])
+        if env_files is not None:
+            # Normalize to list - env_file can be a single path or list of paths
+            env_file_list = [env_files] if isinstance(env_files, (str, Path)) else list(env_files)
+            for env_file in env_file_list:
+                env_path = Path(env_file)
+                if env_path.exists():
+                    for key in dotenv_values(env_path):
+                        if key.upper().startswith(prefix):
+                            prefixed_env_vars.add(key.upper())
 
         unknown = prefixed_env_vars - known_fields
         if unknown:
