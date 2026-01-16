@@ -14,7 +14,7 @@ from slopometry.core.models import (
     ExtendedComplexityMetrics,
     FileAnalysisResult,
 )
-from slopometry.core.python_feature_analyzer import PythonFeatureAnalyzer
+from slopometry.core.python_feature_analyzer import PythonFeatureAnalyzer, _count_loc
 from slopometry.core.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -372,8 +372,6 @@ class ComplexityAnalyzer:
         Returns:
             Dict mapping relative file paths to their code LOC
         """
-        from slopometry.core.python_feature_analyzer import _count_loc
-
         files_by_loc: dict[str, int] = {}
         for file_path in python_files:
             try:
