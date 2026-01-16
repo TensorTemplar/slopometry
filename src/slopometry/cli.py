@@ -4,9 +4,8 @@ import shutil
 import sys
 
 import click
-from rich.console import Console
 
-console = Console()
+from slopometry.display.console import console
 
 
 def check_slopometry_in_path() -> bool:

@@ -585,7 +585,7 @@ def format_code_smell_feedback(
     session_id: str | None = None,
     working_directory: str | None = None,
 ) -> tuple[str, bool, bool]:
-    """Format code smell feedback by iterating over SmellField-marked fields.
+    """Format code smell feedback using get_smells() for direct field access.
 
     Args:
         current_metrics: Current complexity metrics with code smell counts
@@ -599,7 +599,7 @@ def format_code_smell_feedback(
         - has_smells: whether any code smells were detected
         - has_blocking_smells: whether any BLOCKING smells in edited files were detected
     """
-    blocking_fields = {"test_skip_count", "swallowed_exception_count"}
+    blocking_smell_names = {"test_skip", "swallowed_exception"}
     edited_files = edited_files or set()
 
     related_via_imports: set[str] = set()
@@ -611,36 +611,26 @@ def format_code_smell_feedback(
     blocking_smells: list[tuple[str, int, int, str, list[str]]] = []
     other_smells: list[tuple[str, int, int, list[str], str]] = []
 
-    # NOTE: getattr usage below is intentional - we iterate over model_fields dynamically
-    # to discover smell fields by their is_smell marker. Field names come from Pydantic's
-    # schema, not external input, so this is a justified use of dynamic attribute access.
-    for field_name, field_info in ExtendedComplexityMetrics.model_fields.items():
-        extra = field_info.json_schema_extra
-        if not extra or not isinstance(extra, dict) or not extra.get("is_smell"):
+    smell_changes = delta.get_smell_changes() if delta else {}
+
+    for smell in current_metrics.get_smells():
+        if smell.count == 0:
             continue
 
-        count = getattr(current_metrics, field_name, 0)
-        if count == 0:
-            continue
+        change = smell_changes.get(smell.name, 0)
+        guidance = smell.definition.guidance
 
-        label = str(extra["label"])
-        files_field = str(extra["files_field"])
-        smell_files = list(getattr(current_metrics, files_field, []))
-        change_field = field_name.replace("_count", "_change")
-        change = getattr(delta, change_field, 0) if delta else 0
-        guidance = field_info.description or ""
-
-        if field_name in blocking_fields and edited_files:
-            related_files = [f for f in smell_files if _is_file_related_to_edits(f, edited_files, related_via_imports)]
-            unrelated_files = [f for f in smell_files if f not in related_files]
+        if smell.name in blocking_smell_names and edited_files:
+            related_files = [f for f in smell.files if _is_file_related_to_edits(f, edited_files, related_via_imports)]
+            unrelated_files = [f for f in smell.files if f not in related_files]
 
             if related_files:
-                blocking_smells.append((label, len(related_files), change, guidance, related_files))
+                blocking_smells.append((smell.label, len(related_files), change, guidance, related_files))
 
             if unrelated_files:
-                other_smells.append((label, len(unrelated_files), 0, unrelated_files, guidance))
+                other_smells.append((smell.label, len(unrelated_files), 0, unrelated_files, guidance))
         else:
-            other_smells.append((label, count, change, smell_files, guidance))
+            other_smells.append((smell.label, smell.count, change, list(smell.files), guidance))
 
     lines: list[str] = []
     has_blocking = len(blocking_smells) > 0

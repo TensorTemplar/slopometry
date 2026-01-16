@@ -112,3 +112,30 @@ class TestCodeQualityCacheManager:
         # Retrieve clean (None hash) -> Miss
         metrics, _ = manager.get_cached_metrics("sess_1", "/repo", "sha1", working_tree_hash=None)
         assert metrics is None
+
+    def test_update_cached_coverage__updates_existing_entry(self, db_connection):
+        """Test that update_cached_coverage updates coverage fields in cached metrics."""
+        manager = CodeQualityCacheManager(db_connection)
+        dummy_metrics = ExtendedComplexityMetrics(**make_test_metrics(total_complexity=50))
+
+        # Save initial metrics without coverage
+        manager.save_metrics_to_cache("sess_1", "/repo", "sha1", dummy_metrics)
+
+        # Verify initial state has no coverage
+        metrics, _ = manager.get_cached_metrics("sess_1", "/repo", "sha1")
+        assert metrics.test_coverage_percent is None
+
+        # Update with coverage
+        success = manager.update_cached_coverage("sess_1", 85.5, "coverage.xml")
+        assert success is True
+
+        # Verify coverage was cached
+        metrics, _ = manager.get_cached_metrics("sess_1", "/repo", "sha1")
+        assert metrics.test_coverage_percent == 85.5
+        assert metrics.test_coverage_source == "coverage.xml"
+
+    def test_update_cached_coverage__returns_false_for_missing_session(self, db_connection):
+        """Test that update_cached_coverage returns False if session doesn't exist."""
+        manager = CodeQualityCacheManager(db_connection)
+        success = manager.update_cached_coverage("nonexistent", 75.0, "coverage.xml")
+        assert success is False

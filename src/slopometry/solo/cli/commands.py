@@ -5,14 +5,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import click
-from rich.console import Console
+
+from slopometry.display.console import console
 
 if TYPE_CHECKING:
     from slopometry.core.models import ImpactAssessment, RepoBaseline, SessionStatistics
 
 # Imports moved inside functions to optimize startup time
 
-console = Console()
 logger = logging.getLogger(__name__)
 
 
@@ -121,7 +121,8 @@ def list_sessions(limit: int) -> None:
 @click.argument("session_id", shell_complete=complete_session_id)
 @click.option("--smell-details", is_flag=True, help="Show files affected by each code smell")
 @click.option("--file-details", is_flag=True, help="Show full file lists in delta sections")
-def show(session_id: str, smell_details: bool, file_details: bool) -> None:
+@click.option("--pager/--no-pager", default=True, help="Use pager for long output (like less)")
+def show(session_id: str, smell_details: bool, file_details: bool, pager: bool) -> None:
     """Show detailed statistics for a session."""
     import time
 
@@ -138,24 +139,33 @@ def show(session_id: str, smell_details: bool, file_details: bool) -> None:
         return
 
     baseline, assessment = _compute_session_baseline(stats)
-    display_session_summary(
-        stats,
-        session_id,
-        baseline,
-        assessment,
-        show_smell_files=smell_details,
-        show_file_details=file_details,
-    )
 
-    elapsed = time.perf_counter() - start_time
-    if elapsed > 5:
-        console.print(f"\n[dim]Analysis completed in {elapsed:.1f}s[/dim]")
+    def _display() -> None:
+        display_session_summary(
+            stats,
+            session_id,
+            baseline,
+            assessment,
+            show_smell_files=smell_details,
+            show_file_details=file_details,
+        )
+
+        elapsed = time.perf_counter() - start_time
+        if elapsed > 5:
+            console.print(f"\n[dim]Analysis completed in {elapsed:.1f}s[/dim]")
+
+    if pager:
+        with console.pager(styles=True):
+            _display()
+    else:
+        _display()
 
 
 @click.command()
 @click.option("--smell-details", is_flag=True, help="Show files affected by each code smell")
 @click.option("--file-details", is_flag=True, help="Show full file lists in delta sections")
-def latest(smell_details: bool, file_details: bool) -> None:
+@click.option("--pager/--no-pager", default=True, help="Use pager for long output (like less)")
+def latest(smell_details: bool, file_details: bool, pager: bool) -> None:
     """Show detailed statistics for the most recent session."""
     import time
 
@@ -177,6 +187,15 @@ def latest(smell_details: bool, file_details: bool) -> None:
         if stats.complexity_metrics and stats.working_directory:
             working_dir = Path(stats.working_directory)
             if working_dir.exists():
+                from slopometry.core.project_guard import MultiProjectError, guard_single_project
+
+                try:
+                    guard_single_project(working_dir)
+                except MultiProjectError as e:
+                    console.print(f"[red]Error:[/red] {e}")
+                    return
+
+                # Always fetch fresh coverage from coverage.xml (don't use stale cached value)
                 try:
                     from slopometry.core.coverage_analyzer import CoverageAnalyzer
 
@@ -186,22 +205,45 @@ def latest(smell_details: bool, file_details: bool) -> None:
                     if coverage_result.coverage_available:
                         stats.complexity_metrics.test_coverage_percent = coverage_result.total_coverage_percent
                         stats.complexity_metrics.test_coverage_source = coverage_result.source_file
+
+                        try:
+                            from slopometry.core.code_quality_cache import CodeQualityCacheManager
+                            from slopometry.core.database import EventDatabase
+
+                            db = EventDatabase()
+                            with db._get_db_connection() as conn:
+                                cache_manager = CodeQualityCacheManager(conn)
+                                cache_manager.update_cached_coverage(
+                                    most_recent,
+                                    coverage_result.total_coverage_percent,
+                                    coverage_result.source_file or "",
+                                )
+                        except Exception as cache_err:
+                            logger.debug(f"Failed to cache coverage result: {cache_err}")
                 except Exception as e:
                     logger.debug(f"Coverage analysis failed (optional): {e}")
 
         baseline, assessment = _compute_session_baseline(stats)
-        display_session_summary(
-            stats,
-            most_recent,
-            baseline,
-            assessment,
-            show_smell_files=smell_details,
-            show_file_details=file_details,
-        )
 
-        elapsed = time.perf_counter() - start_time
-        if elapsed > 5:
-            console.print(f"\n[dim]Analysis completed in {elapsed:.1f}s[/dim]")
+        def _display() -> None:
+            display_session_summary(
+                stats,
+                most_recent,
+                baseline,
+                assessment,
+                show_smell_files=smell_details,
+                show_file_details=file_details,
+            )
+
+            elapsed = time.perf_counter() - start_time
+            if elapsed > 5:
+                console.print(f"\n[dim]Analysis completed in {elapsed:.1f}s[/dim]")
+
+        if pager:
+            with console.pager(styles=True):
+                _display()
+        else:
+            _display()
 
 
 def _compute_session_baseline(

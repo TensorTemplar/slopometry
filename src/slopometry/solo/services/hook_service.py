@@ -1,8 +1,11 @@
 """Hook management service for Claude Code integration."""
 
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from pydantic import BaseModel, Field
 
@@ -115,7 +118,7 @@ class ClaudeSettings(BaseModel, extra="allow"):
     def save(self, path: Path) -> None:
         """Save settings to file."""
         path.parent.mkdir(exist_ok=True)
-        path.write_text(self.model_dump_json(indent=2, exclude_defaults=True))
+        path.write_text(self.model_dump_json(indent=2, exclude_none=True))
 
 
 class HookService:
@@ -149,7 +152,8 @@ class HookService:
                 for line in content.splitlines():
                     if line.strip().rstrip("/") == entry.rstrip("/"):
                         return False, None
-            except OSError:
+            except OSError as e:
+                logger.debug(f"Failed to read .gitignore at {gitignore_path}: {e}")
                 return False, None
 
         try:

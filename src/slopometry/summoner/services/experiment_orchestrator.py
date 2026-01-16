@@ -7,7 +7,6 @@ from concurrent.futures import Future, ProcessPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
-from rich.console import Console
 from rich.table import Table
 
 from slopometry.core.complexity_analyzer import ComplexityAnalyzer
@@ -15,6 +14,7 @@ from slopometry.core.coverage_analyzer import CoverageAnalyzer
 from slopometry.core.database import EventDatabase
 from slopometry.core.git_tracker import GitOperationError, GitTracker
 from slopometry.core.models import ExperimentProgress, ExperimentRun, ExperimentStatus, ExtendedComplexityMetrics
+from slopometry.display.console import console
 from slopometry.summoner.services.cli_calculator import CLICalculator
 from slopometry.summoner.services.worktree_manager import WorktreeManager
 
@@ -187,8 +187,6 @@ class ExperimentOrchestrator:
             base_commit: Starting commit (e.g., HEAD~10)
             head_commit: Ending commit (e.g., HEAD)
         """
-        console = Console()
-
         result = subprocess.run(
             ["git", "rev-list", "--reverse", f"{base_commit}..{head_commit}"],
             cwd=self.repo_path,

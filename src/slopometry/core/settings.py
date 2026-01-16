@@ -130,6 +130,38 @@ class Settings(BaseSettings):
 
     baseline_max_commits: int = Field(default=100, description="Maximum commits to analyze for baseline computation")
 
+    qpe_sigmoid_steepness: float = Field(
+        default=2.0,
+        description="Steepness factor for QPE smell penalty sigmoid (higher = faster saturation)",
+    )
+
+    # QPE bonus thresholds (coverage % needed to earn bonus)
+    qpe_test_coverage_threshold: float = Field(
+        default=80.0, description="Test coverage % threshold to earn QPE bonus"
+    )
+    qpe_type_coverage_threshold: float = Field(
+        default=90.0, description="Type hint coverage % threshold to earn QPE bonus"
+    )
+    qpe_docstring_coverage_threshold: float = Field(
+        default=80.0, description="Docstring coverage % threshold to earn QPE bonus"
+    )
+
+    # QPE bonus amounts (added to adjusted_quality when threshold met)
+    qpe_test_coverage_bonus: float = Field(
+        default=0.05, description="QPE bonus for meeting test coverage threshold"
+    )
+    qpe_type_coverage_bonus: float = Field(
+        default=0.05, description="QPE bonus for meeting type hint coverage threshold"
+    )
+    qpe_docstring_coverage_bonus: float = Field(
+        default=0.02, description="QPE bonus for meeting docstring coverage threshold"
+    )
+
+    # QPE file filtering (anti-gaming)
+    qpe_min_loc_per_file: int = Field(
+        default=10, description="Minimum code LOC to count a file for smell normalization"
+    )
+
     impact_cc_weight: float = Field(default=0.25, description="Weight for CC in impact score calculation")
     impact_effort_weight: float = Field(
         default=0.25, description="Weight for Halstead Effort in impact score calculation"

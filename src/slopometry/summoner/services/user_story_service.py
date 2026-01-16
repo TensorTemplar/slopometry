@@ -4,13 +4,11 @@ import re
 from pathlib import Path
 
 import click
-from rich.console import Console
 
 from slopometry.core.database import EventDatabase
 from slopometry.core.models import UserStoryDisplayData, UserStoryEntry, UserStoryStatistics
 from slopometry.core.settings import settings
-
-console = Console()
+from slopometry.display.console import console
 
 
 class UserStoryService:

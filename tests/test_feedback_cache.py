@@ -336,10 +336,6 @@ class TestModifiedPythonFilesDetection:
 class TestSubmoduleHandling:
     """Tests for git submodule handling."""
 
-    @pytest.mark.skipif(
-        subprocess.run(["git", "--version"], capture_output=True).returncode != 0,
-        reason="Git not available",
-    )
     def test_feedback_cache__submodule_changes_dont_invalidate(self):
         """Verify submodule changes don't cause cache misses.
 

@@ -64,8 +64,17 @@ class ImpactCalculator:
             baseline.mi_delta_stats.std_dev,
         )
 
+        qpe_delta = staged_delta.qpe_change
+        qpe_z = 0.0
+        if baseline.qpe_stats:
+            qpe_z = self._safe_z_score(
+                qpe_delta,
+                baseline.qpe_stats.mean,
+                baseline.qpe_stats.std_dev,
+            )
+
         # NOTE: Normalize z-score directions for impact scoring:
-        # CC/Effort: negate (lower=better), MI: keep (higher=better)
+        # CC/Effort: negate (lower=better), MI/QPE: keep (higher=better)
         normalized_cc = -cc_z
         normalized_effort = -effort_z
         normalized_mi = mi_z
@@ -87,6 +96,8 @@ class ImpactCalculator:
             cc_delta=cc_delta,
             effort_delta=effort_delta,
             mi_delta=mi_delta,
+            qpe_delta=qpe_delta,
+            qpe_z_score=qpe_z,
         )
 
     def _safe_z_score(self, value: float, mean: float, std: float) -> float:

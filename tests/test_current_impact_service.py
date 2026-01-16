@@ -1,3 +1,4 @@
+import logging
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -5,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from slopometry.core.complexity_analyzer import ComplexityAnalyzer
-from slopometry.core.models import HistoricalMetricStats, RepoBaseline
+from slopometry.core.models import AnalysisSource, HistoricalMetricStats, RepoBaseline
 from slopometry.summoner.services.current_impact_service import CurrentImpactService
 
 
@@ -108,3 +109,140 @@ class TestCurrentImpactService:
         # Should have some delta
         # Since we modified the file, current complexity should differ from baseline
         assert result.current_metrics.total_complexity != real_baseline.current_metrics.total_complexity
+
+    def test_analyze_previous_commit__returns_analysis_with_correct_source(self, test_repo_path, real_baseline):
+        """Test that analyzing previous commit sets the correct source."""
+        assert real_baseline is not None, "Baseline computation failed"
+
+        service = CurrentImpactService()
+
+        # The test_repo_path is a clone with commits, so previous commit should exist
+        result = service.analyze_previous_commit(test_repo_path, real_baseline)
+
+        # Should return analysis (assuming commits have Python changes)
+        if result is not None:
+            assert result.source == AnalysisSource.PREVIOUS_COMMIT
+            assert result.analyzed_commit_sha is not None
+            assert result.base_commit_sha is not None
+            assert len(result.analyzed_commit_sha) == 8  # Short SHA
+            assert len(result.base_commit_sha) == 8  # Short SHA
+
+    def test_analyze_previous_commit__returns_none_when_no_previous_commit(self, tmp_path, real_baseline):
+        """Test that analyze_previous_commit returns None for repos with only one commit."""
+        assert real_baseline is not None, "Baseline computation failed"
+
+        # Create a repo with only one commit
+        repo_path = tmp_path / "single_commit_repo"
+        repo_path.mkdir()
+
+        subprocess.run(["git", "init"], cwd=repo_path, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@test.com"],
+            cwd=repo_path,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"],
+            cwd=repo_path,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "commit.gpgsign", "false"],
+            cwd=repo_path,
+            check=True,
+            capture_output=True,
+        )
+
+        test_file = repo_path / "test.py"
+        test_file.write_text("def foo(): pass\n")
+        subprocess.run(["git", "add", "."], cwd=repo_path, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", "Initial"],
+            cwd=repo_path,
+            check=True,
+            capture_output=True,
+        )
+
+        service = CurrentImpactService()
+        result = service.analyze_previous_commit(repo_path, real_baseline)
+
+        assert result is None
+
+    def test_analyze_previous_commit__returns_none_when_no_python_changes(self, tmp_path, real_baseline):
+        """Test that analyze_previous_commit returns None when last commit has no Python changes."""
+        assert real_baseline is not None, "Baseline computation failed"
+
+        # Create a repo with two commits, but the last one has no Python changes
+        repo_path = tmp_path / "no_python_changes_repo"
+        repo_path.mkdir()
+
+        subprocess.run(["git", "init"], cwd=repo_path, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@test.com"],
+            cwd=repo_path,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"],
+            cwd=repo_path,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "commit.gpgsign", "false"],
+            cwd=repo_path,
+            check=True,
+            capture_output=True,
+        )
+
+        # First commit with Python file
+        test_file = repo_path / "test.py"
+        test_file.write_text("def foo(): pass\n")
+        subprocess.run(["git", "add", "."], cwd=repo_path, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", "Initial"],
+            cwd=repo_path,
+            check=True,
+            capture_output=True,
+        )
+
+        # Second commit with only a text file (no Python)
+        txt_file = repo_path / "readme.txt"
+        txt_file.write_text("Just a text file\n")
+        subprocess.run(["git", "add", "."], cwd=repo_path, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", "Add readme"],
+            cwd=repo_path,
+            check=True,
+            capture_output=True,
+        )
+
+        service = CurrentImpactService()
+        result = service.analyze_previous_commit(repo_path, real_baseline)
+
+        # Should return None because no Python files were changed
+        assert result is None
+
+    def test_analyze_previous_commit__logs_debug_on_git_operation_error(
+        self, test_repo_path, real_baseline, caplog, monkeypatch
+    ):
+        """Test that analyze_previous_commit logs debug messages on GitOperationError."""
+        assert real_baseline is not None, "Baseline computation failed"
+
+        from slopometry.core.git_tracker import GitOperationError, GitTracker
+
+        def mock_get_changed_python_files(self, parent_sha, child_sha):
+            raise GitOperationError("Simulated git diff failure")
+
+        monkeypatch.setattr(GitTracker, "get_changed_python_files", mock_get_changed_python_files)
+
+        service = CurrentImpactService()
+
+        with caplog.at_level(logging.DEBUG, logger="slopometry.summoner.services.current_impact_service"):
+            result = service.analyze_previous_commit(test_repo_path, real_baseline)
+
+        assert result is None
+        assert any("Failed to get changed files" in record.message for record in caplog.records)

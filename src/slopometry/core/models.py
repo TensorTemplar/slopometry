@@ -6,7 +6,167 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class SmellCategory(str, Enum):
+    """Category of code smell for organization and filtering."""
+
+    GENERAL = "general"
+    PYTHON = "python"
+    RUST = "rust"
+
+
+class SmellDefinition(BaseModel):
+    """Definition of a code smell with all metadata."""
+
+    model_config = ConfigDict(frozen=True)
+
+    internal_name: str
+    label: str
+    category: SmellCategory
+    weight: float
+    guidance: str
+    count_field: str
+    files_field: str
+
+
+SMELL_REGISTRY: dict[str, SmellDefinition] = {
+    # General smells (language-agnostic concepts)
+    "orphan_comment": SmellDefinition(
+        internal_name="orphan_comment",
+        label="Orphan Comments",
+        category=SmellCategory.GENERAL,
+        weight=0.02,
+        guidance="Make sure inline code comments add meaningful information about non-obvious design tradeoffs or explain tech debt or performance implications. Consider if these could be docstrings or field descriptors instead",
+        count_field="orphan_comment_count",
+        files_field="orphan_comment_files",
+    ),
+    "untracked_todo": SmellDefinition(
+        internal_name="untracked_todo",
+        label="Untracked TODOs",
+        category=SmellCategory.GENERAL,
+        weight=0.02,
+        guidance="Untracked TODOs should include ticket references (JIRA-123, #123) or URLs",
+        count_field="untracked_todo_count",
+        files_field="untracked_todo_files",
+    ),
+    "swallowed_exception": SmellDefinition(
+        internal_name="swallowed_exception",
+        label="Swallowed Exceptions",
+        category=SmellCategory.GENERAL,
+        weight=0.15,
+        guidance="BLOCKING: You MUST present a table with columns [Location | Purpose] for each and ask user to confirm silent failure is acceptable",
+        count_field="swallowed_exception_count",
+        files_field="swallowed_exception_files",
+    ),
+    "test_skip": SmellDefinition(
+        internal_name="test_skip",
+        label="Test Skips",
+        category=SmellCategory.GENERAL,
+        weight=0.10,
+        guidance="BLOCKING: You MUST present a table with columns [Test Name | Intent] for each skip and ask user to confirm each is still valid",
+        count_field="test_skip_count",
+        files_field="test_skip_files",
+    ),
+    "type_ignore": SmellDefinition(
+        internal_name="type_ignore",
+        label="Type Ignores",
+        category=SmellCategory.GENERAL,
+        weight=0.08,
+        guidance="Review type: ignore comments - consider fixing the underlying type issue",
+        count_field="type_ignore_count",
+        files_field="type_ignore_files",
+    ),
+    "dynamic_execution": SmellDefinition(
+        internal_name="dynamic_execution",
+        label="Dynamic Execution",
+        category=SmellCategory.GENERAL,
+        weight=0.12,
+        guidance="Review usage of eval/exec/compile - ensure this is necessary and secure",
+        count_field="dynamic_execution_count",
+        files_field="dynamic_execution_files",
+    ),
+    "inline_import": SmellDefinition(
+        internal_name="inline_import",
+        label="Inline Imports",
+        category=SmellCategory.PYTHON,
+        weight=0.02,
+        guidance="Verify if these can be moved to the top of the file (except TYPE_CHECKING guards)",
+        count_field="inline_import_count",
+        files_field="inline_import_files",
+    ),
+    "dict_get_with_default": SmellDefinition(
+        internal_name="dict_get_with_default",
+        label="Dict .get() Defaults",
+        category=SmellCategory.PYTHON,
+        weight=0.05,
+        guidance="Consider if these are justified or just indicate modeling gaps - replace with Pydantic BaseSettings or BaseModel with narrower field types or raise explicit errors instead",
+        count_field="dict_get_with_default_count",
+        files_field="dict_get_with_default_files",
+    ),
+    "hasattr_getattr": SmellDefinition(
+        internal_name="hasattr_getattr",
+        label="hasattr/getattr",
+        category=SmellCategory.PYTHON,
+        weight=0.10,
+        guidance="Consider if these indicate missing domain models - replace with Pydantic BaseModel objects with explicit fields or raise explicit errors instead",
+        count_field="hasattr_getattr_count",
+        files_field="hasattr_getattr_files",
+    ),
+    "nonempty_init": SmellDefinition(
+        internal_name="nonempty_init",
+        label="Non-empty __init__",
+        category=SmellCategory.PYTHON,
+        weight=0.03,
+        guidance="Consider if implementation code should be moved out of __init__.py files",
+        count_field="nonempty_init_count",
+        files_field="nonempty_init_files",
+    ),
+    # Abstraction smells (unnecessary complexity)
+    "single_method_class": SmellDefinition(
+        internal_name="single_method_class",
+        label="Single-Method Classes",
+        category=SmellCategory.PYTHON,
+        weight=0.05,
+        guidance="Consider using a function instead of a class with only one method besides __init__",
+        count_field="single_method_class_count",
+        files_field="single_method_class_files",
+    ),
+    "deep_inheritance": SmellDefinition(
+        internal_name="deep_inheritance",
+        label="Deep Inheritance",
+        category=SmellCategory.PYTHON,
+        weight=0.08,
+        guidance="Prefer composition over inheritance; >2 base classes increases complexity",
+        count_field="deep_inheritance_count",
+        files_field="deep_inheritance_files",
+    ),
+    "passthrough_wrapper": SmellDefinition(
+        internal_name="passthrough_wrapper",
+        label="Pass-Through Wrappers",
+        category=SmellCategory.PYTHON,
+        weight=0.02,
+        guidance="Function that just delegates to another with same args; consider removing indirection",
+        count_field="passthrough_wrapper_count",
+        files_field="passthrough_wrapper_files",
+    ),
+}
+
+
+def get_smell_label(internal_name: str) -> str:
+    """Get display label for a smell from registry."""
+    defn = SMELL_REGISTRY.get(internal_name)
+    return defn.label if defn else internal_name.replace("_", " ").title()
+
+
+def get_smells_by_category(category: SmellCategory) -> list[SmellDefinition]:
+    """Get all smells in a category, sorted by weight (highest first)."""
+    return sorted(
+        [d for d in SMELL_REGISTRY.values() if d.category == category],
+        key=lambda d: d.weight,
+        reverse=True,
+    )
 
 
 def SmellField(
@@ -39,7 +199,6 @@ class ProjectLanguage(str, Enum):
     """Supported languages for complexity analysis."""
 
     PYTHON = "python"
-    # RUST = "rust"  # Future: Add when rust analyzer ready
 
 
 class ProjectSource(str, Enum):
@@ -111,6 +270,13 @@ class ToolType(str, Enum):
     OTHER = "Other"
 
 
+class AnalysisSource(str, Enum):
+    """Source of the impact analysis."""
+
+    UNCOMMITTED_CHANGES = "uncommitted_changes"
+    PREVIOUS_COMMIT = "previous_commit"
+
+
 class GitState(BaseModel):
     """Represents git repository state at a point in time."""
 
@@ -165,6 +331,9 @@ class ComplexityMetrics(BaseModel):
     files_by_complexity: dict[str, int] = Field(
         default_factory=dict, description="Mapping of filename to complexity score"
     )
+    files_by_effort: dict[str, float] = Field(
+        default_factory=dict, description="Mapping of filename to Halstead effort"
+    )
     files_with_parse_errors: dict[str, str] = Field(
         default_factory=dict, description="Files that failed to parse: {filepath: error_message}"
     )
@@ -199,6 +368,8 @@ class ComplexityDelta(BaseModel):
     total_tokens_change: int = 0
     avg_tokens_change: float = 0.0
 
+    qpe_change: float = Field(default=0.0, description="QPE delta (current - baseline)")
+
     type_hint_coverage_change: float = 0.0
     docstring_coverage_change: float = 0.0
     deprecation_change: int = 0
@@ -216,6 +387,27 @@ class ComplexityDelta(BaseModel):
     swallowed_exception_change: int = 0
     type_ignore_change: int = 0
     dynamic_execution_change: int = 0
+    single_method_class_change: int = 0
+    deep_inheritance_change: int = 0
+    passthrough_wrapper_change: int = 0
+
+    def get_smell_changes(self) -> dict[str, int]:
+        """Return smell name to change value mapping for direct access."""
+        return {
+            "orphan_comment": self.orphan_comment_change,
+            "untracked_todo": self.untracked_todo_change,
+            "inline_import": self.inline_import_change,
+            "dict_get_with_default": self.dict_get_with_default_change,
+            "hasattr_getattr": self.hasattr_getattr_change,
+            "nonempty_init": self.nonempty_init_change,
+            "test_skip": self.test_skip_change,
+            "swallowed_exception": self.swallowed_exception_change,
+            "type_ignore": self.type_ignore_change,
+            "dynamic_execution": self.dynamic_execution_change,
+            "single_method_class": self.single_method_class_change,
+            "deep_inheritance": self.deep_inheritance_change,
+            "passthrough_wrapper": self.passthrough_wrapper_change,
+        }
 
 
 class TodoItem(BaseModel):
@@ -482,6 +674,36 @@ class NextFeaturePrediction(BaseModel):
         return [story for story in self.user_stories if story.priority <= 2]
 
 
+class SmellData(BaseModel):
+    """Structured smell data with direct field access (no getattr needed)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    count: int
+    files: list[str]
+
+    @property
+    def definition(self) -> SmellDefinition:
+        """Get the smell definition from registry."""
+        return SMELL_REGISTRY[self.name]
+
+    @property
+    def label(self) -> str:
+        """Get display label from registry."""
+        return self.definition.label
+
+    @property
+    def category(self) -> SmellCategory:
+        """Get category from registry."""
+        return self.definition.category
+
+    @property
+    def weight(self) -> float:
+        """Get weight from registry."""
+        return self.definition.weight
+
+
 class ExtendedComplexityMetrics(ComplexityMetrics):
     """Extended metrics including Halstead and Maintainability Index.
 
@@ -569,6 +791,28 @@ class ExtendedComplexityMetrics(ComplexityMetrics):
         files_field="dynamic_execution_files",
         guidance="Review usage of eval/exec/compile - ensure this is necessary and secure",
     )
+    single_method_class_count: int = SmellField(
+        label="Single-Method Classes",
+        files_field="single_method_class_files",
+        guidance="Consider using a function instead of a class with only one method besides __init__",
+    )
+    deep_inheritance_count: int = SmellField(
+        label="Deep Inheritance",
+        files_field="deep_inheritance_files",
+        guidance="Prefer composition over inheritance; >2 base classes increases complexity",
+    )
+    passthrough_wrapper_count: int = SmellField(
+        label="Pass-Through Wrappers",
+        files_field="passthrough_wrapper_files",
+        guidance="Function that just delegates to another with same args; consider removing indirection",
+    )
+
+    # LOC metrics (for file filtering in QPE)
+    total_loc: int = Field(default=0, description="Total lines of code across all files")
+    code_loc: int = Field(default=0, description="Non-blank, non-comment lines")
+    files_by_loc: dict[str, int] = Field(
+        default_factory=dict, description="Mapping of filepath to code LOC for file filtering"
+    )
 
     orphan_comment_files: list[str] = Field(default_factory=list, description="Files with orphan comments")
     untracked_todo_files: list[str] = Field(default_factory=list, description="Files with untracked TODOs")
@@ -580,6 +824,87 @@ class ExtendedComplexityMetrics(ComplexityMetrics):
     swallowed_exception_files: list[str] = Field(default_factory=list, description="Files with swallowed exceptions")
     type_ignore_files: list[str] = Field(default_factory=list, description="Files with type: ignore")
     dynamic_execution_files: list[str] = Field(default_factory=list, description="Files with eval/exec/compile")
+    single_method_class_files: list[str] = Field(default_factory=list, description="Files with single-method classes")
+    deep_inheritance_files: list[str] = Field(default_factory=list, description="Files with deep inheritance (>2 bases)")
+    passthrough_wrapper_files: list[str] = Field(default_factory=list, description="Files with pass-through wrappers")
+
+    def get_smells(self) -> list["SmellData"]:
+        """Return all smell data as structured objects with direct field access."""
+        return [
+            SmellData(
+                name="orphan_comment",
+                count=self.orphan_comment_count,
+                files=self.orphan_comment_files,
+            ),
+            SmellData(
+                name="untracked_todo",
+                count=self.untracked_todo_count,
+                files=self.untracked_todo_files,
+            ),
+            SmellData(
+                name="swallowed_exception",
+                count=self.swallowed_exception_count,
+                files=self.swallowed_exception_files,
+            ),
+            SmellData(
+                name="test_skip",
+                count=self.test_skip_count,
+                files=self.test_skip_files,
+            ),
+            SmellData(
+                name="type_ignore",
+                count=self.type_ignore_count,
+                files=self.type_ignore_files,
+            ),
+            SmellData(
+                name="dynamic_execution",
+                count=self.dynamic_execution_count,
+                files=self.dynamic_execution_files,
+            ),
+            SmellData(
+                name="inline_import",
+                count=self.inline_import_count,
+                files=self.inline_import_files,
+            ),
+            SmellData(
+                name="dict_get_with_default",
+                count=self.dict_get_with_default_count,
+                files=self.dict_get_with_default_files,
+            ),
+            SmellData(
+                name="hasattr_getattr",
+                count=self.hasattr_getattr_count,
+                files=self.hasattr_getattr_files,
+            ),
+            SmellData(
+                name="nonempty_init",
+                count=self.nonempty_init_count,
+                files=self.nonempty_init_files,
+            ),
+            SmellData(
+                name="single_method_class",
+                count=self.single_method_class_count,
+                files=self.single_method_class_files,
+            ),
+            SmellData(
+                name="deep_inheritance",
+                count=self.deep_inheritance_count,
+                files=self.deep_inheritance_files,
+            ),
+            SmellData(
+                name="passthrough_wrapper",
+                count=self.passthrough_wrapper_count,
+                files=self.passthrough_wrapper_files,
+            ),
+        ]
+
+    def get_smell_files(self) -> dict[str, list[str]]:
+        """Return smell name to files mapping for filtering."""
+        return {smell.name: smell.files for smell in self.get_smells()}
+
+    def get_smell_counts(self) -> dict[str, int]:
+        """Return smell name to count mapping for display."""
+        return {smell.name: smell.count for smell in self.get_smells()}
 
 
 class ExperimentRun(BaseModel):
@@ -869,7 +1194,6 @@ class RepoBaseline(BaseModel):
 
     current_metrics: ExtendedComplexityMetrics = Field(description="Metrics at HEAD commit")
 
-    # Date range and token metrics for Galen Rate calculation
     oldest_commit_date: datetime | None = Field(
         default=None, description="Timestamp of the oldest commit in the analysis"
     )
@@ -879,6 +1203,9 @@ class RepoBaseline(BaseModel):
     oldest_commit_tokens: int | None = Field(
         default=None, description="Total tokens in codebase at oldest analyzed commit"
     )
+
+    qpe_stats: HistoricalMetricStats | None = Field(default=None, description="QPE statistics from commit history")
+    current_qpe: "QPEScore | None" = Field(default=None, description="QPE score at HEAD")
 
 
 class ZScoreInterpretation(str, Enum):
@@ -941,6 +1268,9 @@ class ImpactAssessment(BaseModel):
     effort_delta: float = Field(description="Total Effort change (sum across all files)")
     mi_delta: float = Field(description="Total MI change (sum across all files)")
 
+    qpe_delta: float = Field(default=0.0, description="QPE change between baseline and current")
+    qpe_z_score: float = Field(default=0.0, description="Z-score for QPE change (positive = above avg improvement)")
+
     def interpret_cc(self, verbose: bool = False) -> ZScoreInterpretation:
         """Interpret CC z-score (lower CC is better, so invert)."""
         return ZScoreInterpretation.from_z_score(-self.cc_z_score, verbose)
@@ -953,24 +1283,28 @@ class ImpactAssessment(BaseModel):
         """Interpret MI z-score (higher MI is better, no inversion)."""
         return ZScoreInterpretation.from_z_score(self.mi_z_score, verbose)
 
+    def interpret_qpe(self, verbose: bool = False) -> ZScoreInterpretation:
+        """Interpret QPE z-score (higher QPE is better, no inversion)."""
+        return ZScoreInterpretation.from_z_score(self.qpe_z_score, verbose)
+
 
 class QPEScore(BaseModel):
     """Quality-Per-Effort score for principled code quality comparison.
 
-    QPE provides a single metric that:
-    - Uses MI as the sole quality signal (no double-counting with CC/Volume)
-    - Normalizes by Halstead Effort for fair cross-project comparison
-    - Includes code smell penalties with explicit weights
-    - Produces bounded output suitable for GRPO advantage calculation
+    Provides two metrics for different use cases:
+    - qpe: Effort-normalized score for GRPO rollout comparison (same spec)
+    - qpe_absolute: Raw quality without effort normalization (cross-project/temporal)
+
+    Uses MI as sole quality signal with sigmoid-saturated smell penalties.
     """
 
-    qpe: float = Field(description="Quality-per-effort score (higher is better)")
+    qpe: float = Field(description="Quality-per-effort score for GRPO (higher is better)")
+    qpe_absolute: float = Field(description="Quality without effort normalization (for cross-project/temporal)")
     mi_normalized: float = Field(description="Maintainability Index normalized to 0-1")
-    smell_penalty: float = Field(description="Penalty from code smells (0-0.5 range)")
+    smell_penalty: float = Field(description="Penalty from code smells (sigmoid-saturated, 0-0.9 range)")
     adjusted_quality: float = Field(description="MI after smell penalty applied")
     effort_factor: float = Field(description="log(total_halstead_effort + 1)")
 
-    # Component breakdown for debugging
     smell_counts: dict[str, int] = Field(
         default_factory=dict, description="Individual smell counts contributing to penalty"
     )
@@ -994,7 +1328,6 @@ class CrossProjectComparison(BaseModel):
     compared_at: datetime = Field(default_factory=datetime.now)
     total_projects: int = Field(description="Total number of projects compared")
 
-    # Flat rankings sorted by QPE (highest first)
     rankings: list[ProjectQPEResult] = Field(default_factory=list, description="Projects ranked by QPE, highest first")
 
 
@@ -1037,12 +1370,25 @@ class StagedChangesAnalysis(BaseModel):
 
 
 class CurrentChangesAnalysis(BaseModel):
-    """Complete analysis of uncommitted changes against repository baseline."""
+    """Complete analysis of changes against repository baseline."""
 
     repository_path: str
     analysis_timestamp: datetime = Field(default_factory=datetime.now)
 
-    changed_files: list[str] = Field(description="List of changed Python files (staged and unstaged)")
+    source: AnalysisSource = Field(
+        default=AnalysisSource.UNCOMMITTED_CHANGES,
+        description="Whether analyzing uncommitted changes or previous commit",
+    )
+    analyzed_commit_sha: str | None = Field(
+        default=None,
+        description="SHA of the commit being analyzed (when source is PREVIOUS_COMMIT)",
+    )
+    base_commit_sha: str | None = Field(
+        default=None,
+        description="SHA of the base commit for comparison (when source is PREVIOUS_COMMIT)",
+    )
+
+    changed_files: list[str] = Field(description="List of changed Python files")
     current_metrics: ExtendedComplexityMetrics = Field(description="Metrics with uncommitted changes applied")
     baseline_metrics: ExtendedComplexityMetrics = Field(description="Metrics at current HEAD")
 
@@ -1054,7 +1400,6 @@ class CurrentChangesAnalysis(BaseModel):
     )
     filtered_coverage: dict[str, float] | None = Field(default=None, description="Coverage % for changed files")
 
-    # Token impact metrics
     blind_spot_tokens: int = Field(default=0, description="Total tokens in blind spot files")
     changed_files_tokens: int = Field(default=0, description="Total tokens in changed files")
     complete_picture_context_size: int = Field(default=0, description="Sum of tokens in changed files + blind spots")

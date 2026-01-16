@@ -17,6 +17,7 @@ from slopometry.core.models import (
     RepoBaseline,
 )
 from slopometry.core.settings import settings
+from slopometry.summoner.services.qpe_calculator import QPECalculator
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,7 @@ class CommitDelta:
     cc_delta: float
     effort_delta: float
     mi_delta: float
+    qpe_delta: float
 
 
 def _compute_single_delta_task(repo_path: Path, parent_sha: str, child_sha: str) -> CommitDelta | None:
@@ -44,13 +46,14 @@ def _compute_single_delta_task(repo_path: Path, parent_sha: str, child_sha: str)
     NOTE: Must be at module level because ProcessPoolExecutor requires picklable callables.
     """
     git_tracker = GitTracker(repo_path)
+    qpe_calculator = QPECalculator()
     parent_dir = None
     child_dir = None
 
     try:
         changed_files = git_tracker.get_changed_python_files(parent_sha, child_sha)
         if not changed_files:
-            return CommitDelta(cc_delta=0.0, effort_delta=0.0, mi_delta=0.0)
+            return CommitDelta(cc_delta=0.0, effort_delta=0.0, mi_delta=0.0, qpe_delta=0.0)
 
         parent_dir = git_tracker.extract_specific_files_from_commit(parent_sha, changed_files)
         child_dir = git_tracker.extract_specific_files_from_commit(child_sha, changed_files)
@@ -66,15 +69,18 @@ def _compute_single_delta_task(repo_path: Path, parent_sha: str, child_sha: str)
         parent_cc = parent_metrics.total_complexity if parent_metrics else 0
         parent_effort = parent_metrics.total_effort if parent_metrics else 0.0
         parent_mi = parent_metrics.total_mi if parent_metrics else 0.0
+        parent_qpe = qpe_calculator.calculate_qpe(parent_metrics).qpe if parent_metrics else 0.0
 
         child_cc = child_metrics.total_complexity if child_metrics else 0
         child_effort = child_metrics.total_effort if child_metrics else 0.0
         child_mi = child_metrics.total_mi if child_metrics else 0.0
+        child_qpe = qpe_calculator.calculate_qpe(child_metrics).qpe if child_metrics else 0.0
 
         return CommitDelta(
             cc_delta=child_cc - parent_cc,
             effort_delta=child_effort - parent_effort,
             mi_delta=child_mi - parent_mi,
+            qpe_delta=child_qpe - parent_qpe,
         )
 
     except GitOperationError as e:
@@ -116,7 +122,7 @@ class BaselineService:
 
         if not recompute:
             cached = self.db.get_cached_baseline(str(repo_path), head_sha)
-            if cached:
+            if cached and cached.qpe_stats is not None:
                 return cached
 
         baseline = self.compute_full_baseline(repo_path, max_workers=max_workers)
@@ -157,12 +163,15 @@ class BaselineService:
         cc_deltas = [d.cc_delta for d in deltas]
         effort_deltas = [d.effort_delta for d in deltas]
         mi_deltas = [d.mi_delta for d in deltas]
+        qpe_deltas = [d.qpe_delta for d in deltas]
 
-        # commits are in reverse chronological order (newest first, oldest last)
         newest_commit_date = commits[0].timestamp
         oldest_commit_date = commits[-1].timestamp
 
         oldest_commit_tokens = self._get_commit_token_count(repo_path, commits[-1].sha, analyzer)
+
+        qpe_calculator = QPECalculator()
+        current_qpe = qpe_calculator.calculate_qpe(current_metrics)
 
         return RepoBaseline(
             repository_path=str(repo_path),
@@ -176,6 +185,8 @@ class BaselineService:
             oldest_commit_date=oldest_commit_date,
             newest_commit_date=newest_commit_date,
             oldest_commit_tokens=oldest_commit_tokens,
+            qpe_stats=self._compute_stats("qpe_delta", qpe_deltas),
+            current_qpe=current_qpe,
         )
 
     def _get_all_commits(self, repo_path: Path) -> list[CommitInfo]:
