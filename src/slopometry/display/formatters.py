@@ -4,10 +4,17 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
-from rich.console import Console
 from rich.table import Table
 
-from slopometry.core.models import CompactEvent, TokenUsage, ZScoreInterpretation
+from slopometry.core.models import (
+    SMELL_REGISTRY,
+    CompactEvent,
+    SmellCategory,
+    TokenUsage,
+    ZScoreInterpretation,
+    get_smell_label,
+    get_smells_by_category,
+)
 from slopometry.core.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -60,6 +67,7 @@ def truncate_path(path: str, max_width: int = 55) -> str:
 
 
 from slopometry.core.models import (
+    AnalysisSource,
     ContextCoverage,
     CrossProjectComparison,
     CurrentChangesAnalysis,
@@ -73,8 +81,7 @@ from slopometry.core.models import (
     SessionStatistics,
     StagedChangesAnalysis,
 )
-
-console = Console()
+from slopometry.display.console import console
 
 
 def _calculate_galen_metrics_from_baseline(
@@ -257,7 +264,7 @@ def _display_compact_events(compact_events: list[CompactEvent]) -> None:
 
     console.print(f"\n[bold]Compacts ({len(compact_events)})[/bold]")
     table = Table()
-    table.add_column("Time", style="cyan")
+    table.add_column("Date/Time", style="cyan")
     table.add_column("Trigger", style="yellow")
     table.add_column("Pre-Tokens", justify="right")
     table.add_column("Version", style="dim")
@@ -266,7 +273,7 @@ def _display_compact_events(compact_events: list[CompactEvent]) -> None:
 
     for compact in compact_events:
         table.add_row(
-            compact.timestamp.strftime("%H:%M:%S"),
+            compact.timestamp.strftime("%m-%d %H:%M"),
             compact.trigger,
             _format_token_count(compact.pre_tokens),
             compact.version,
@@ -387,40 +394,15 @@ def _display_complexity_metrics(
     )
 
     overview_table.add_row("[bold]Code Smells[/bold]", "")
+    smell_counts = metrics.get_smell_counts()
 
-    smell_color = "red" if metrics.orphan_comment_count > 0 else "green"
-    overview_table.add_row("  Orphan Comments", f"[{smell_color}]{metrics.orphan_comment_count}[/{smell_color}]")
-
-    smell_color = "red" if metrics.untracked_todo_count > 0 else "green"
-    overview_table.add_row("  Untracked TODOs", f"[{smell_color}]{metrics.untracked_todo_count}[/{smell_color}]")
-
-    smell_color = "red" if metrics.inline_import_count > 0 else "green"
-    overview_table.add_row("  Inline Imports", f"[{smell_color}]{metrics.inline_import_count}[/{smell_color}]")
-
-    smell_color = "red" if metrics.dict_get_with_default_count > 0 else "green"
-    overview_table.add_row(
-        "  .get() w/ Defaults", f"[{smell_color}]{metrics.dict_get_with_default_count}[/{smell_color}]"
-    )
-
-    smell_color = "red" if metrics.hasattr_getattr_count > 0 else "green"
-    overview_table.add_row("  hasattr/getattr", f"[{smell_color}]{metrics.hasattr_getattr_count}[/{smell_color}]")
-
-    smell_color = "red" if metrics.nonempty_init_count > 0 else "green"
-    overview_table.add_row("  Non-empty __init__", f"[{smell_color}]{metrics.nonempty_init_count}[/{smell_color}]")
-
-    smell_color = "red" if metrics.test_skip_count > 0 else "green"
-    overview_table.add_row("  Test Skips", f"[{smell_color}]{metrics.test_skip_count}[/{smell_color}]")
-
-    smell_color = "red" if metrics.swallowed_exception_count > 0 else "green"
-    overview_table.add_row(
-        "  Swallowed Exceptions", f"[{smell_color}]{metrics.swallowed_exception_count}[/{smell_color}]"
-    )
-
-    smell_color = "red" if metrics.type_ignore_count > 0 else "green"
-    overview_table.add_row("  Type Ignores", f"[{smell_color}]{metrics.type_ignore_count}[/{smell_color}]")
-
-    smell_color = "red" if metrics.dynamic_execution_count > 0 else "green"
-    overview_table.add_row("  Dynamic Execution", f"[{smell_color}]{metrics.dynamic_execution_count}[/{smell_color}]")
+    for category in [SmellCategory.GENERAL, SmellCategory.PYTHON]:
+        category_label = "General" if category == SmellCategory.GENERAL else "Python"
+        overview_table.add_row(f"  [dim]{category_label}[/dim]", "")
+        for defn in get_smells_by_category(category):
+            count = smell_counts[defn.internal_name]
+            smell_color = "red" if count > 0 else "green"
+            overview_table.add_row(f"    {defn.label}", f"[{smell_color}]{count}[/{smell_color}]")
 
     console.print(overview_table)
 
@@ -430,32 +412,20 @@ def _display_complexity_metrics(
     if show_smell_files:
         _display_code_smells_detailed(metrics)
     else:
-        has_smell_files = any(
-            [
-                metrics.orphan_comment_files,
-                metrics.untracked_todo_files,
-                metrics.inline_import_files,
-                metrics.dict_get_with_default_files,
-                metrics.hasattr_getattr_files,
-                metrics.nonempty_init_files,
-                metrics.test_skip_files,
-                metrics.swallowed_exception_files,
-                metrics.type_ignore_files,
-                metrics.dynamic_execution_files,
-            ]
-        )
+        smell_files = metrics.get_smell_files()
+        has_smell_files = any(smell_files.values())
         if has_smell_files:
             console.print("\n[dim]Run with --smell-details to see affected files[/dim]")
 
-    if metrics.files_by_complexity:
-        files_table = Table(title="Files by Complexity")
+    if metrics.files_by_effort:
+        files_table = Table(title="Files by Halstead Effort")
         files_table.add_column("File", style="cyan", no_wrap=True, max_width=55)
-        files_table.add_column("Complexity", justify="right", width=12)
+        files_table.add_column("Effort", justify="right", width=12)
 
-        sorted_files = sorted(metrics.files_by_complexity.items(), key=lambda x: x[1], reverse=True)[:10]
+        sorted_files = sorted(metrics.files_by_effort.items(), key=lambda x: x[1], reverse=True)[:10]
 
-        for file_path, complexity in sorted_files:
-            files_table.add_row(truncate_path(file_path, max_width=55), str(complexity))
+        for file_path, effort in sorted_files:
+            files_table.add_row(truncate_path(file_path, max_width=55), f"{effort:,.0f}")
 
         console.print(files_table)
 
@@ -1136,21 +1106,28 @@ def display_current_impact_analysis(
     compact_events: list[CompactEvent] | None = None,
     show_file_details: bool = False,
 ) -> None:
-    """Display uncommitted changes impact analysis with Rich formatting.
+    """Display changes impact analysis with Rich formatting.
 
     Args:
         analysis: The current changes analysis to display
         compact_events: Optional list of compact events from session transcript
         show_file_details: Whether to show detailed file lists (blind spots)
     """
-    console.print("\n[bold]Uncommitted Changes Impact Analysis[/bold]")
+    if analysis.source == AnalysisSource.PREVIOUS_COMMIT:
+        title = f"Previous Commit Impact Analysis ({analysis.base_commit_sha}..{analysis.analyzed_commit_sha})"
+        impact_title = "Previous Commit Impact"
+    else:
+        title = "Uncommitted Changes Impact Analysis"
+        impact_title = "Uncommitted Changes Impact"
+
+    console.print(f"\n[bold]{title}[/bold]")
 
     console.print(f"Repository: {analysis.repository_path}")
 
     display_baseline_comparison(
         baseline=analysis.baseline,
         assessment=analysis.assessment,
-        title="Uncommitted Changes Impact",
+        title=impact_title,
     )
 
     console.print("\n[bold]Token Impact:[/bold]")
@@ -1251,33 +1228,17 @@ def _display_code_smells_detailed(metrics: ExtendedComplexityMetrics, filter_fil
             return files
         return [f for f in files if f in filter_files]
 
-    has_smells = False
+    smell_files = metrics.get_smell_files()
+    smell_data_by_category: dict[SmellCategory, list[tuple[str, list[str]]]] = {
+        SmellCategory.GENERAL: [],
+        SmellCategory.PYTHON: [],
+    }
+    for defn in SMELL_REGISTRY.values():
+        files = get_filtered_files(smell_files[defn.internal_name])
+        if files:
+            smell_data_by_category[defn.category].append((defn.label, files))
 
-    orphan_files = get_filtered_files(metrics.orphan_comment_files)
-    todo_files = get_filtered_files(metrics.untracked_todo_files)
-    import_files = get_filtered_files(metrics.inline_import_files)
-    get_files = get_filtered_files(metrics.dict_get_with_default_files)
-    getattr_files = get_filtered_files(metrics.hasattr_getattr_files)
-    init_files = get_filtered_files(metrics.nonempty_init_files)
-    test_skip_files = get_filtered_files(metrics.test_skip_files)
-    swallowed_exception_files = get_filtered_files(metrics.swallowed_exception_files)
-    type_ignore_files = get_filtered_files(metrics.type_ignore_files)
-    dynamic_execution_files = get_filtered_files(metrics.dynamic_execution_files)
-
-    if (
-        orphan_files
-        or todo_files
-        or import_files
-        or get_files
-        or getattr_files
-        or init_files
-        or test_skip_files
-        or swallowed_exception_files
-        or type_ignore_files
-        or dynamic_execution_files
-    ):
-        has_smells = True
-
+    has_smells = any(smell_data_by_category[cat] for cat in smell_data_by_category)
     if not has_smells:
         return
 
@@ -1290,28 +1251,16 @@ def _display_code_smells_detailed(metrics: ExtendedComplexityMetrics, filter_fil
     table.add_column("Count", justify="right", width=8)
     table.add_column("Affected Files", style="dim", max_width=55)
 
-    def add_smell_row(label: str, files: list[str]) -> None:
-        count = len(files)
-        if count == 0:
-            return
-
-        color = "red"
-        count_str = f"[{color}]{count}[/{color}]"
-
-        files_display = "\n".join(truncate_path(f, max_width=55) for f in sorted(files))
-
-        table.add_row(label, count_str, files_display)
-
-    add_smell_row("Orphan Comments", orphan_files)
-    add_smell_row("Untracked TODOs", todo_files)
-    add_smell_row("Inline Imports", import_files)
-    add_smell_row(".get() w/ Defaults", get_files)
-    add_smell_row("hasattr/getattr", getattr_files)
-    add_smell_row("Non-empty __init__", init_files)
-    add_smell_row("Test Skips", test_skip_files)
-    add_smell_row("Swallowed Exceptions", swallowed_exception_files)
-    add_smell_row("Type Ignores", type_ignore_files)
-    add_smell_row("Dynamic Execution", dynamic_execution_files)
+    for category in [SmellCategory.GENERAL, SmellCategory.PYTHON]:
+        smell_data = smell_data_by_category[category]
+        if not smell_data:
+            continue
+        category_label = "General" if category == SmellCategory.GENERAL else "Python"
+        table.add_row(f"[bold dim]{category_label}[/bold dim]", "", "")
+        for label, files in smell_data:
+            count_str = f"[red]{len(files)}[/red]"
+            files_display = "\n".join(truncate_path(f, max_width=55) for f in sorted(files))
+            table.add_row(f"  {label}", count_str, files_display)
 
     console.print(table)
 
@@ -1335,24 +1284,13 @@ def display_baseline_comparison(
     baseline_table.add_column("Std Dev", justify="right")
     baseline_table.add_column("Trend", justify="right")
 
-    baseline_table.add_row(
-        "Cyclomatic Complexity",
-        f"{baseline.cc_delta_stats.mean:+.1f}",
-        f"±{baseline.cc_delta_stats.std_dev:.1f}",
-        _format_trend(baseline.cc_delta_stats.trend_coefficient, lower_is_better=True),
-    )
-    baseline_table.add_row(
-        "Halstead Effort",
-        f"{baseline.effort_delta_stats.mean:+.2f}",
-        f"±{baseline.effort_delta_stats.std_dev:.2f}",
-        _format_trend(baseline.effort_delta_stats.trend_coefficient, lower_is_better=True),
-    )
-    baseline_table.add_row(
-        "Maintainability Index",
-        f"{baseline.mi_delta_stats.mean:+.2f}",
-        f"±{baseline.mi_delta_stats.std_dev:.2f}",
-        _format_trend(baseline.mi_delta_stats.trend_coefficient, lower_is_better=False),
-    )
+    if baseline.qpe_stats:
+        baseline_table.add_row(
+            "QPE (GRPO)",
+            f"{baseline.qpe_stats.mean:+.4f}",
+            f"±{baseline.qpe_stats.std_dev:.4f}",
+            _format_trend(baseline.qpe_stats.trend_coefficient, lower_is_better=False),
+        )
 
     console.print(baseline_table)
 
@@ -1364,28 +1302,12 @@ def display_baseline_comparison(
     impact_table.add_column("Z-Score", justify="right")
     impact_table.add_column("Assessment", style="dim")
 
-    cc_color = "green" if assessment.cc_z_score < 0 else "red" if assessment.cc_z_score > 0 else "yellow"
+    qpe_color = "green" if assessment.qpe_z_score > 0 else "red" if assessment.qpe_z_score < 0 else "yellow"
     impact_table.add_row(
-        "Cyclomatic Complexity",
-        f"[{cc_color}]{assessment.cc_delta:+.2f}[/{cc_color}]",
-        f"{assessment.cc_z_score:+.2f}",
-        _interpret_z_score(-assessment.cc_z_score),
-    )
-
-    effort_color = "green" if assessment.effort_z_score < 0 else "red" if assessment.effort_z_score > 0 else "yellow"
-    impact_table.add_row(
-        "Average Effort",
-        f"[{effort_color}]{assessment.effort_delta:+.2f}[/{effort_color}]",
-        f"{assessment.effort_z_score:+.2f}",
-        _interpret_z_score(-assessment.effort_z_score),
-    )
-
-    mi_color = "green" if assessment.mi_z_score > 0 else "red" if assessment.mi_z_score < 0 else "yellow"
-    impact_table.add_row(
-        "Maintainability Index",
-        f"[{mi_color}]{assessment.mi_delta:+.2f}[/{mi_color}]",
-        f"{assessment.mi_z_score:+.2f}",
-        _interpret_z_score(assessment.mi_z_score),
+        "QPE (GRPO)",
+        f"[{qpe_color}]{assessment.qpe_delta:+.4f}[/{qpe_color}]",
+        f"{assessment.qpe_z_score:+.2f}",
+        _interpret_z_score(assessment.qpe_z_score),
     )
 
     console.print(impact_table)
@@ -1416,21 +1338,9 @@ def display_baseline_comparison_compact(
     lines = []
     lines.append(f"Repository Baseline ({baseline.total_commits_analyzed} commits):")
 
-    cc_sign = "↓" if assessment.cc_z_score < 0 else "↑" if assessment.cc_z_score > 0 else "→"
-    cc_quality = "good" if assessment.cc_z_score < 0 else "above avg" if assessment.cc_z_score > 0 else "avg"
-    lines.append(f"  CC: {assessment.cc_delta:+.2f} (Z: {assessment.cc_z_score:+.2f} {cc_sign} {cc_quality})")
-
-    effort_sign = "↓" if assessment.effort_z_score < 0 else "↑" if assessment.effort_z_score > 0 else "→"
-    effort_quality = (
-        "good" if assessment.effort_z_score < 0 else "above avg" if assessment.effort_z_score > 0 else "avg"
-    )
-    lines.append(
-        f"  Effort: {assessment.effort_delta:+.2f} (Z: {assessment.effort_z_score:+.2f} {effort_sign} {effort_quality})"
-    )
-
-    mi_sign = "↑" if assessment.mi_z_score > 0 else "↓" if assessment.mi_z_score < 0 else "→"
-    mi_quality = "good" if assessment.mi_z_score > 0 else "below avg" if assessment.mi_z_score < 0 else "avg"
-    lines.append(f"  MI: {assessment.mi_delta:+.2f} (Z: {assessment.mi_z_score:+.2f} {mi_sign} {mi_quality})")
+    qpe_sign = "↑" if assessment.qpe_z_score > 0 else "↓" if assessment.qpe_z_score < 0 else "→"
+    qpe_quality = "good" if assessment.qpe_z_score > 0 else "below avg" if assessment.qpe_z_score < 0 else "avg"
+    lines.append(f"  QPE (GRPO): {assessment.qpe_delta:+.4f} (Z: {assessment.qpe_z_score:+.2f} {qpe_sign} {qpe_quality})")
 
     category_display = assessment.impact_category.value.replace("_", " ").upper()
     lines.append(f"Session Impact: {category_display} ({assessment.impact_score:+.2f})")
@@ -1451,8 +1361,11 @@ def display_qpe_score(
 
     console.print("\n[bold]Quality-Per-Effort Score[/bold]")
 
+    # Show both QPE metrics
     qpe_color = "green" if qpe_score.qpe > 0.05 else "yellow" if qpe_score.qpe > 0.02 else "red"
-    console.print(f"  [bold]QPE:[/bold] [{qpe_color}]{qpe_score.qpe:.4f}[/{qpe_color}]")
+    qual_color = "green" if qpe_score.qpe_absolute > 0.6 else "yellow" if qpe_score.qpe_absolute > 0.4 else "red"
+    console.print(f"  [bold]QPE (GRPO):[/bold] [{qpe_color}]{qpe_score.qpe:.4f}[/{qpe_color}]  [dim]effort-normalized for rollout comparison[/dim]")
+    console.print(f"  [bold]Quality:[/bold]    [{qual_color}]{qpe_score.qpe_absolute:.4f}[/{qual_color}]  [dim]absolute for cross-project/temporal[/dim]")
 
     component_table = Table(title="QPE Components", show_header=True)
     component_table.add_column("Component", style="cyan")
@@ -1469,13 +1382,13 @@ def display_qpe_score(
     component_table.add_row(
         "Smell Penalty",
         f"[{smell_color}]{qpe_score.smell_penalty:.3f}[/{smell_color}]",
-        "Weighted code smell deduction (0-0.5)",
+        "Sigmoid-saturated deduction (0-0.9)",
     )
 
     component_table.add_row(
         "Adjusted Quality",
         f"{qpe_score.adjusted_quality:.3f}",
-        "MI × (1 - smell_penalty)",
+        "MI × (1 - smell_penalty) + bonuses",
     )
 
     component_table.add_row(
@@ -1491,13 +1404,23 @@ def display_qpe_score(
         smell_table.add_column("Smell", style="cyan")
         smell_table.add_column("Count", justify="right")
 
-        for smell_name, count in sorted(qpe_score.smell_counts.items(), key=lambda x: -x[1]):
-            if count > 0:
-                smell_table.add_row(smell_name.replace("_", " ").title(), str(count))
+        for category in [SmellCategory.GENERAL, SmellCategory.PYTHON]:
+            category_smells = [
+                (name, qpe_score.smell_counts[name])
+                for name in qpe_score.smell_counts
+                if SMELL_REGISTRY.get(name) and SMELL_REGISTRY[name].category == category
+            ]
+            category_smells = [(n, c) for n, c in category_smells if c > 0]
+            if not category_smells:
+                continue
+            category_label = "General" if category == SmellCategory.GENERAL else "Python"
+            smell_table.add_row(f"[bold dim]{category_label}[/bold dim]", "")
+            for smell_name, count in sorted(category_smells, key=lambda x: -x[1]):
+                smell_table.add_row(f"  {get_smell_label(smell_name)}", str(count))
 
         console.print(smell_table)
 
-    console.print("\n[dim]Higher QPE = better quality per unit effort[/dim]")
+    console.print("\n[dim]Higher QPE (GRPO) = better quality per effort | Higher Quality = better absolute quality[/dim]")
 
 
 def display_cross_project_comparison(comparison: "CrossProjectComparison") -> None:
@@ -1538,7 +1461,7 @@ def display_cross_project_comparison(comparison: "CrossProjectComparison") -> No
         )
 
     console.print(table)
-    console.print("\n[dim]Higher QPE = better quality per unit effort[/dim]")
+    console.print("\n[dim]Higher QPE = better quality per effort | Higher Quality = better absolute quality[/dim]")
 
 
 def display_leaderboard(entries: list) -> None:
@@ -1588,4 +1511,4 @@ def display_leaderboard(entries: list) -> None:
         )
 
     console.print(table)
-    console.print("\n[dim]Higher QPE = better quality per unit effort. Use --append to add projects.[/dim]")
+    console.print("\n[dim]Higher QPE = better quality per effort. Use --append to add projects.[/dim]")

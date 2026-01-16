@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 
 from conftest import make_test_metrics
 
-from slopometry.core.models import ExtendedComplexityMetrics, HistoricalMetricStats, RepoBaseline
+from slopometry.core.models import ExtendedComplexityMetrics, HistoricalMetricStats, QPEScore, RepoBaseline
 from slopometry.summoner.services.baseline_service import (
     BaselineService,
     CommitInfo,
@@ -167,6 +167,25 @@ class TestGetOrComputeBaseline:
             current_metrics=ExtendedComplexityMetrics(**make_test_metrics(total_complexity=100)),
             oldest_commit_date=datetime.now(),
             newest_commit_date=datetime.now(),
+            qpe_stats=HistoricalMetricStats(
+                metric_name="qpe_delta",
+                mean=0.001,
+                std_dev=0.005,
+                median=0.001,
+                min_value=-0.01,
+                max_value=0.02,
+                sample_count=10,
+                trend_coefficient=0.0,
+            ),
+            current_qpe=QPEScore(
+                qpe=0.03,
+                qpe_absolute=0.45,
+                mi_normalized=0.5,
+                smell_penalty=0.1,
+                adjusted_quality=0.45,
+                effort_factor=15.0,
+                smell_counts={},
+            ),
         )
         mock_db.get_cached_baseline.return_value = cached_baseline
 

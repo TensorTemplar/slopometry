@@ -23,7 +23,6 @@ class FeatureStats(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    # Basic counts (no actionable message needed)
     functions_count: int = 0
     classes_count: int = 0
     docstrings_count: int = 0
@@ -36,7 +35,6 @@ class FeatureStats(BaseModel):
     str_type_count: int = 0
     deprecations_count: int = 0
 
-    # Code smells - self-describing via SmellField metadata
     orphan_comment_count: int = SmellField(
         label="Orphan Comments",
         files_field="orphan_comment_files",
@@ -87,8 +85,25 @@ class FeatureStats(BaseModel):
         files_field="dynamic_execution_files",
         guidance="Review usage of eval/exec/compile - ensure this is necessary and secure",
     )
+    single_method_class_count: int = SmellField(
+        label="Single-Method Classes",
+        files_field="single_method_class_files",
+        guidance="Consider using a function instead of a class with only one method besides __init__",
+    )
+    deep_inheritance_count: int = SmellField(
+        label="Deep Inheritance",
+        files_field="deep_inheritance_files",
+        guidance="Prefer composition over inheritance; >2 base classes increases complexity",
+    )
+    passthrough_wrapper_count: int = SmellField(
+        label="Pass-Through Wrappers",
+        files_field="passthrough_wrapper_files",
+        guidance="Function that just delegates to another with same args; consider removing indirection",
+    )
 
-    # File tracking
+    total_loc: int = Field(default=0, description="Total lines of code")
+    code_loc: int = Field(default=0, description="Non-blank, non-comment lines (for QPE file filtering)")
+
     orphan_comment_files: set[str] = Field(default_factory=set)
     untracked_todo_files: set[str] = Field(default_factory=set)
     inline_import_files: set[str] = Field(default_factory=set)
@@ -99,6 +114,21 @@ class FeatureStats(BaseModel):
     swallowed_exception_files: set[str] = Field(default_factory=set)
     type_ignore_files: set[str] = Field(default_factory=set)
     dynamic_execution_files: set[str] = Field(default_factory=set)
+    single_method_class_files: set[str] = Field(default_factory=set)
+    deep_inheritance_files: set[str] = Field(default_factory=set)
+    passthrough_wrapper_files: set[str] = Field(default_factory=set)
+
+
+def _count_loc(content: str) -> tuple[int, int]:
+    """Count total lines and code lines (non-blank, non-comment).
+
+    Returns:
+        Tuple of (total_loc, code_loc)
+    """
+    lines = content.splitlines()
+    total = len(lines)
+    code = sum(1 for line in lines if line.strip() and not line.strip().startswith("#"))
+    return total, code
 
 
 def _analyze_single_file_features(file_path: Path) -> FeatureStats | None:
@@ -120,6 +150,7 @@ def _analyze_single_file_features(file_path: Path) -> FeatureStats | None:
     is_test_file = file_path.name.startswith("test_") or "/tests/" in str(file_path)
     orphan_comments, untracked_todos, type_ignores = _analyze_comments_standalone(content, is_test_file)
     nonempty_init = 1 if _is_nonempty_init_standalone(file_path, tree) else 0
+    total_loc, code_loc = _count_loc(content)
     path_str = str(file_path)
 
     return FeatureStats(
@@ -144,6 +175,11 @@ def _analyze_single_file_features(file_path: Path) -> FeatureStats | None:
         swallowed_exception_count=ast_stats.swallowed_exception_count,
         type_ignore_count=type_ignores,
         dynamic_execution_count=ast_stats.dynamic_execution_count,
+        single_method_class_count=ast_stats.single_method_class_count,
+        deep_inheritance_count=ast_stats.deep_inheritance_count,
+        passthrough_wrapper_count=ast_stats.passthrough_wrapper_count,
+        total_loc=total_loc,
+        code_loc=code_loc,
         orphan_comment_files={path_str} if orphan_comments > 0 else set(),
         untracked_todo_files={path_str} if untracked_todos > 0 else set(),
         inline_import_files={path_str} if ast_stats.inline_import_count > 0 else set(),
@@ -154,6 +190,9 @@ def _analyze_single_file_features(file_path: Path) -> FeatureStats | None:
         swallowed_exception_files={path_str} if ast_stats.swallowed_exception_count > 0 else set(),
         type_ignore_files={path_str} if type_ignores > 0 else set(),
         dynamic_execution_files={path_str} if ast_stats.dynamic_execution_count > 0 else set(),
+        single_method_class_files={path_str} if ast_stats.single_method_class_count > 0 else set(),
+        deep_inheritance_files={path_str} if ast_stats.deep_inheritance_count > 0 else set(),
+        passthrough_wrapper_files={path_str} if ast_stats.passthrough_wrapper_count > 0 else set(),
     )
 
 
@@ -247,13 +286,11 @@ class PythonFeatureAnalyzer:
 
         start_total = time.perf_counter()
 
-        # Use parallel processing for large file sets
         if len(python_files) >= settings.parallel_file_threshold:
             results = self._analyze_files_parallel(python_files)
         else:
             results = [_analyze_single_file_features(fp) for fp in python_files]
 
-        # Aggregate results
         aggregated = FeatureStats()
         for stats in results:
             if stats is not None:
@@ -310,6 +347,7 @@ class PythonFeatureAnalyzer:
         is_test_file = file_path.name.startswith("test_") or "/tests/" in str(file_path)
         orphan_comments, untracked_todos, type_ignores = self._analyze_comments(content, is_test_file)
         nonempty_init = 1 if self._is_nonempty_init(file_path, tree) else 0
+        total_loc, code_loc = _count_loc(content)
         path_str = str(file_path)
 
         return FeatureStats(
@@ -334,6 +372,11 @@ class PythonFeatureAnalyzer:
             swallowed_exception_count=ast_stats.swallowed_exception_count,
             type_ignore_count=type_ignores,
             dynamic_execution_count=ast_stats.dynamic_execution_count,
+            single_method_class_count=ast_stats.single_method_class_count,
+            deep_inheritance_count=ast_stats.deep_inheritance_count,
+            passthrough_wrapper_count=ast_stats.passthrough_wrapper_count,
+            total_loc=total_loc,
+            code_loc=code_loc,
             orphan_comment_files={path_str} if orphan_comments > 0 else set(),
             untracked_todo_files={path_str} if untracked_todos > 0 else set(),
             inline_import_files={path_str} if ast_stats.inline_import_count > 0 else set(),
@@ -344,6 +387,9 @@ class PythonFeatureAnalyzer:
             swallowed_exception_files={path_str} if ast_stats.swallowed_exception_count > 0 else set(),
             type_ignore_files={path_str} if type_ignores > 0 else set(),
             dynamic_execution_files={path_str} if ast_stats.dynamic_execution_count > 0 else set(),
+            single_method_class_files={path_str} if ast_stats.single_method_class_count > 0 else set(),
+            deep_inheritance_files={path_str} if ast_stats.deep_inheritance_count > 0 else set(),
+            passthrough_wrapper_files={path_str} if ast_stats.passthrough_wrapper_count > 0 else set(),
         )
 
     def _is_nonempty_init(self, file_path: Path, tree: ast.Module) -> bool:
@@ -454,6 +500,11 @@ class PythonFeatureAnalyzer:
             swallowed_exception_count=s1.swallowed_exception_count + s2.swallowed_exception_count,
             type_ignore_count=s1.type_ignore_count + s2.type_ignore_count,
             dynamic_execution_count=s1.dynamic_execution_count + s2.dynamic_execution_count,
+            single_method_class_count=s1.single_method_class_count + s2.single_method_class_count,
+            deep_inheritance_count=s1.deep_inheritance_count + s2.deep_inheritance_count,
+            passthrough_wrapper_count=s1.passthrough_wrapper_count + s2.passthrough_wrapper_count,
+            total_loc=s1.total_loc + s2.total_loc,
+            code_loc=s1.code_loc + s2.code_loc,
             orphan_comment_files=s1.orphan_comment_files | s2.orphan_comment_files,
             untracked_todo_files=s1.untracked_todo_files | s2.untracked_todo_files,
             inline_import_files=s1.inline_import_files | s2.inline_import_files,
@@ -464,6 +515,9 @@ class PythonFeatureAnalyzer:
             swallowed_exception_files=s1.swallowed_exception_files | s2.swallowed_exception_files,
             type_ignore_files=s1.type_ignore_files | s2.type_ignore_files,
             dynamic_execution_files=s1.dynamic_execution_files | s2.dynamic_execution_files,
+            single_method_class_files=s1.single_method_class_files | s2.single_method_class_files,
+            deep_inheritance_files=s1.deep_inheritance_files | s2.deep_inheritance_files,
+            passthrough_wrapper_files=s1.passthrough_wrapper_files | s2.passthrough_wrapper_files,
         )
 
 
@@ -490,6 +544,10 @@ class FeatureVisitor(ast.NodeVisitor):
         self.test_skips = 0
         self.swallowed_exceptions = 0
         self.dynamic_executions = 0
+        # Abstraction smells
+        self.single_method_classes = 0
+        self.deep_inheritances = 0
+        self.passthrough_wrappers = 0
 
     @property
     def stats(self) -> FeatureStats:
@@ -511,6 +569,9 @@ class FeatureVisitor(ast.NodeVisitor):
             test_skip_count=self.test_skips,
             swallowed_exception_count=self.swallowed_exceptions,
             dynamic_execution_count=self.dynamic_executions,
+            single_method_class_count=self.single_method_classes,
+            deep_inheritance_count=self.deep_inheritances,
+            passthrough_wrapper_count=self.passthrough_wrappers,
         )
 
     def _collect_type_names(self, node: ast.AST | None) -> None:
@@ -588,6 +649,10 @@ class FeatureVisitor(ast.NodeVisitor):
             if self._is_test_skip_decorator(decorator):
                 self.test_skips += 1
 
+        # Pass-through wrapper detection
+        if self._is_passthrough(node):
+            self.passthrough_wrappers += 1
+
         self._scope_depth += 1
         self.generic_visit(node)
         self._scope_depth -= 1
@@ -599,6 +664,11 @@ class FeatureVisitor(ast.NodeVisitor):
                 self.deprecations += 1
             if self._is_test_skip_decorator(decorator):
                 self.test_skips += 1
+
+        # Pass-through wrapper detection
+        if self._is_passthrough(node):
+            self.passthrough_wrappers += 1
+
         self._scope_depth += 1
         self.generic_visit(node)
         self._scope_depth -= 1
@@ -632,6 +702,17 @@ class FeatureVisitor(ast.NodeVisitor):
         for decorator in node.decorator_list:
             if self._is_deprecated_decorator(decorator):
                 self.deprecations += 1
+
+        # Deep inheritance: >2 base classes
+        if len(node.bases) > 2:
+            self.deep_inheritances += 1
+
+        # Single-method class: only one method besides __init__
+        methods = [
+            n for n in node.body if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef) and n.name != "__init__"
+        ]
+        if len(methods) == 1:
+            self.single_method_classes += 1
 
         self._scope_depth += 1
         self.generic_visit(node)
@@ -727,6 +808,36 @@ class FeatureVisitor(ast.NodeVisitor):
         if isinstance(func, ast.Name):
             return func.id in ("eval", "exec", "compile")
         return False
+
+    def _is_passthrough(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+        """Check if function just returns a call with same arguments.
+
+        A pass-through wrapper is a function whose body is just:
+        - return other_func(arg1, arg2, ...)
+        where arg1, arg2, ... are exactly the function's parameters (excluding self/cls).
+        """
+        # Skip if function has docstring (body[0] is docstring, body[1] might be return)
+        body = node.body
+        if ast.get_docstring(node):
+            body = body[1:]
+
+        if len(body) != 1:
+            return False
+
+        stmt = body[0]
+        if not isinstance(stmt, ast.Return) or not isinstance(stmt.value, ast.Call):
+            return False
+
+        call = stmt.value
+
+        func_args = [arg.arg for arg in node.args.args if arg.arg not in ("self", "cls")]
+
+        if not func_args:
+            return False
+
+        call_args = [arg.id for arg in call.args if isinstance(arg, ast.Name)]
+
+        return func_args == call_args
 
     def visit_If(self, node: ast.If) -> None:
         """Track TYPE_CHECKING blocks to exclude their imports."""

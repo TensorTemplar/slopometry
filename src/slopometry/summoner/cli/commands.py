@@ -8,11 +8,11 @@ from pathlib import Path
 
 import click
 from click.shell_completion import CompletionItem
-from rich.console import Console
+
+from slopometry.display.console import console
 
 # Imports moved inside functions to optimize startup time
 
-console = Console()
 logger = logging.getLogger(__name__)
 
 
@@ -295,11 +295,13 @@ def _show_commit_range_baseline_comparison(repo_path: Path, start: str, end: str
     is_flag=True,
     help="Show detailed file lists (blind spots)",
 )
+@click.option("--pager/--no-pager", default=True, help="Use pager for long output (like less)")
 def current_impact(
     repo_path: Path | None,
     recompute_baseline: bool,
     max_workers: int,
     file_details: bool,
+    pager: bool,
 ) -> None:
     """Analyze impact of uncommitted changes against repository baseline.
 
@@ -319,6 +321,14 @@ def current_impact(
     if repo_path is None:
         repo_path = Path.cwd()
 
+    from slopometry.core.project_guard import MultiProjectError, guard_single_project
+
+    try:
+        guard_single_project(repo_path)
+    except MultiProjectError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        return
+
     from slopometry.core.language_guard import check_language_support
     from slopometry.core.models import ProjectLanguage
     from slopometry.core.working_tree_extractor import WorkingTreeExtractor
@@ -334,22 +344,22 @@ def current_impact(
         return
 
     extractor = WorkingTreeExtractor(repo_path)
+    baseline_service = BaselineService()
+    current_impact_service = CurrentImpactService()
 
     changed_files = extractor.get_changed_python_files()
+    analyze_previous = False
+
     if not changed_files:
         if not extractor.has_uncommitted_changes():
-            console.print("[yellow]No uncommitted changes found.[/yellow]")
-            console.print("[dim]Make some changes and try again.[/dim]")
+            console.print("[yellow]No uncommitted changes found. Falling back to analyzing previous commit.[/yellow]")
+            analyze_previous = True
         else:
             console.print("[yellow]No uncommitted Python files found.[/yellow]")
             console.print("[dim]Modify some Python files and try again.[/dim]")
-        return
+            return
 
-    console.print("[bold]Analyzing uncommitted changes impact[/bold]")
     console.print(f"Repository: {repo_path}")
-    console.print(f"Changed Python files: {len(changed_files)}")
-
-    baseline_service = BaselineService()
 
     console.print("\n[yellow]Computing repository baseline...[/yellow]")
     baseline = baseline_service.get_or_compute_baseline(
@@ -363,32 +373,47 @@ def current_impact(
 
     console.print(f"[green]✓ Baseline computed from {baseline.total_commits_analyzed} commits[/green]")
 
-    console.print("\n[yellow]Analyzing uncommitted changes...[/yellow]")
-
-    current_impact_service = CurrentImpactService()
     try:
-        analysis = current_impact_service.analyze_uncommitted_changes(repo_path, baseline)
+        if analyze_previous:
+            console.print("\n[yellow]Analyzing previous commit...[/yellow]")
+            analysis = current_impact_service.analyze_previous_commit(repo_path, baseline)
 
-        if not analysis:
-            console.print("[red]Failed to analyze uncommitted changes.[/red]")
-            return
+            if not analysis:
+                console.print("[red]Failed to analyze previous commit.[/red]")
+                console.print("[dim]Ensure the repository has at least 2 commits with Python changes.[/dim]")
+                return
 
-        try:
-            from slopometry.core.coverage_analyzer import CoverageAnalyzer
+            console.print(f"Changed Python files in previous commit: {len(analysis.changed_files)}")
+        else:
+            console.print("[bold]Analyzing uncommitted changes impact[/bold]")
+            console.print(f"Changed Python files: {len(changed_files)}")
+            console.print("\n[yellow]Analyzing uncommitted changes...[/yellow]")
+            analysis = current_impact_service.analyze_uncommitted_changes(repo_path, baseline)
 
-            coverage_analyzer = CoverageAnalyzer(repo_path)
-            coverage_result = coverage_analyzer.analyze_coverage()
+            if not analysis:
+                console.print("[red]Failed to analyze uncommitted changes.[/red]")
+                return
 
-            if coverage_result.coverage_available:
-                analysis.current_metrics.test_coverage_percent = coverage_result.total_coverage_percent
-                analysis.current_metrics.test_coverage_source = coverage_result.source_file
-        except Exception as e:
-            logger.debug(f"Coverage analysis failed (optional): {e}")
+            try:
+                from slopometry.core.coverage_analyzer import CoverageAnalyzer
 
-        display_current_impact_analysis(analysis, show_file_details=file_details)
+                coverage_analyzer = CoverageAnalyzer(repo_path)
+                coverage_result = coverage_analyzer.analyze_coverage()
+
+                if coverage_result.coverage_available:
+                    analysis.current_metrics.test_coverage_percent = coverage_result.total_coverage_percent
+                    analysis.current_metrics.test_coverage_source = coverage_result.source_file
+            except Exception as e:
+                logger.debug(f"Coverage analysis failed (optional): {e}")
+
+        if pager:
+            with console.pager(styles=True):
+                display_current_impact_analysis(analysis, show_file_details=file_details)
+        else:
+            display_current_impact_analysis(analysis, show_file_details=file_details)
 
     except Exception as e:
-        console.print(f"[red]Failed to analyze uncommitted changes: {e}[/red]")
+        console.print(f"[red]Failed to analyze changes: {e}[/red]")
         sys.exit(1)
 
 
@@ -962,6 +987,17 @@ def qpe(repo_path: Path | None, output_json: bool) -> None:
     """
     if repo_path is None:
         repo_path = Path.cwd()
+
+    from slopometry.core.project_guard import MultiProjectError, guard_single_project
+
+    try:
+        guard_single_project(repo_path)
+    except MultiProjectError as e:
+        if output_json:
+            print(f'{{"error": "{e.project_count} git repositories found. Run from within a specific project."}}')
+        else:
+            console.print(f"[red]Error:[/red] {e}")
+        return
 
     from slopometry.core.language_guard import check_language_support
     from slopometry.core.models import ProjectLanguage

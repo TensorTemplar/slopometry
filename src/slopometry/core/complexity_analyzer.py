@@ -14,7 +14,7 @@ from slopometry.core.models import (
     ExtendedComplexityMetrics,
     FileAnalysisResult,
 )
-from slopometry.core.python_feature_analyzer import PythonFeatureAnalyzer
+from slopometry.core.python_feature_analyzer import PythonFeatureAnalyzer, _count_loc
 from slopometry.core.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -172,7 +172,8 @@ class ComplexityAnalyzer:
                 files_by_token_count[relative_path] = token_count
                 all_token_counts.append(token_count)
 
-            except (SyntaxError, UnicodeDecodeError, OSError):
+            except (SyntaxError, UnicodeDecodeError, OSError) as e:
+                logger.debug(f"Skipping unparseable file {file_path}: {e}")
                 continue
 
         total_files = len(all_complexities)
@@ -349,8 +350,38 @@ class ComplexityAnalyzer:
             delta.dynamic_execution_change = (
                 current_metrics.dynamic_execution_count - baseline_metrics.dynamic_execution_count
             )
+            delta.single_method_class_change = (
+                current_metrics.single_method_class_count - baseline_metrics.single_method_class_count
+            )
+            delta.deep_inheritance_change = (
+                current_metrics.deep_inheritance_count - baseline_metrics.deep_inheritance_count
+            )
+            delta.passthrough_wrapper_change = (
+                current_metrics.passthrough_wrapper_count - baseline_metrics.passthrough_wrapper_count
+            )
 
         return delta
+
+    def _build_files_by_loc(self, python_files: list[Path], target_dir: Path) -> dict[str, int]:
+        """Build mapping of file path to code LOC for file filtering.
+
+        Args:
+            python_files: List of Python files to analyze
+            target_dir: Target directory for relative path calculation
+
+        Returns:
+            Dict mapping relative file paths to their code LOC
+        """
+        files_by_loc: dict[str, int] = {}
+        for file_path in python_files:
+            try:
+                content = file_path.read_text(encoding="utf-8")
+                _, code_loc = _count_loc(content)
+                relative_path = self._get_relative_path(file_path, target_dir)
+                files_by_loc[relative_path] = code_loc
+            except (OSError, UnicodeDecodeError):
+                continue
+        return files_by_loc
 
     def _get_relative_path(self, file_path: str | Path, reference_dir: Path | None = None) -> str:
         """Convert absolute path to relative path from reference directory.
@@ -428,6 +459,7 @@ class ComplexityAnalyzer:
             results = [_analyze_single_file_extended(fp) for fp in python_files]
 
         files_by_complexity: dict[str, int] = {}
+        files_by_effort: dict[str, float] = {}
         all_complexities: list[int] = []
         files_with_parse_errors: dict[str, str] = {}
         files_by_token_count: dict[str, int] = {}
@@ -451,6 +483,7 @@ class ComplexityAnalyzer:
                 continue
 
             files_by_complexity[relative_path] = result.complexity
+            files_by_effort[relative_path] = result.effort
             all_complexities.append(result.complexity)
 
             total_volume += result.volume
@@ -527,6 +560,7 @@ class ComplexityAnalyzer:
             str_type_percentage=str_type_percentage,
             total_files_analyzed=total_files,
             files_by_complexity=files_by_complexity,
+            files_by_effort=files_by_effort,
             files_with_parse_errors=files_with_parse_errors,
             orphan_comment_count=feature_stats.orphan_comment_count,
             untracked_todo_count=feature_stats.untracked_todo_count,
@@ -564,4 +598,22 @@ class ComplexityAnalyzer:
             dynamic_execution_files=sorted(
                 [self._get_relative_path(p, target_dir) for p in feature_stats.dynamic_execution_files]
             ),
+            single_method_class_count=feature_stats.single_method_class_count,
+            deep_inheritance_count=feature_stats.deep_inheritance_count,
+            passthrough_wrapper_count=feature_stats.passthrough_wrapper_count,
+            single_method_class_files=sorted(
+                [self._get_relative_path(p, target_dir) for p in feature_stats.single_method_class_files]
+            ),
+            deep_inheritance_files=sorted(
+                [self._get_relative_path(p, target_dir) for p in feature_stats.deep_inheritance_files]
+            ),
+            passthrough_wrapper_files=sorted(
+                [self._get_relative_path(p, target_dir) for p in feature_stats.passthrough_wrapper_files]
+            ),
+            total_loc=feature_stats.total_loc,
+            code_loc=feature_stats.code_loc,
+            files_by_loc={
+                self._get_relative_path(p, target_dir): loc
+                for p, loc in self._build_files_by_loc(python_files, target_dir).items()
+            },
         )

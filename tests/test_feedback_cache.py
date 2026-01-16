@@ -7,8 +7,6 @@ import tempfile
 import time
 from pathlib import Path
 
-import pytest
-
 from slopometry.core.hook_handler import (
     _compute_feedback_cache_key,
     _get_feedback_cache_path,
@@ -336,10 +334,6 @@ class TestModifiedPythonFilesDetection:
 class TestSubmoduleHandling:
     """Tests for git submodule handling."""
 
-    @pytest.mark.skipif(
-        subprocess.run(["git", "--version"], capture_output=True).returncode != 0,
-        reason="Git not available",
-    )
     def test_feedback_cache__submodule_changes_dont_invalidate(self):
         """Verify submodule changes don't cause cache misses.
 

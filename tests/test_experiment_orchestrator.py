@@ -147,10 +147,8 @@ class TestAnalyzeCommitChain:
             patch("slopometry.summoner.services.experiment_orchestrator.GitTracker") as MockGit,
             patch("slopometry.summoner.services.experiment_orchestrator.CLICalculator"),
             patch("slopometry.summoner.services.experiment_orchestrator.subprocess.run") as mock_subprocess,
-            patch("slopometry.summoner.services.experiment_orchestrator.Console") as MockConsole,
+            patch("slopometry.summoner.services.experiment_orchestrator.console") as mock_console,
         ):
-            mock_console = MockConsole.return_value
-
             # First call: git rev-list returns commits
             # Second+ calls: git rev-list --parents returns parent info
             def subprocess_side_effect(*args, **kwargs):
@@ -207,10 +205,9 @@ class TestAnalyzeCommitChain:
             patch("slopometry.summoner.services.experiment_orchestrator.GitTracker") as MockGit,
             patch("slopometry.summoner.services.experiment_orchestrator.CLICalculator"),
             patch("slopometry.summoner.services.experiment_orchestrator.subprocess.run") as mock_subprocess,
-            patch("slopometry.summoner.services.experiment_orchestrator.Console"),
+            patch("slopometry.summoner.services.experiment_orchestrator.console"),
             patch("slopometry.summoner.services.experiment_orchestrator.ComplexityAnalyzer"),
         ):
-
             def subprocess_side_effect(*args, **kwargs):
                 result = MagicMock()
                 result.returncode = 0
@@ -254,10 +251,8 @@ class TestAnalyzeCommitChain:
             patch("slopometry.summoner.services.experiment_orchestrator.GitTracker") as MockGit,
             patch("slopometry.summoner.services.experiment_orchestrator.CLICalculator"),
             patch("slopometry.summoner.services.experiment_orchestrator.subprocess.run") as mock_subprocess,
-            patch("slopometry.summoner.services.experiment_orchestrator.Console") as MockConsole,
+            patch("slopometry.summoner.services.experiment_orchestrator.console") as mock_console,
         ):
-            mock_console = MockConsole.return_value
-
             # Rev-list returns one commit
             def subprocess_side_effect(*args, **kwargs):
                 result = MagicMock()

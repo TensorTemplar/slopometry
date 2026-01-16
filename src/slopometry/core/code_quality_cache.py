@@ -211,6 +211,45 @@ class CodeQualityCacheManager:
         except sqlite3.Error:
             return 0
 
+    def update_cached_coverage(
+        self,
+        session_id: str,
+        test_coverage_percent: float,
+        test_coverage_source: str,
+    ) -> bool:
+        """Update test coverage fields in cached metrics for a session.
+
+        Args:
+            session_id: Session ID to update
+            test_coverage_percent: Coverage percentage to store
+            test_coverage_source: Source file path (e.g., coverage.xml)
+
+        Returns:
+            True if successfully updated, False otherwise
+        """
+        try:
+            cursor = self.db_connection.execute(
+                "SELECT complexity_metrics_json FROM code_quality_cache WHERE session_id = ?",
+                (session_id,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return False
+
+            metrics_data = json.loads(row[0])
+            metrics_data["test_coverage_percent"] = test_coverage_percent
+            metrics_data["test_coverage_source"] = test_coverage_source
+
+            self.db_connection.execute(
+                "UPDATE code_quality_cache SET complexity_metrics_json = ? WHERE session_id = ?",
+                (json.dumps(metrics_data), session_id),
+            )
+            self.db_connection.commit()
+            return True
+
+        except (sqlite3.Error, json.JSONDecodeError, Exception):
+            return False
+
     def get_cache_statistics(self) -> dict[str, int]:
         """Get statistics about the cache.
 

@@ -1,14 +1,14 @@
 """Quality-Per-Effort (QPE) calculator for principled code quality comparison.
 
-QPE provides a single metric for:
-1. GRPO rollout comparison (same-spec implementations)
-2. Cross-project comparison
+Provides two metrics for different use cases:
+- qpe: Effort-normalized for GRPO rollout comparison (same spec)
+- qpe_absolute: Raw quality for cross-project/temporal comparison
 
 Key properties:
 - Uses MI as sole quality signal (no double-counting with CC/Volume)
-- Normalizes by Halstead Effort for fair comparison
-- Includes code smell penalties with explicit weights
-- Bounded output via tanh for stable RL training
+- Sigmoid-saturated smell penalty (configurable steepness)
+- All smells weighted equally regardless of file complexity
+- Bounded GRPO advantage via tanh for stable RL training
 """
 
 import math
@@ -21,37 +21,36 @@ from slopometry.core.models import (
     ProjectQPEResult,
     QPEScore,
 )
+from slopometry.core.settings import settings
 
 
 class QPECalculator:
     """Quality-Per-Effort calculator for principled comparison."""
 
-    # Smell weights with explicit rationale
-    # Sum to ~0.7 so maximum penalty (all smells present) approaches 0.5 cap
-    SMELL_WEIGHTS: dict[str, float] = {
-        "hasattr_getattr": 0.10,  # Indicates missing domain models
-        "swallowed_exception": 0.15,  # Can hide real bugs
-        "type_ignore": 0.08,  # Type system bypass
-        "dynamic_execution": 0.12,  # Security/maintainability risk
-        "test_skip": 0.10,  # Missing coverage
-        "dict_get_with_default": 0.05,  # Minor modeling gap
-        "inline_import": 0.03,  # Style issue
-        "orphan_comment": 0.02,  # Documentation noise
-        "untracked_todo": 0.02,  # Debt tracking
-        "nonempty_init": 0.03,  # Structural issue
-    }
-
     def calculate_qpe(self, metrics: ExtendedComplexityMetrics) -> QPEScore:
         """Calculate Quality-Per-Effort score.
 
         Formula:
-            QPE = adjusted_quality / effort_factor
+            qpe = adjusted_quality / effort_factor (for GRPO)
+            qpe_absolute = adjusted_quality (for cross-project/temporal)
 
         Where:
-            adjusted_quality = mi_normalized * (1 - smell_penalty)
+            adjusted_quality = mi_normalized * (1 - smell_penalty) + bonuses
             mi_normalized = average_mi / 100.0
-            smell_penalty = min(weighted_smell_sum / files_analyzed, 0.5)
+            smell_penalty = 0.9 * (1 - exp(-smell_penalty_raw * steepness))
+            smell_penalty_raw = weighted_smell_sum / effective_files
             effort_factor = log(total_halstead_effort + 1)
+            bonuses = test_bonus + type_bonus + docstring_bonus
+
+        Smell penalty uses:
+            - Effective files (files with min LOC) to prevent gaming via tiny files
+            - No effort multiplier: all smells penalize equally
+            - Sigmoid saturation instead of hard cap
+
+        Bonuses (positive signals):
+            - Test coverage bonus when >= threshold
+            - Type hint coverage bonus when >= threshold
+            - Docstring coverage bonus when >= threshold
 
         Args:
             metrics: Extended complexity metrics for the codebase
@@ -59,40 +58,59 @@ class QPECalculator:
         Returns:
             QPEScore with component breakdown
         """
-        # 1. Quality signal: MI (0-100) normalized to 0-1
         mi_normalized = metrics.average_mi / 100.0
 
-        # 2. Collect smell counts and compute weighted penalty
-        smell_counts: dict[str, int] = {
-            "hasattr_getattr": metrics.hasattr_getattr_count,
-            "swallowed_exception": metrics.swallowed_exception_count,
-            "type_ignore": metrics.type_ignore_count,
-            "dynamic_execution": metrics.dynamic_execution_count,
-            "test_skip": metrics.test_skip_count,
-            "dict_get_with_default": metrics.dict_get_with_default_count,
-            "inline_import": metrics.inline_import_count,
-            "orphan_comment": metrics.orphan_comment_count,
-            "untracked_todo": metrics.untracked_todo_count,
-            "nonempty_init": metrics.nonempty_init_count,
-        }
+        smell_counts: dict[str, int] = {}
+        weighted_smell_sum = 0.0
 
-        weighted_smell_sum = sum(smell_counts[smell_name] * weight for smell_name, weight in self.SMELL_WEIGHTS.items())
+        for smell in metrics.get_smells():
+            smell_counts[smell.name] = smell.count
+            weighted_smell_sum += smell.count * smell.weight
 
-        # Normalize by file count and cap at 0.5
-        files_analyzed = max(metrics.total_files_analyzed, 1)
-        smell_penalty = min(weighted_smell_sum / files_analyzed, 0.5)
+        # Use files_by_loc for anti-gaming file filtering, fallback to total_files
+        if metrics.files_by_loc:
+            effective_files = sum(1 for loc in metrics.files_by_loc.values() if loc >= settings.qpe_min_loc_per_file)
+        else:
+            effective_files = metrics.total_files_analyzed
 
-        # 3. Adjusted quality
-        adjusted_quality = mi_normalized * (1 - smell_penalty)
+        total_files = max(effective_files, 1)
+        smell_penalty_raw = weighted_smell_sum / total_files
 
-        # 4. Effort normalization using log for diminishing returns
+        # Sigmoid saturation with configurable steepness (approaches 0.9 asymptotically)
+        smell_penalty = 0.9 * (1 - math.exp(-smell_penalty_raw * settings.qpe_sigmoid_steepness))
+
+        # Positive bonuses (configurable thresholds and amounts)
+        test_bonus = (
+            settings.qpe_test_coverage_bonus
+            if (metrics.test_coverage_percent or 0) >= settings.qpe_test_coverage_threshold
+            else 0.0
+        )
+        type_bonus = (
+            settings.qpe_type_coverage_bonus
+            if metrics.type_hint_coverage >= settings.qpe_type_coverage_threshold
+            else 0.0
+        )
+        docstring_bonus = (
+            settings.qpe_docstring_coverage_bonus
+            if metrics.docstring_coverage >= settings.qpe_docstring_coverage_threshold
+            else 0.0
+        )
+        total_bonus = test_bonus + type_bonus + docstring_bonus
+
+        adjusted_quality = mi_normalized * (1 - smell_penalty) + total_bonus
+
+        # Effort normalization using log for diminishing returns
         effort_factor = math.log(metrics.total_effort + 1)
 
-        # 5. QPE: quality per log-effort (higher = better)
+        # qpe: effort-normalized for GRPO rollouts
         qpe = adjusted_quality / effort_factor if effort_factor > 0 else 0.0
+
+        # qpe_absolute: raw quality for cross-project/temporal comparison
+        qpe_absolute = adjusted_quality
 
         return QPEScore(
             qpe=qpe,
+            qpe_absolute=qpe_absolute,
             mi_normalized=mi_normalized,
             smell_penalty=smell_penalty,
             adjusted_quality=adjusted_quality,
@@ -164,7 +182,6 @@ class CrossProjectComparator:
                 )
             )
 
-        # Sort by QPE (highest first)
         rankings = sorted(results, key=lambda x: x.qpe_score.qpe, reverse=True)
 
         return CrossProjectComparison(
@@ -200,7 +217,6 @@ class CrossProjectComparator:
                 )
             )
 
-        # Sort by QPE (highest first)
         rankings = sorted(results, key=lambda x: x.qpe_score.qpe, reverse=True)
 
         return CrossProjectComparison(
