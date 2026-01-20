@@ -1,5 +1,6 @@
 """Git state tracking for Claude Code sessions."""
 
+import logging
 import shutil
 import subprocess
 import tarfile
@@ -9,6 +10,8 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from slopometry.core.models import GitState
+
+logger = logging.getLogger(__name__)
 
 
 class GitOperationError(Exception):
@@ -140,8 +143,8 @@ class GitTracker:
             if result.returncode == 0:
                 return result.stdout.strip()
 
-        except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError):
-            pass
+        except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError) as e:
+            logger.debug(f"Failed to get current commit SHA: {e}")
 
         return None
 
@@ -175,8 +178,8 @@ class GitTracker:
                 python_files = [f for f in all_files if f.endswith(".py")]
                 return python_files
 
-        except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError):
-            pass
+        except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError) as e:
+            logger.debug(f"Failed to get Python files from commit {commit_ref}: {e}")
 
         return []
 

@@ -141,6 +141,7 @@ def show(session_id: str, smell_details: bool, file_details: bool, pager: bool) 
     baseline, assessment = _compute_session_baseline(stats)
 
     def _display() -> None:
+        assert stats is not None
         display_session_summary(
             stats,
             session_id,
@@ -226,6 +227,7 @@ def latest(smell_details: bool, file_details: bool, pager: bool) -> None:
         baseline, assessment = _compute_session_baseline(stats)
 
         def _display() -> None:
+            assert stats is not None and most_recent is not None
             display_session_summary(
                 stats,
                 most_recent,
@@ -308,14 +310,15 @@ def cleanup(session_id: str | None, all_sessions: bool, yes: bool) -> None:
         return
 
     if session_id:
-        stats = session_service.get_session_statistics(session_id)
-        if not stats:
+        basic_info = session_service.get_session_basic_info(session_id)
+        if not basic_info:
             console.print(f"[red]Session {session_id} not found[/red]")
             return
 
+        start_time, total_events = basic_info
         console.print(f"\n[bold]Session to delete: {session_id}[/bold]")
-        console.print(f"Start time: {stats.start_time.strftime('%Y-%m-%d %H:%M:%S')}")
-        console.print(f"Total events: {stats.total_events}")
+        console.print(f"Start time: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        console.print(f"Total events: {total_events}")
 
         if not yes:
             confirm = click.confirm("\nAre you sure you want to delete this session?", default=False)

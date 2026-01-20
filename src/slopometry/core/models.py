@@ -1334,9 +1334,10 @@ class CrossProjectComparison(BaseModel):
 
 
 class LeaderboardEntry(BaseModel):
-    """A persistent record of a project's QPE score at a specific commit.
+    """A persistent record of a project's quality score at a specific commit.
 
-    Used for tracking QPE scores over time and comparing projects.
+    Used for cross-project quality comparison. Stores absolute quality (qpe_absolute)
+    rather than effort-normalized QPE, since effort varies between projects.
     """
 
     id: int | None = Field(default=None, description="Database ID")
@@ -1345,10 +1346,10 @@ class LeaderboardEntry(BaseModel):
     commit_sha_short: str = Field(description="7-character short git hash")
     commit_sha_full: str = Field(description="Full git hash for deduplication")
     measured_at: datetime = Field(default_factory=datetime.now, description="Date of the analyzed commit")
-    qpe_score: float = Field(description="Quality-per-effort score")
+    qpe_score: float = Field(description="Absolute quality score (qpe_absolute) for cross-project comparison")
     mi_normalized: float = Field(description="Maintainability Index normalized to 0-1")
     smell_penalty: float = Field(description="Penalty from code smells")
-    adjusted_quality: float = Field(description="MI after smell penalty applied")
+    adjusted_quality: float = Field(description="MI × (1 - smell_penalty) + bonuses")
     effort_factor: float = Field(description="log(total_halstead_effort + 1)")
     total_effort: float = Field(description="Total Halstead Effort")
     metrics_json: str = Field(description="Full ExtendedComplexityMetrics as JSON")

@@ -149,6 +149,50 @@ def test_leaderboard_upsert__updates_existing_project_on_new_commit() -> None:
         assert leaderboard[0].measured_at == datetime(2024, 6, 1)
 
 
+def test_clear_leaderboard__removes_all_entries() -> None:
+    """Test that clear_leaderboard removes all entries and returns count."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db = EventDatabase(db_path=Path(tmp_dir) / "test.db")
+
+        entry1 = LeaderboardEntry(
+            project_name="project1",
+            project_path="/path/to/project1",
+            commit_sha_short="abc1234",
+            commit_sha_full="abc1234567890",
+            measured_at=datetime(2024, 1, 1),
+            qpe_score=0.5,
+            mi_normalized=0.7,
+            smell_penalty=0.1,
+            adjusted_quality=0.63,
+            effort_factor=10.0,
+            total_effort=20000.0,
+            metrics_json="{}",
+        )
+        entry2 = LeaderboardEntry(
+            project_name="project2",
+            project_path="/path/to/project2",
+            commit_sha_short="def5678",
+            commit_sha_full="def5678901234",
+            measured_at=datetime(2024, 2, 1),
+            qpe_score=0.6,
+            mi_normalized=0.8,
+            smell_penalty=0.05,
+            adjusted_quality=0.76,
+            effort_factor=12.0,
+            total_effort=25000.0,
+            metrics_json="{}",
+        )
+        db.save_leaderboard_entry(entry1)
+        db.save_leaderboard_entry(entry2)
+
+        assert len(db.get_leaderboard()) == 2
+
+        deleted_count = db.clear_leaderboard()
+
+        assert deleted_count == 2
+        assert len(db.get_leaderboard()) == 0
+
+
 def test_list_sessions_by_repository__filters_correctly() -> None:
     """Sessions should be filtered by working directory."""
     with tempfile.TemporaryDirectory() as tmp_dir:
@@ -241,3 +285,47 @@ def test_list_sessions_by_repository__respects_limit() -> None:
         sessions = db.list_sessions_by_repository(Path("/path/to/repo"), limit=2)
 
         assert len(sessions) == 2
+
+
+def test_get_session_basic_info__returns_minimal_info() -> None:
+    """get_session_basic_info returns just start_time and total_events without expensive computations."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db = EventDatabase(db_path=Path(tmp_dir) / "test.db")
+
+        db.save_event(
+            HookEvent(
+                session_id="test-session",
+                event_type=HookEventType.PRE_TOOL_USE,
+                sequence_number=1,
+                working_directory="/path/to/repo",
+                tool_name="Read",
+                tool_type=ToolType.READ,
+            )
+        )
+        db.save_event(
+            HookEvent(
+                session_id="test-session",
+                event_type=HookEventType.POST_TOOL_USE,
+                sequence_number=2,
+                working_directory="/path/to/repo",
+                tool_name="Write",
+                tool_type=ToolType.WRITE,
+            )
+        )
+
+        result = db.get_session_basic_info("test-session")
+
+        assert result is not None
+        start_time, total_events = result
+        assert isinstance(start_time, datetime)
+        assert total_events == 2
+
+
+def test_get_session_basic_info__returns_none_for_unknown_session() -> None:
+    """get_session_basic_info returns None for non-existent session."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db = EventDatabase(db_path=Path(tmp_dir) / "test.db")
+
+        result = db.get_session_basic_info("nonexistent-session")
+
+        assert result is None

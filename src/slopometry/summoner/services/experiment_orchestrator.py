@@ -205,7 +205,7 @@ class ExperimentOrchestrator:
         chain_id = self.db.create_commit_chain(str(self.repo_path), base_commit, head_commit, len(commits))
 
         analyzer = ComplexityAnalyzer(self.repo_path)
-        previous_metrics = None
+        previous_metrics: ExtendedComplexityMetrics | None = None
         previous_coverage: float | None = None
 
         cumulative_cc = 0

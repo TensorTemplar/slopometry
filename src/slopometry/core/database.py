@@ -428,6 +428,31 @@ class EventDatabase:
                 )
             return events
 
+    def get_session_basic_info(self, session_id: str) -> tuple[datetime, int] | None:
+        """Get minimal session info (start_time, total_events) without expensive computations.
+
+        Use this for operations that only need to verify a session exists and show basic info,
+        like cleanup confirmations.
+
+        Returns:
+            Tuple of (start_time, total_events) or None if session not found.
+        """
+        with self._get_db_connection() as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                """
+                SELECT MIN(timestamp) as start_time, COUNT(*) as total_events
+                FROM hook_events
+                WHERE session_id = ?
+                """,
+                (session_id,),
+            ).fetchone()
+
+            if not row or row["total_events"] == 0:
+                return None
+
+            return datetime.fromisoformat(row["start_time"]), row["total_events"]
+
     def get_session_statistics(self, session_id: str) -> SessionStatistics | None:
         """Calculate statistics for a session using optimized SQL aggregations.
 
@@ -1005,8 +1030,8 @@ class EventDatabase:
                 INSERT INTO experiment_progress (
                     experiment_id, timestamp, current_metrics, target_metrics,
                     cli_score, complexity_score, halstead_score, maintainability_score,
-                    qpe_score, smell_penalty, effort_tier
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    qpe_score, smell_penalty
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     progress.experiment_id,
@@ -1019,7 +1044,6 @@ class EventDatabase:
                     progress.maintainability_score,
                     progress.qpe_score,
                     progress.smell_penalty,
-                    progress.effort_tier.value if progress.effort_tier else None,
                 ),
             )
             conn.commit()
@@ -1796,6 +1820,18 @@ class EventDatabase:
                 )
                 for row in rows
             ]
+
+    def clear_leaderboard(self) -> int:
+        """Clear all leaderboard entries.
+
+        Returns:
+            Number of entries deleted
+        """
+        with self._get_db_connection() as conn:
+            cursor = conn.execute("SELECT COUNT(*) FROM qpe_leaderboard")
+            count = cursor.fetchone()[0]
+            conn.execute("DELETE FROM qpe_leaderboard")
+            return count
 
 
 class SessionManager:
