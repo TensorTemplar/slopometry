@@ -9,6 +9,9 @@ from rich.table import Table
 from slopometry.core.models import (
     SMELL_REGISTRY,
     CompactEvent,
+    ExperimentDisplayData,
+    NFPObjectiveDisplayData,
+    ProgressDisplayData,
     SmellCategory,
     TokenUsage,
     ZScoreInterpretation,
@@ -815,7 +818,7 @@ def create_sessions_table(sessions_data: list[dict]) -> Table:
     return table
 
 
-def create_experiment_table(experiments_data: list[dict]) -> Table:
+def create_experiment_table(experiments_data: list[ExperimentDisplayData]) -> Table:
     """Create a Rich table for displaying experiment runs."""
     table = Table(title="Experiment Runs")
     table.add_column("ID", style="cyan", no_wrap=True)
@@ -827,16 +830,16 @@ def create_experiment_table(experiments_data: list[dict]) -> Table:
 
     for exp_data in experiments_data:
         status_style = (
-            "green" if exp_data["status"] == "completed" else "red" if exp_data["status"] == "failed" else "yellow"
+            "green" if exp_data.status == "completed" else "red" if exp_data.status == "failed" else "yellow"
         )
 
         table.add_row(
-            exp_data["id"],
-            exp_data["repository_name"],
-            exp_data["commits_display"],
-            exp_data["start_time"],
-            exp_data["duration"],
-            f"[{status_style}]{exp_data['status']}[/]",
+            exp_data.id,
+            exp_data.repository_name,
+            exp_data.commits_display,
+            exp_data.start_time,
+            exp_data.duration,
+            f"[{status_style}]{exp_data.status}[/]",
         )
 
     return table
@@ -865,7 +868,7 @@ def create_user_story_entries_table(entries_data: list, count: int) -> Table:
     return table
 
 
-def create_nfp_objectives_table(objectives_data: list[dict]) -> Table:
+def create_nfp_objectives_table(objectives_data: list[NFPObjectiveDisplayData]) -> Table:
     """Create a Rich table for displaying NFP objectives."""
     table = Table(title="NFP Objectives")
     table.add_column("ID", style="cyan", no_wrap=True)
@@ -877,12 +880,12 @@ def create_nfp_objectives_table(objectives_data: list[dict]) -> Table:
 
     for obj_data in objectives_data:
         table.add_row(
-            obj_data["id"],
-            obj_data["title"],
-            obj_data["commits"],
-            str(obj_data["story_count"]),
-            str(obj_data["complexity"]),
-            obj_data["created_date"],
+            obj_data.id,
+            obj_data.title,
+            obj_data.commits,
+            str(obj_data.story_count),
+            str(obj_data.complexity),
+            obj_data.created_date,
         )
 
     return table
@@ -909,7 +912,7 @@ def create_features_table(features_data: list[dict]) -> Table:
     return table
 
 
-def create_progress_history_table(progress_data: list[dict]) -> Table:
+def create_progress_history_table(progress_data: list[ProgressDisplayData]) -> Table:
     """Create a Rich table for displaying experiment progress history."""
     table = Table(title="Progress History")
     table.add_column("Timestamp", style="cyan")
@@ -920,11 +923,11 @@ def create_progress_history_table(progress_data: list[dict]) -> Table:
 
     for progress_row in progress_data:
         table.add_row(
-            progress_row["timestamp"],
-            progress_row["cli_score"],
-            progress_row["complexity_score"],
-            progress_row["halstead_score"],
-            progress_row["maintainability_score"],
+            progress_row.timestamp,
+            progress_row.cli_score,
+            progress_row.complexity_score,
+            progress_row.halstead_score,
+            progress_row.maintainability_score,
         )
 
     return table
@@ -1465,19 +1468,19 @@ def display_cross_project_comparison(comparison: "CrossProjectComparison") -> No
 
 
 def display_leaderboard(entries: list) -> None:
-    """Display the QPE leaderboard.
+    """Display the Quality leaderboard for cross-project comparison.
 
     Args:
-        entries: List of LeaderboardEntry objects, already sorted by QPE
+        entries: List of LeaderboardEntry objects, already sorted by quality score
     """
-    console.print("\n[bold]QPE Leaderboard[/bold]\n")
+    console.print("\n[bold]Quality Leaderboard[/bold]\n")
 
     table = Table(show_header=True)
     table.add_column("Rank", justify="right", style="bold")
     table.add_column("Project", style="cyan")
-    table.add_column("QPE", justify="right")
-    table.add_column("Smell", justify="right")
     table.add_column("Quality", justify="right")
+    table.add_column("Smell", justify="right")
+    table.add_column("MI", justify="right")
     table.add_column("Tokens", justify="right")
     table.add_column("Effort", justify="right")
     table.add_column("Commit", justify="center")
@@ -1485,7 +1488,7 @@ def display_leaderboard(entries: list) -> None:
 
     for rank, entry in enumerate(entries, 1):
         rank_style = "green" if rank == 1 else "yellow" if rank == 2 else "blue" if rank == 3 else ""
-        qpe_color = "green" if entry.qpe_score > 0.05 else "yellow" if entry.qpe_score > 0.02 else "red"
+        qual_color = "green" if entry.qpe_score > 0.6 else "yellow" if entry.qpe_score > 0.4 else "red"
         smell_color = "green" if entry.smell_penalty < 0.1 else "yellow" if entry.smell_penalty < 0.3 else "red"
 
         try:
@@ -1501,9 +1504,9 @@ def display_leaderboard(entries: list) -> None:
         table.add_row(
             f"[{rank_style}]#{rank}[/{rank_style}]" if rank_style else f"#{rank}",
             entry.project_name,
-            f"[{qpe_color}]{entry.qpe_score:.4f}[/{qpe_color}]",
+            f"[{qual_color}]{entry.qpe_score:.4f}[/{qual_color}]",
             f"[{smell_color}]{entry.smell_penalty:.3f}[/{smell_color}]",
-            f"{entry.adjusted_quality:.3f}",
+            f"{entry.mi_normalized:.3f}",
             f"[dim]{tokens_str}[/dim]",
             f"[dim]{effort_str}[/dim]",
             f"[dim]{entry.commit_sha_short}[/dim]",
@@ -1511,4 +1514,4 @@ def display_leaderboard(entries: list) -> None:
         )
 
     console.print(table)
-    console.print("\n[dim]Higher QPE = better quality per effort. Use --append to add projects.[/dim]")
+    console.print("\n[dim]Higher Quality = better absolute code quality. Use --append to add projects.[/dim]")

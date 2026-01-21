@@ -1,11 +1,14 @@
 """Project identification logic."""
 
+import logging
 import subprocess
 from pathlib import Path
 
 import toml
 
 from slopometry.core.models import Project, ProjectSource
+
+logger = logging.getLogger(__name__)
 
 
 class ProjectTracker:
@@ -51,8 +54,8 @@ class ProjectTracker:
             )
             if result.returncode == 0 and result.stdout.strip():
                 return Project(name=result.stdout.strip(), source=ProjectSource.GIT)
-        except (subprocess.TimeoutExpired, subprocess.SubprocessError, FileNotFoundError):
-            pass
+        except (subprocess.TimeoutExpired, subprocess.SubprocessError, FileNotFoundError) as e:
+            logger.error(f"Git operation failed in {self.working_dir}: {e}")
 
         return None
 
@@ -67,7 +70,7 @@ class ProjectTracker:
             project_name = data.get("project", {}).get("name")
             if project_name and isinstance(project_name, str):
                 return Project(name=project_name, source=ProjectSource.PYPROJECT)
-        except (toml.TomlDecodeError, OSError, KeyError, TypeError):
-            pass
+        except (toml.TomlDecodeError, OSError, KeyError, TypeError) as e:
+            logger.error(f"Failed to parse pyproject.toml at {pyproject_path}: {e}")
 
         return None

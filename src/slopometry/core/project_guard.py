@@ -1,10 +1,29 @@
 """Guard against running analysis in directories with multiple projects."""
 
 import logging
+import os
 import subprocess
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+BLOCKED_DIRECTORIES = {
+    Path.home(),
+    Path("/"),
+    Path("/usr"),
+    Path("/opt"),
+    Path("/var"),
+    Path("/tmp"),
+}
+
+
+class UnsafeDirectoryError(Exception):
+    """Raised when analysis is attempted in a blocked directory like home."""
+
+    def __init__(self, directory: Path, reason: str):
+        self.directory = directory
+        self.reason = reason
+        super().__init__(f"Refusing to analyze {directory}: {reason}")
 
 
 class MultiProjectError(Exception):
@@ -86,16 +105,56 @@ def detect_multi_project_directory(
     return projects
 
 
+def _is_blocked_directory(path: Path) -> str | None:
+    """Check if path is a blocked directory.
+
+    Returns:
+        Reason string if blocked, None if allowed
+    """
+    resolved = path.resolve()
+
+    for blocked in BLOCKED_DIRECTORIES:
+        try:
+            if resolved == blocked.resolve():
+                return f"'{resolved}' is a system/home directory"
+        except (OSError, ValueError):
+            continue
+
+    xdg_data = os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")
+    xdg_cache = os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")
+    xdg_config = os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")
+
+    sensitive_paths = [
+        Path(xdg_data),
+        Path(xdg_cache),
+        Path(xdg_config),
+        Path.home() / ".local",
+    ]
+
+    for sensitive in sensitive_paths:
+        try:
+            if resolved == sensitive.resolve():
+                return f"'{resolved}' is a user data/cache directory"
+        except (OSError, ValueError):
+            continue
+
+    return None
+
+
 def guard_single_project(root: Path, max_depth: int = 2) -> None:
-    """Raise MultiProjectError if directory contains multiple projects.
+    """Raise error if directory is unsafe or contains multiple projects.
 
     Args:
         root: Directory to check
         max_depth: Maximum directory depth to search
 
     Raises:
+        UnsafeDirectoryError: If directory is blocked (home, /, etc.)
         MultiProjectError: If multiple git repositories found
     """
+    if reason := _is_blocked_directory(root):
+        raise UnsafeDirectoryError(root, reason)
+
     projects = detect_multi_project_directory(root, max_depth=max_depth, max_projects=1)
 
     if len(projects) > 1:

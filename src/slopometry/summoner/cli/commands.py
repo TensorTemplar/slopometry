@@ -23,7 +23,7 @@ def complete_experiment_id(ctx: click.Context, param: click.Parameter, incomplet
     try:
         experiment_service = ExperimentService()
         experiments = experiment_service.list_experiments()
-        return [exp["id"] for exp in experiments if exp["id"].startswith(incomplete)]
+        return [exp.id for exp in experiments if exp.id.startswith(incomplete)]
     except Exception:
         return []
 
@@ -1053,24 +1053,34 @@ def qpe(repo_path: Path | None, output_json: bool) -> None:
     type=click.Path(exists=True, path_type=Path),
     help="Add project(s) to the leaderboard. Can be used multiple times.",
 )
-def compare_projects(append_paths: tuple[Path, ...]) -> None:
-    """Show QPE leaderboard or add projects to it.
+@click.option(
+    "--reset",
+    is_flag=True,
+    help="Clear all leaderboard entries before adding new ones.",
+)
+def compare_projects(append_paths: tuple[Path, ...], reset: bool) -> None:
+    """Show Quality leaderboard or add projects to it.
 
     Without --append: Shows the current leaderboard ranking.
-    With --append: Computes QPE for specified project(s), saves to leaderboard,
+    With --append: Computes quality for specified project(s), saves to leaderboard,
     and shows updated rankings.
+    With --reset: Clears existing leaderboard entries first.
 
     Example:
         slopometry summoner compare-projects
 
         slopometry summoner compare-projects --append .
 
-        slopometry summoner compare-projects -a /path/to/project1 -a /path/to/project2
+        slopometry summoner compare-projects --reset -a /path/to/project1
     """
     from slopometry.core.database import EventDatabase
     from slopometry.display.formatters import display_leaderboard
 
     db = EventDatabase()
+
+    if reset:
+        count = db.clear_leaderboard()
+        console.print(f"[yellow]Cleared {count} leaderboard entries[/yellow]")
 
     if append_paths:
         from slopometry.core.complexity_analyzer import ComplexityAnalyzer
@@ -1126,7 +1136,7 @@ def compare_projects(append_paths: tuple[Path, ...]) -> None:
                 commit_sha_short=commit_sha_short,
                 commit_sha_full=commit_sha_full,
                 measured_at=commit_date,
-                qpe_score=qpe_score.qpe,
+                qpe_score=qpe_score.qpe_absolute,
                 mi_normalized=qpe_score.mi_normalized,
                 smell_penalty=qpe_score.smell_penalty,
                 adjusted_quality=qpe_score.adjusted_quality,
@@ -1135,7 +1145,7 @@ def compare_projects(append_paths: tuple[Path, ...]) -> None:
                 metrics_json=metrics.model_dump_json(),
             )
             db.save_leaderboard_entry(entry)
-            console.print(f"[green]Added {project_path.name} (QPE: {qpe_score.qpe:.4f})[/green]")
+            console.print(f"[green]Added {project_path.name} (Quality: {qpe_score.qpe_absolute:.4f})[/green]")
 
         console.print()
 

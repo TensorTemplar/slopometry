@@ -1,5 +1,6 @@
 """Session management service for solo-leveler features."""
 
+from datetime import datetime
 from pathlib import Path
 
 from slopometry.core.database import EventDatabase
@@ -32,6 +33,14 @@ class SessionService:
         """Get detailed statistics for a session."""
         return self.db.get_session_statistics(session_id)
 
+    def get_session_basic_info(self, session_id: str) -> tuple[datetime, int] | None:
+        """Get minimal session info without expensive computations.
+
+        Returns:
+            Tuple of (start_time, total_events) or None if session not found.
+        """
+        return self.db.get_session_basic_info(session_id)
+
     def get_most_recent_session(self) -> str | None:
         """Get the ID of the most recent session."""
         sessions = self.list_sessions(limit=1)
@@ -51,8 +60,6 @@ class SessionService:
 
         sessions_data = []
         for summary in summaries:
-            from datetime import datetime
-
             try:
                 start_time = datetime.fromisoformat(summary["start_time"])
                 formatted_time = start_time.strftime("%Y-%m-%d %H:%M:%S")
