@@ -65,7 +65,7 @@ SMELL_REGISTRY: dict[str, SmellDefinition] = {
         label="Test Skips",
         category=SmellCategory.GENERAL,
         weight=0.10,
-        guidance="BLOCKING: You MUST present a table with columns [Test Name | Intent] for each skip and ask user to confirm each is still valid",
+        guidance="BLOCKING: You MUST present a table with columns [Test Name | Intent] for each skip and ask user to confirm skipping is acceptable",
         count_field="test_skip_count",
         files_field="test_skip_files",
     ),
@@ -352,6 +352,7 @@ class ComplexityDelta(BaseModel):
     files_added: list[str] = Field(default_factory=list)
     files_removed: list[str] = Field(default_factory=list)
     files_changed: dict[str, int] = Field(default_factory=dict, description="Mapping of filename to complexity delta")
+    files_effort_changed: dict[str, float] = Field(default_factory=dict, description="Mapping of filename to effort delta")
     net_files_change: int = Field(default=0, description="Net change in number of files (files_added - files_removed)")
     avg_complexity_change: float = 0.0
 
@@ -719,6 +720,7 @@ class ExtendedComplexityMetrics(ComplexityMetrics):
 
     total_mi: float
     average_mi: float = Field(description="Higher is better (0-100 scale)")
+    files_by_mi: dict[str, float] = Field(default_factory=dict, description="Mapping of filename to MI score")
 
     type_hint_coverage: float = Field(default=0.0, description="Percentage of functions/args with type hints (0-100)")
     docstring_coverage: float = Field(
@@ -774,7 +776,7 @@ class ExtendedComplexityMetrics(ComplexityMetrics):
     test_skip_count: int = SmellField(
         label="Test Skips",
         files_field="test_skip_files",
-        guidance="BLOCKING: You MUST present a table with columns [Test Name | Intent] for each skip and ask user to confirm each is still valid",
+        guidance="BLOCKING: You MUST present a table with columns [Test Name | Intent] for each skip and ask user to confirm skipping is acceptable",
     )
     swallowed_exception_count: int = SmellField(
         label="Swallowed Exceptions",

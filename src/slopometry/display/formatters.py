@@ -1,6 +1,7 @@
 """Rich formatting utilities for displaying slopometry data."""
 
 import logging
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
@@ -341,7 +342,7 @@ def _display_complexity_metrics(
     """Display complexity metrics section."""
     console.print("\n[bold]Complexity Metrics[/bold]")
 
-    overview_table = Table(title="Complexity Overview")
+    overview_table = Table()
     overview_table.add_column("Metric", style="cyan")
     overview_table.add_column("Value", justify="right")
 
@@ -351,16 +352,21 @@ def _display_complexity_metrics(
 
     overview_table.add_row("Files analyzed", str(metrics.total_files_analyzed))
     overview_table.add_row("[bold]Cyclomatic Complexity[/bold]", "")
-    overview_table.add_row("  Total complexity", str(metrics.total_complexity))
     overview_table.add_row("  Average complexity", f"{metrics.average_complexity:.1f}")
     overview_table.add_row("  Max complexity", str(metrics.max_complexity))
     overview_table.add_row("  Min complexity", str(metrics.min_complexity))
     overview_table.add_row("[bold]Halstead Metrics[/bold]", "")
     overview_table.add_row("  Average volume", f"{metrics.average_volume:.1f}")
     overview_table.add_row("  Average effort", f"{metrics.average_effort:.2f}")
+    if metrics.files_by_effort:
+        max_effort_file, max_effort = max(metrics.files_by_effort.items(), key=lambda x: x[1])
+        overview_table.add_row("  Max effort", f"{max_effort:,.0f} ({truncate_path(max_effort_file, max_width=30)})")
     overview_table.add_row("[bold]Maintainability Index[/bold]", "")
     overview_table.add_row("  Total MI", f"{metrics.total_mi:.1f}")
     overview_table.add_row("  File average MI", f"{metrics.average_mi:.1f} (higher is better)")
+    if metrics.files_by_mi:
+        min_mi_file, min_mi = min(metrics.files_by_mi.items(), key=lambda x: x[1])
+        overview_table.add_row("  Min MI", f"{min_mi:.1f} ({truncate_path(min_mi_file, max_width=30)})")
 
     overview_table.add_row("[bold]Token Usage[/bold]", "")
     overview_table.add_row("  Total Tokens", _format_token_count(metrics.total_tokens))
@@ -393,7 +399,7 @@ def _display_complexity_metrics(
         overview_table.add_row("  Test Coverage", "[dim]N/A (run pytest first)[/dim]")
 
     overview_table.add_row(
-        "  Deprecations", f"[yellow]{metrics.deprecation_count}[/yellow]" if metrics.deprecation_count > 0 else "0"
+        "  Deprecations (excl. runtime)", f"[yellow]{metrics.deprecation_count}[/yellow]" if metrics.deprecation_count > 0 else "0"
     )
 
     overview_table.add_row("[bold]Code Smells[/bold]", "")
@@ -432,6 +438,24 @@ def _display_complexity_metrics(
 
         console.print(files_table)
 
+    if show_smell_files:
+        smell_files = metrics.get_smell_files()
+        file_smell_counts: Counter[str] = Counter()
+        for files in smell_files.values():
+            for f in files:
+                file_smell_counts[f] += 1
+
+        if file_smell_counts:
+            offenders_table = Table(title="Worst Smell Offenders")
+            offenders_table.add_column("File", style="cyan", no_wrap=True, max_width=55)
+            offenders_table.add_column("Smell Types", justify="right", width=12)
+
+            sorted_offenders = sorted(file_smell_counts.items(), key=lambda x: x[1], reverse=True)[:10]
+            for file_path, count in sorted_offenders:
+                offenders_table.add_row(truncate_path(file_path, max_width=55), str(count))
+
+            console.print(offenders_table)
+
     if metrics.files_with_parse_errors:
         errors_table = Table(title="[yellow]Files with Parse Errors[/yellow]")
         errors_table.add_column("File", style="yellow", no_wrap=True, max_width=55)
@@ -461,7 +485,7 @@ def _display_complexity_delta(
         title += f" - Baseline: {baseline.total_commits_analyzed} commits"
     console.print(f"\n[bold]{title}[/bold]")
 
-    changes_table = Table(title="Overall Changes")
+    changes_table = Table()
     changes_table.add_column("Metric", style="cyan")
     changes_table.add_column("Change", justify="right")
     if has_baseline:
@@ -533,50 +557,50 @@ def _display_complexity_delta(
                 files_removed_table.add_row(f"... and {len(delta.files_removed) - 10} more")
             console.print(files_removed_table)
 
-        if delta.files_changed:
-            sorted_changes = sorted(delta.files_changed.items(), key=lambda x: abs(x[1]), reverse=True)[:10]
+        if delta.files_effort_changed:
+            sorted_changes = sorted(delta.files_effort_changed.items(), key=lambda x: abs(x[1]), reverse=True)[:10]
 
             if sorted_changes:
-                file_changes_table = Table(title="File Complexity Changes")
+                file_changes_table = Table(title="File Effort Changes")
                 file_changes_table.add_column("File", style="cyan", no_wrap=True, max_width=55)
-                file_changes_table.add_column("Previous", justify="right", width=10)
-                file_changes_table.add_column("Current", justify="right", width=10)
-                file_changes_table.add_column("Change", justify="right", width=10)
+                file_changes_table.add_column("Previous", justify="right", width=12)
+                file_changes_table.add_column("Current", justify="right", width=12)
+                file_changes_table.add_column("Change", justify="right", width=12)
 
+                files_by_effort = stats.complexity_metrics.files_by_effort if stats.complexity_metrics else {}
                 for file_path, change in sorted_changes:
-                    files_by_complexity = (
-                        stats.complexity_metrics.files_by_complexity if stats.complexity_metrics else {}
-                    )
-                    current_complexity = files_by_complexity.get(file_path, 0)
-                    previous_complexity = current_complexity - change
+                    if file_path not in files_by_effort:
+                        continue
+                    current_effort = files_by_effort[file_path]
+                    previous_effort = current_effort - change
 
                     change_color = "green" if change < 0 else "red"
                     file_changes_table.add_row(
                         truncate_path(file_path, max_width=55),
-                        str(previous_complexity),
-                        str(current_complexity),
-                        f"[{change_color}]{change:+d}[/{change_color}]",
+                        f"{previous_effort:,.0f}",
+                        f"{current_effort:,.0f}",
+                        f"[{change_color}]{change:+,.0f}[/{change_color}]",
                     )
 
                 console.print(file_changes_table)
     else:
-        if delta.files_changed:
-            sorted_changes = sorted(delta.files_changed.items(), key=lambda x: abs(x[1]), reverse=True)[:3]
+        if delta.files_effort_changed:
+            sorted_changes = sorted(delta.files_effort_changed.items(), key=lambda x: abs(x[1]), reverse=True)[:3]
 
             if sorted_changes:
-                file_changes_table = Table(title="Top File Complexity Changes")
+                file_changes_table = Table(title="Top File Effort Changes")
                 file_changes_table.add_column("File", style="cyan", no_wrap=True, max_width=55)
-                file_changes_table.add_column("Change", justify="right", width=10)
+                file_changes_table.add_column("Change", justify="right", width=12)
 
                 for file_path, change in sorted_changes:
                     change_color = "green" if change < 0 else "red"
                     file_changes_table.add_row(
-                        truncate_path(file_path, max_width=55), f"[{change_color}]{change:+d}[/{change_color}]"
+                        truncate_path(file_path, max_width=55), f"[{change_color}]{change:+,.0f}[/{change_color}]"
                     )
 
                 console.print(file_changes_table)
 
-        has_file_data = delta.files_added or delta.files_removed or len(delta.files_changed) > 3
+        has_file_data = delta.files_added or delta.files_removed or len(delta.files_effort_changed) > 3
         if has_file_data:
             console.print("\n[dim]Run with --file-details to see all file changes[/dim]")
 
@@ -1187,7 +1211,7 @@ def display_current_impact_analysis(
         quality_table.add_row("Test Coverage", "[dim]N/A (run pytest first)[/dim]")
 
     dep_style = "red" if metrics.deprecation_count > 0 else "green"
-    quality_table.add_row("Deprecations", f"[{dep_style}]{metrics.deprecation_count}[/{dep_style}]")
+    quality_table.add_row("Deprecations (excl. runtime)", f"[{dep_style}]{metrics.deprecation_count}[/{dep_style}]")
 
     console.print(quality_table)
 

@@ -40,6 +40,8 @@ class TestExtendedComplexityMetrics:
             average_mi=65.5,
             total_files_analyzed=10,
             files_by_complexity={"file1.py": 25, "file2.py": 30},
+            files_by_effort={"file1.py": 2500.0, "file2.py": 2500.0},
+            files_by_mi={"file1.py": 70.0, "file2.py": 60.0},
         )
 
         assert metrics.total_complexity == 150
@@ -48,6 +50,9 @@ class TestExtendedComplexityMetrics:
         assert metrics.average_mi == 65.5
         assert metrics.total_files_analyzed == 10
         assert len(metrics.files_by_complexity) == 2
+        assert len(metrics.files_by_effort) == 2
+        assert len(metrics.files_by_mi) == 2
+        assert metrics.files_by_mi["file1.py"] == 70.0
 
 
 class TestUserStoryStatistics:

@@ -5,29 +5,6 @@ A tool that lurks in the shadows, tracks and analyzes Claude Code sessions provi
 ![slopometry-logo](assets/slopometry-logo.jpg)  
 
 
-# Customer testimonials
-
-### Claude Sonnet 4
-![claude sonnet feedback](assets/stop_hook_example.png)  
-![claude sonnet actioning](assets/stop_hook_action.png)  
-*"Amazing tool for tracking my own blind spots!"*  
-— C. Sonnet, main-author
-
-### Claude Opus
-![opus feedback](assets/opus.png)  
-*"Finally, I can see when I'm overcomplicating things."*
-— C. Opus, overpaid, infrequent contributor who insists on having its name in commit history
-
-### TensorTemplar
-*"Previously I had to READ CODE and DECIDE WHEN TO RUN SLASH COMMANDS MYSELF, but now I just periodically prompt 'Cmon, claude, you know what you did...'"*  
-— TensorTemplar, insignificant idea person for this tool
-
-### sherbie
-*"Let's slop up all the things."*
-— sherbie, opinionated SDET
-
-# Features / FAQ
-
 **NEWS:** 
 
 **December 2025: for microsoft employees we now support the Galen metric (Python only for now).**
@@ -40,22 +17,25 @@ Please stop contacting us with your cries for mercy - this is between you and yo
 
 ![galen details](assets/galen_details.png)  
 
+# Features / FAQ
 
 ### Q: How do i know if claude is lazy today? 
 
-A: Eyeball progress based on overall session-vibes
+A: Eyeball progress based on overall session-vibes, plan items, todos, how many tokens read/edited etc.
 
 ```bash
 slopometry latest
 ```
-<details>
-  
-Will show some metrics since the session start of the newest `claude code` session
 
 ![session statistics](assets/session-stat.png)  
 
+Worst offenders and overall slop at a glance  
+
 ![complexity metrics (CC)](assets/cc.png)  
-  
+
+**See more examples and FAQ in details below**:
+<details>
+
 ### Q: I don't need to verify when my tests are passing, right? 
 
 A: lmao
@@ -65,7 +45,7 @@ What clevery ways you ask? Silent exception swallowing upstream ofc!
 
 Slopometry forces agents to state the purpose of swallowed exceptions and skipped tests, this is a simple LLM-as-judge call for your RL pipeline (you're welcome)
 
-Here is Opus 4.5, which is writing 90% of your production code by 2026:
+Here is Opus 4.5, which is writing 90% of your production code by 2026:  
 ![silent-errors](assets/force-review-silent-errors.png)
 ![silent-errors2](assets/force-review-silent-errors-2.png)
   
@@ -74,11 +54,13 @@ Don't worry, your customers probably don't read their code either, and their age
 
 ### Q: I am a junior and all my colleagues were replaced with AI before I learned good code taste, is this fine? 
 
-A: Here are some dumb practices agents love to add, that you should never show to anyone who cares about readable and predictable code:
+A: Here are some dumb practices agents love to add, that would typically require justification or should be the exception, not the norm:
 
 ![code_smells1](assets/code_smells1.png)
 
 ![code_smells2](assets/code_smells2.png)
+
+![code_smells3](assets/unnecessary-abstractions.png)  
 
 ### Q: I have been vibe-coding this codebase for a while now and learned prooompt engineering. Clearly the code is better now? 
 
@@ -93,14 +75,17 @@ A: Haha, sure, maybe try a trillion dollar vscode fork, or a simple AST parser t
 ![blind_spots](assets/blind_spots.png)
 
 ### Q: My boss is llm-pilled and asks me to report my progress every 5 minutes, but human rights forbid keylogging in my country, what do I do? 
-A: export your claude code transcripts and commit them into the codebase!  
+A: export your claude code transcripts, including plan and todos, and commit them into the codebase!  
 
 ![evidence](assets/evidence.png)
 **legal disclaimer**: transcripts are totally not for any kind of distillation, but merely for personal entertainment purposes
 
-And many more undocumented features. Which worked just fine on my machine at some point!
+### Q: Are these all the features, how is the RL meme even related?
+
+A: There are advanced features for temporal and cross-project measurement of slop, but these require reading, thinking and being an adult.  
 
 </details>
+
 
 # Limitations
 

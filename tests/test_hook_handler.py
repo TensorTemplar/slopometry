@@ -506,6 +506,80 @@ class TestFormatCodeSmellFeedback:
             assert "test_foo.py" in feedback
             # test_bar.py (unrelated) only shows in non-edited files section when there are changes
 
+    def test_format_code_smell_feedback__unread_tests_are_blocking(self):
+        """Test that unread related tests trigger blocking when context_coverage provided."""
+        metrics = ExtendedComplexityMetrics(
+            total_complexity=0,
+            average_complexity=0,
+            total_volume=0,
+            total_effort=0,
+            total_difficulty=0,
+            average_volume=0,
+            average_effort=0,
+            average_difficulty=0,
+            total_mi=0,
+            average_mi=0,
+        )
+
+        context_coverage = ContextCoverage(
+            files_edited=["src/foo.py"],
+            files_read=["src/foo.py"],
+            file_coverage=[
+                FileCoverageStatus(
+                    file_path="src/foo.py",
+                    was_read_before_edit=True,
+                    test_files=["tests/test_foo.py", "tests/test_bar.py"],
+                    test_files_read=[],  # None read
+                )
+            ],
+        )
+
+        feedback, has_smells, has_blocking = format_code_smell_feedback(
+            metrics, None, context_coverage=context_coverage
+        )
+
+        assert has_smells is True
+        assert has_blocking is True
+        assert "Unread Related Tests" in feedback
+        assert "BLOCKING" in feedback
+        assert "tests/test_foo.py" in feedback
+
+    def test_format_code_smell_feedback__read_tests_not_blocking(self):
+        """Test that read tests are not included in unread tests blocking."""
+        metrics = ExtendedComplexityMetrics(
+            total_complexity=0,
+            average_complexity=0,
+            total_volume=0,
+            total_effort=0,
+            total_difficulty=0,
+            average_volume=0,
+            average_effort=0,
+            average_difficulty=0,
+            total_mi=0,
+            average_mi=0,
+        )
+
+        context_coverage = ContextCoverage(
+            files_edited=["src/foo.py"],
+            files_read=["src/foo.py", "tests/test_foo.py"],
+            file_coverage=[
+                FileCoverageStatus(
+                    file_path="src/foo.py",
+                    was_read_before_edit=True,
+                    test_files=["tests/test_foo.py"],
+                    test_files_read=["tests/test_foo.py"],  # Was read
+                )
+            ],
+        )
+
+        feedback, has_smells, has_blocking = format_code_smell_feedback(
+            metrics, None, context_coverage=context_coverage
+        )
+
+        assert has_smells is False
+        assert has_blocking is False
+        assert "Unread Related Tests" not in feedback
+
 
 class TestGetRelatedFilesViaImports:
     """Tests for import graph-based file relationship detection."""
@@ -689,56 +763,16 @@ class TestImpactAssessmentInterpretation:
 class TestFormatContextCoverageFeedback:
     """Tests for context coverage feedback formatting."""
 
-    def test_format_context_coverage_feedback__shows_unread_tests(self):
-        """Test that unread test files are listed with guidance."""
+    def test_format_context_coverage_feedback__no_tests_section(self):
+        """Test that context coverage no longer includes tests section (moved to smell feedback)."""
         coverage = ContextCoverage(
             files_edited=["src/foo.py"],
             files_read=["src/foo.py"],
-            file_coverage=[
-                FileCoverageStatus(
-                    file_path="src/foo.py",
-                    was_read_before_edit=True,
-                    test_files=["tests/test_foo.py", "tests/test_bar.py"],
-                    test_files_read=[],  # None read
-                )
-            ],
-        )
-
-        result = format_context_coverage_feedback(coverage)
-
-        assert "RELATED Tests - MUST REVIEW" in result
-        assert "tests/test_foo.py" in result
-        assert "correspond to files you edited" in result
-
-    def test_format_context_coverage_feedback__excludes_read_tests(self):
-        """Test that read test files are not listed as unreviewed."""
-        coverage = ContextCoverage(
-            files_edited=["src/foo.py"],
-            files_read=["src/foo.py", "tests/test_foo.py"],
             file_coverage=[
                 FileCoverageStatus(
                     file_path="src/foo.py",
                     was_read_before_edit=True,
                     test_files=["tests/test_foo.py"],
-                    test_files_read=["tests/test_foo.py"],  # Was read
-                )
-            ],
-        )
-
-        result = format_context_coverage_feedback(coverage)
-
-        assert "RELATED Tests - MUST REVIEW" not in result
-
-    def test_format_context_coverage_feedback__no_tests_section_when_empty(self):
-        """Test that no tests section appears when all tests were read."""
-        coverage = ContextCoverage(
-            files_edited=["src/foo.py"],
-            files_read=["src/foo.py"],
-            file_coverage=[
-                FileCoverageStatus(
-                    file_path="src/foo.py",
-                    was_read_before_edit=True,
-                    test_files=[],  # No related tests
                     test_files_read=[],
                 )
             ],
@@ -746,7 +780,9 @@ class TestFormatContextCoverageFeedback:
 
         result = format_context_coverage_feedback(coverage)
 
-        assert "RELATED Tests - MUST REVIEW" not in result
+        # Unread tests are now handled by format_code_smell_feedback, not here
+        assert "RELATED Tests" not in result
+        assert "Unread Related Tests" not in result
 
 
 class TestFormattersInterpretZScore:

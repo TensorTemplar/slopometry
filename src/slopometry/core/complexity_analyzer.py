@@ -313,6 +313,12 @@ class ComplexityAnalyzer:
         if isinstance(current_metrics, ExtendedComplexityMetrics) and isinstance(
             baseline_metrics, ExtendedComplexityMetrics
         ):
+            common_effort_files = set(baseline_metrics.files_by_effort.keys()) & set(current_metrics.files_by_effort.keys())
+            delta.files_effort_changed = {
+                file_path: current_metrics.files_by_effort[file_path] - baseline_metrics.files_by_effort[file_path]
+                for file_path in common_effort_files
+            }
+
             delta.avg_effort_change = current_metrics.average_effort - baseline_metrics.average_effort
             delta.total_effort_change = current_metrics.total_effort - baseline_metrics.total_effort
             delta.avg_mi_change = current_metrics.average_mi - baseline_metrics.average_mi
@@ -460,6 +466,7 @@ class ComplexityAnalyzer:
 
         files_by_complexity: dict[str, int] = {}
         files_by_effort: dict[str, float] = {}
+        files_by_mi: dict[str, float] = {}
         all_complexities: list[int] = []
         files_with_parse_errors: dict[str, str] = {}
         files_by_token_count: dict[str, int] = {}
@@ -492,6 +499,7 @@ class ComplexityAnalyzer:
             hal_file_count += 1
 
             total_mi += result.mi
+            files_by_mi[relative_path] = result.mi
             mi_file_count += 1
 
             files_by_token_count[relative_path] = result.tokens
@@ -548,6 +556,7 @@ class ComplexityAnalyzer:
             average_difficulty=average_difficulty,
             total_mi=total_mi,
             average_mi=average_mi,
+            files_by_mi=files_by_mi,
             total_tokens=total_tokens,
             average_tokens=average_tokens,
             max_tokens=max_tokens,
