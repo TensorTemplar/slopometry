@@ -144,3 +144,9 @@ def test_analyze_extended_complexity(mock_path):
         # New type percentage checks
         assert metrics.any_type_percentage == 10.0  # 2/20 * 100
         assert metrics.str_type_percentage == 25.0  # 5/20 * 100
+
+        # Per-file metrics should be populated
+        assert "f.py" in metrics.files_by_effort
+        assert metrics.files_by_effort["f.py"] == 500.0
+        assert "f.py" in metrics.files_by_mi
+        assert metrics.files_by_mi["f.py"] == 80.0

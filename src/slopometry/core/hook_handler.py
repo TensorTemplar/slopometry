@@ -384,7 +384,7 @@ def handle_stop_event(session_id: str, parsed_input: "StopInput | SubagentStopIn
     # This is stable (based on code state, not session activity)
     if current_metrics:
         smell_feedback, has_smells, _ = format_code_smell_feedback(
-            current_metrics, delta, edited_files, session_id, stats.working_directory
+            current_metrics, delta, edited_files, session_id, stats.working_directory, stats.context_coverage
         )
         if has_smells:
             feedback_parts.append(smell_feedback)
@@ -466,20 +466,6 @@ def format_context_coverage_feedback(coverage: ContextCoverage) -> str:
             lines.append(f"   • {truncate_path(blind_spot, max_width=65)}")
         if len(coverage.blind_spots) > 5:
             lines.append(f"   ... and {len(coverage.blind_spots) - 5} more")
-
-    unread_tests: list[str] = []
-    for file_cov in coverage.file_coverage:
-        for test_file in file_cov.test_files:
-            if test_file not in file_cov.test_files_read and test_file not in unread_tests:
-                unread_tests.append(test_file)
-
-    if unread_tests:
-        lines.append("")
-        lines.append("**RELATED Tests - MUST REVIEW**: These tests correspond to files you edited:")
-        for test_file in unread_tests[:5]:
-            lines.append(f"   • {truncate_path(test_file, max_width=65)}")
-        if len(unread_tests) > 5:
-            lines.append(f"   ... and {len(unread_tests) - 5} more")
 
     return "\n".join(lines)
 
@@ -584,6 +570,7 @@ def format_code_smell_feedback(
     edited_files: set[str] | None = None,
     session_id: str | None = None,
     working_directory: str | None = None,
+    context_coverage: "ContextCoverage | None" = None,
 ) -> tuple[str, bool, bool]:
     """Format code smell feedback using get_smells() for direct field access.
 
@@ -593,6 +580,7 @@ def format_code_smell_feedback(
         edited_files: Set of files edited in this session (for blocking smell filtering)
         session_id: Session ID for generating the smell-details command
         working_directory: Path to working directory for import graph analysis
+        context_coverage: Optional context coverage for detecting unread related tests
 
     Returns:
         Tuple of (formatted feedback string, has_smells, has_blocking_smells)
@@ -609,6 +597,17 @@ def format_code_smell_feedback(
         related_via_imports = _get_related_files_via_imports(edited_files, working_directory)
 
     blocking_smells: list[tuple[str, int, int, str, list[str]]] = []
+
+    if context_coverage:
+        unread_tests: list[str] = []
+        for file_cov in context_coverage.file_coverage:
+            for test_file in file_cov.test_files:
+                if test_file not in file_cov.test_files_read and test_file not in unread_tests:
+                    unread_tests.append(test_file)
+        if unread_tests:
+            guidance = "BLOCKING: You MUST review these tests to ensure changes are accounted for and necessary coverage is added for new functionality"
+            blocking_smells.append(("Unread Related Tests", len(unread_tests), 0, guidance, unread_tests))
+
     other_smells: list[tuple[str, int, int, list[str], str]] = []
 
     smell_changes = delta.get_smell_changes() if delta else {}

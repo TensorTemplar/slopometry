@@ -119,6 +119,7 @@ class CoverageAnalyzer:
         Returns:
             CoverageResult with parsed data
         """
+        cov = None
         try:
             cov = Coverage(data_file=str(db_path))
             cov.load()
@@ -164,3 +165,9 @@ class CoverageAnalyzer:
                 coverage_available=False,
                 error_message=f"Error reading .coverage: {e}",
             )
+        finally:
+            if cov is not None:
+                try:
+                    cov._data.close()
+                except (AttributeError, TypeError):
+                    pass
