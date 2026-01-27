@@ -40,6 +40,7 @@ def test_get_project__returns_git_project_if_git_remote_exists(mock_subprocess_r
     ]
     tracker = ProjectTracker(working_dir=mock_path)
     project = tracker.get_project()
+    assert project is not None
     assert project.name == "git@github.com:user/repo.git"
     assert project.source == ProjectSource.GIT
 
@@ -59,6 +60,7 @@ def test_get_project__returns_pyproject_if_pyproject_exists_and_no_git(mock_subp
     mock_toml_load.return_value = {"project": {"name": "my-pyproject-name"}}
     tracker = ProjectTracker(working_dir=mock_path)
     project = tracker.get_project()
+    assert project is not None
     assert project.name == "my-pyproject-name"
     assert project.source == ProjectSource.PYPROJECT
 
@@ -84,5 +86,6 @@ def test_get_project__returns_git_project_if_both_git_and_pyproject_exist(
     mock_toml_load.return_value = {"project": {"name": "my-pyproject-name"}}
     tracker = ProjectTracker(working_dir=mock_path)
     project = tracker.get_project()
+    assert project is not None
     assert project.name == "git@github.com:user/repo.git"
     assert project.source == ProjectSource.GIT

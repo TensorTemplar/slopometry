@@ -145,11 +145,11 @@ class ComplexityAnalyzer:
 
         encoder = _get_tiktoken_encoder()
 
-        files_by_complexity = {}
-        all_complexities = []
+        files_by_complexity: dict[str, int] = {}
+        all_complexities: list[int] = []
 
-        files_by_token_count = {}
-        all_token_counts = []
+        files_by_token_count: dict[str, int] = {}
+        all_token_counts: list[int] = []
 
         for file_path in python_files:
             if not file_path.exists():
@@ -313,7 +313,9 @@ class ComplexityAnalyzer:
         if isinstance(current_metrics, ExtendedComplexityMetrics) and isinstance(
             baseline_metrics, ExtendedComplexityMetrics
         ):
-            common_effort_files = set(baseline_metrics.files_by_effort.keys()) & set(current_metrics.files_by_effort.keys())
+            common_effort_files = set(baseline_metrics.files_by_effort.keys()) & set(
+                current_metrics.files_by_effort.keys()
+            )
             delta.files_effort_changed = {
                 file_path: current_metrics.files_by_effort[file_path] - baseline_metrics.files_by_effort[file_path]
                 for file_path in common_effort_files

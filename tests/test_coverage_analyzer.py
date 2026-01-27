@@ -91,6 +91,7 @@ class TestCoverageAnalyzerXML:
         result = analyzer.analyze_coverage()
 
         assert result.coverage_available is False
+        assert result.error_message is not None
         assert "parse" in result.error_message.lower()
 
 
@@ -144,6 +145,7 @@ class TestCoverageAnalyzerNoFiles:
         result = analyzer.analyze_coverage()
 
         assert result.coverage_available is False
+        assert result.error_message is not None
         assert "No coverage files found" in result.error_message
         assert "pytest" in result.error_message.lower()
 

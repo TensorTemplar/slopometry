@@ -399,7 +399,8 @@ def _display_complexity_metrics(
         overview_table.add_row("  Test Coverage", "[dim]N/A (run pytest first)[/dim]")
 
     overview_table.add_row(
-        "  Deprecations (excl. runtime)", f"[yellow]{metrics.deprecation_count}[/yellow]" if metrics.deprecation_count > 0 else "0"
+        "  Deprecations (excl. runtime)",
+        f"[yellow]{metrics.deprecation_count}[/yellow]" if metrics.deprecation_count > 0 else "0",
     )
 
     overview_table.add_row("[bold]Code Smells[/bold]", "")
@@ -853,9 +854,7 @@ def create_experiment_table(experiments_data: list[ExperimentDisplayData]) -> Ta
     table.add_column("Status", style="bold")
 
     for exp_data in experiments_data:
-        status_style = (
-            "green" if exp_data.status == "completed" else "red" if exp_data.status == "failed" else "yellow"
-        )
+        status_style = "green" if exp_data.status == "completed" else "red" if exp_data.status == "failed" else "yellow"
 
         table.add_row(
             exp_data.id,
@@ -1367,7 +1366,9 @@ def display_baseline_comparison_compact(
 
     qpe_sign = "↑" if assessment.qpe_z_score > 0 else "↓" if assessment.qpe_z_score < 0 else "→"
     qpe_quality = "good" if assessment.qpe_z_score > 0 else "below avg" if assessment.qpe_z_score < 0 else "avg"
-    lines.append(f"  QPE (GRPO): {assessment.qpe_delta:+.4f} (Z: {assessment.qpe_z_score:+.2f} {qpe_sign} {qpe_quality})")
+    lines.append(
+        f"  QPE (GRPO): {assessment.qpe_delta:+.4f} (Z: {assessment.qpe_z_score:+.2f} {qpe_sign} {qpe_quality})"
+    )
 
     category_display = assessment.impact_category.value.replace("_", " ").upper()
     lines.append(f"Session Impact: {category_display} ({assessment.impact_score:+.2f})")
@@ -1391,8 +1392,12 @@ def display_qpe_score(
     # Show both QPE metrics
     qpe_color = "green" if qpe_score.qpe > 0.05 else "yellow" if qpe_score.qpe > 0.02 else "red"
     qual_color = "green" if qpe_score.qpe_absolute > 0.6 else "yellow" if qpe_score.qpe_absolute > 0.4 else "red"
-    console.print(f"  [bold]QPE (GRPO):[/bold] [{qpe_color}]{qpe_score.qpe:.4f}[/{qpe_color}]  [dim]effort-normalized for rollout comparison[/dim]")
-    console.print(f"  [bold]Quality:[/bold]    [{qual_color}]{qpe_score.qpe_absolute:.4f}[/{qual_color}]  [dim]absolute for cross-project/temporal[/dim]")
+    console.print(
+        f"  [bold]QPE (GRPO):[/bold] [{qpe_color}]{qpe_score.qpe:.4f}[/{qpe_color}]  [dim]effort-normalized for rollout comparison[/dim]"
+    )
+    console.print(
+        f"  [bold]Quality:[/bold]    [{qual_color}]{qpe_score.qpe_absolute:.4f}[/{qual_color}]  [dim]absolute for cross-project/temporal[/dim]"
+    )
 
     component_table = Table(title="QPE Components", show_header=True)
     component_table.add_column("Component", style="cyan")
@@ -1447,7 +1452,9 @@ def display_qpe_score(
 
         console.print(smell_table)
 
-    console.print("\n[dim]Higher QPE (GRPO) = better quality per effort | Higher Quality = better absolute quality[/dim]")
+    console.print(
+        "\n[dim]Higher QPE (GRPO) = better quality per effort | Higher Quality = better absolute quality[/dim]"
+    )
 
 
 def display_cross_project_comparison(comparison: "CrossProjectComparison") -> None:

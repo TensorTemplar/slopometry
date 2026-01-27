@@ -166,7 +166,7 @@ class CoverageAnalyzer:
                 error_message=f"Error reading .coverage: {e}",
             )
         finally:
-            if cov is not None:
+            if cov is not None and cov._data is not None:
                 try:
                     cov._data.close()
                 except (AttributeError, TypeError):

@@ -186,12 +186,15 @@ class GitTracker:
     def get_tracked_python_files(self) -> list[Path]:
         """Get list of Python files tracked by git or not ignored (if untracked).
 
-        Uses git ls-files if available, otherwise falls back to rglob with exclusion.
+        For non-git directories (e.g., temp extraction dirs), falls back to
+        finding all Python files while excluding common virtual env directories.
 
         Returns:
             List of Path objects for Python files
-        """
 
+        Raises:
+            GitOperationError: If inside a git repo but git command fails
+        """
         try:
             cmd = ["git", "ls-files", "--cached", "--others", "--exclude-standard"]
             result = subprocess.run(
@@ -199,26 +202,40 @@ class GitTracker:
                 cwd=self.working_dir,
                 capture_output=True,
                 text=True,
-                check=True,
+                timeout=30,
             )
-            files = []
-            for line in result.stdout.splitlines():
-                if line.endswith(".py"):
-                    files.append(self.working_dir / line)
-            return files
 
-        except (subprocess.SubprocessError, FileNotFoundError):
-            pass
+            if result.returncode == 0:
+                files = []
+                for line in result.stdout.splitlines():
+                    if line.endswith(".py"):
+                        files.append(self.working_dir / line)
+                return files
 
-        files = []
+            # Check if this is a "not a git repo" error vs actual failure
+            stderr = result.stderr.strip().lower()
+            if "not a git repository" in stderr:
+                # Not a git repo - fall back to finding Python files directly
+                return self._find_python_files_fallback()
+
+            # Actual git failure in a git repo
+            raise GitOperationError(f"git ls-files failed: {result.stderr.strip()}")
+
+        except subprocess.TimeoutExpired as e:
+            raise GitOperationError(f"git ls-files timed out: {e}") from e
+        except FileNotFoundError as e:
+            raise GitOperationError(f"git not found - is git installed? {e}") from e
+        except subprocess.SubprocessError as e:
+            raise GitOperationError(f"git ls-files failed: {e}") from e
+
+    def _find_python_files_fallback(self) -> list[Path]:
+        """Find Python files without git (for non-git directories like temp extractions)."""
         ignored_dirs = {
             ".venv",
             "venv",
             "env",
             ".env",
             ".git",
-            ".idea",
-            ".vscode",
             "__pycache__",
             "node_modules",
             "site-packages",
@@ -226,6 +243,7 @@ class GitTracker:
             "build",
         }
 
+        files = []
         for file_path in self.working_dir.rglob("*.py"):
             parts = file_path.relative_to(self.working_dir).parts
             if any(part in ignored_dirs for part in parts):
@@ -372,6 +390,9 @@ class GitTracker:
     def extract_specific_files_from_commit(self, commit_ref: str, file_paths: list[str]) -> Path | None:
         """Extract specific files from a commit to a temporary directory.
 
+        Uses git archive with pathspec for batch extraction (single subprocess call)
+        instead of per-file git show calls.
+
         Args:
             commit_ref: Git commit reference
             file_paths: List of file paths to extract
@@ -385,41 +406,55 @@ class GitTracker:
         if not file_paths:
             return None
 
+        temp_dir: Path | None = None
         try:
             temp_dir = Path(tempfile.mkdtemp(prefix="slopometry_delta_"))
-            failed_files: list[str] = []
 
-            for file_path in file_paths:
-                try:
-                    result = subprocess.run(
-                        ["git", "show", f"{commit_ref}:{file_path}"],
-                        cwd=self.working_dir,
-                        capture_output=True,
-                        timeout=10,
-                    )
+            # Use git archive with pathspec to extract only the specified files
+            # This is O(1) subprocess calls instead of O(n) with git show
+            result = subprocess.run(
+                ["git", "archive", "--format=tar", commit_ref, "--"] + file_paths,
+                cwd=self.working_dir,
+                capture_output=True,
+                timeout=60,
+            )
 
-                    if result.returncode == 0:
-                        dest_path = temp_dir / file_path
-                        dest_path.parent.mkdir(parents=True, exist_ok=True)
-                        dest_path.write_bytes(result.stdout)
-                    else:
-                        failed_files.append(file_path)
-                except (subprocess.TimeoutExpired, subprocess.SubprocessError):
-                    failed_files.append(file_path)
+            if result.returncode != 0:
+                # git archive fails if none of the files exist in this commit
+                # This is normal for newly added files when extracting from parent
+                stderr = result.stderr.decode().strip()
+                if "pathspec" in stderr.lower() or "not in" in stderr.lower():
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                    return None
+                raise GitOperationError(f"git archive failed for {commit_ref}: {stderr}")
 
-            # Don't error on files that don't exist in this commit
-            # (e.g., newly added files when extracting from parent commit)
+            from io import BytesIO
+
+            tar_data = BytesIO(result.stdout)
+            try:
+                with tarfile.open(fileobj=tar_data, mode="r") as tar:
+                    python_members = [m for m in tar.getmembers() if m.name.endswith(".py")]
+                    if not python_members:
+                        shutil.rmtree(temp_dir, ignore_errors=True)
+                        return None
+                    tar.extractall(path=temp_dir, members=python_members, filter="data")
+            except tarfile.TarError as e:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                raise GitOperationError(f"Failed to extract tar for {commit_ref}: {e}") from e
+
             if not any(temp_dir.rglob("*.py")):
-                if failed_files and len(failed_files) == len(file_paths):
-                    raise GitOperationError(
-                        f"Failed to extract any files from {commit_ref}. "
-                        f"These files may not exist in this commit. Failed: {failed_files}"
-                    )
+                shutil.rmtree(temp_dir, ignore_errors=True)
                 return None
 
             return temp_dir
 
+        except subprocess.TimeoutExpired as e:
+            if temp_dir:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            raise GitOperationError(f"git archive timed out for {commit_ref}: {e}") from e
         except (subprocess.SubprocessError, OSError) as e:
+            if temp_dir:
+                shutil.rmtree(temp_dir, ignore_errors=True)
             raise GitOperationError(f"Failed to extract files from {commit_ref}: {e}") from e
 
     def has_previous_commit(self) -> bool:

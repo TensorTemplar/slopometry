@@ -1,6 +1,7 @@
 """Integration test for NotebookRead hook handling."""
 
 from slopometry.core.hook_handler import parse_hook_input
+from slopometry.core.models import PostToolUseInput
 
 
 class TestNotebookReadIntegration:
@@ -29,7 +30,8 @@ class TestNotebookReadIntegration:
         # This should not raise a ValidationError anymore
         parsed_input = parse_hook_input(raw_hook_data)
 
-        # Verify the parsing worked correctly
+        # PostToolUse data should parse to PostToolUseInput
+        assert isinstance(parsed_input, PostToolUseInput)
         assert parsed_input.session_id == "test_session_123"
         assert parsed_input.tool_name == "NotebookRead"
         assert isinstance(parsed_input.tool_response, list)
@@ -51,7 +53,8 @@ class TestNotebookReadIntegration:
         # This should not raise a ValidationError
         parsed_input = parse_hook_input(raw_hook_data)
 
-        # Verify the parsing worked correctly
+        # PostToolUse data should parse to PostToolUseInput
+        assert isinstance(parsed_input, PostToolUseInput)
         assert parsed_input.session_id == "test_session_456"
         assert parsed_input.tool_name == "NotebookRead"
         assert isinstance(parsed_input.tool_response, list)

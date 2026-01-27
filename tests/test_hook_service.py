@@ -84,6 +84,7 @@ def test_update_gitignore__creates_new_file_when_missing(tmp_path, monkeypatch):
     updated, message = service._update_gitignore(tmp_path)
 
     assert updated is True
+    assert message is not None
     assert ".slopometry/" in message
 
     gitignore = (tmp_path / ".gitignore").read_text()

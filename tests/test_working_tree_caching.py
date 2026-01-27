@@ -131,6 +131,8 @@ class TestWorkingTreeCacheManager:
                 # Retrieve dirty repo metrics
                 dirty_cached, _ = cache_manager.get_cached_metrics("session1", "/test/repo", "abc123", "dirtyhash")
 
+                assert clean_cached is not None
+                assert dirty_cached is not None
                 assert clean_cached.total_complexity == 30
                 assert dirty_cached.total_complexity == 35
 
@@ -186,6 +188,8 @@ class TestWorkingTreeCachingIntegration:
                 # First call - should calculate and cache
                 metrics1, delta1 = db._get_session_complexity_metrics("test_session", temp_dir, None)
 
+                assert metrics1 is not None
+                assert delta1 is not None
                 assert metrics1.total_complexity == 75
                 assert delta1.total_complexity_change == 25
                 mock_calc.assert_called_once()
@@ -193,6 +197,8 @@ class TestWorkingTreeCachingIntegration:
                 # Second call with same working tree state - should hit cache
                 metrics2, delta2 = db._get_session_complexity_metrics("test_session", temp_dir, None)
 
+                assert metrics2 is not None
+                assert delta2 is not None
                 assert metrics2.total_complexity == 75
                 assert delta2.total_complexity_change == 25
                 # calculate_extended_complexity_metrics should still only be called once
@@ -219,6 +225,8 @@ class TestWorkingTreeCachingIntegration:
                 # First call - should calculate and cache
                 metrics1, delta1 = db._get_session_complexity_metrics("test_session", temp_dir, None)
 
+                assert metrics1 is not None
+                assert delta1 is not None
                 assert metrics1.total_complexity == 50
                 assert delta1.total_complexity_change == 0
                 mock_calc.assert_called_once()
@@ -226,6 +234,8 @@ class TestWorkingTreeCachingIntegration:
                 # Second call - should hit cache
                 metrics2, delta2 = db._get_session_complexity_metrics("test_session", temp_dir, None)
 
+                assert metrics2 is not None
+                assert delta2 is not None
                 assert metrics2.total_complexity == 50
                 assert delta2.total_complexity_change == 0
                 # Should still only be called once due to caching
