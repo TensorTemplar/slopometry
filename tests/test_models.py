@@ -12,7 +12,7 @@ class TestExtendedComplexityMetrics:
     def test_model_creation_without_required_fields__raises_validation_error(self) -> None:
         """Test that ValidationError is raised when required Halstead fields are missing."""
         with pytest.raises(ValidationError) as exc_info:
-            ExtendedComplexityMetrics()
+            ExtendedComplexityMetrics()  # pyrefly: ignore[missing-argument]
 
         errors = exc_info.value.errors()
         missing_fields = {e["loc"][0] for e in errors}

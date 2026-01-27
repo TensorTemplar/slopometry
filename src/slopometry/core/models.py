@@ -352,7 +352,9 @@ class ComplexityDelta(BaseModel):
     files_added: list[str] = Field(default_factory=list)
     files_removed: list[str] = Field(default_factory=list)
     files_changed: dict[str, int] = Field(default_factory=dict, description="Mapping of filename to complexity delta")
-    files_effort_changed: dict[str, float] = Field(default_factory=dict, description="Mapping of filename to effort delta")
+    files_effort_changed: dict[str, float] = Field(
+        default_factory=dict, description="Mapping of filename to effort delta"
+    )
     net_files_change: int = Field(default=0, description="Net change in number of files (files_added - files_removed)")
     avg_complexity_change: float = 0.0
 

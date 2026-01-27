@@ -105,8 +105,33 @@ def test_get_tracked_python_files__git_success(mock_path):
         assert cmd == ["git", "ls-files", "--cached", "--others", "--exclude-standard"]
 
 
-def test_get_tracked_python_files__git_failure_fallback(mock_path):
-    """Test fallback to rglob when git fails (mocked)."""
+def test_get_tracked_python_files__raises_git_operation_error_on_subprocess_failure(mock_path):
+    """Test that GitOperationError is raised when subprocess fails."""
+    tracker = GitTracker(mock_path)
+
+    with patch("subprocess.run") as mock_run:
+        mock_run.side_effect = subprocess.SubprocessError("Git command failed")
+
+        with pytest.raises(GitOperationError, match="git ls-files failed"):
+            tracker.get_tracked_python_files()
+
+
+def test_get_tracked_python_files__raises_git_operation_error_on_git_failure(mock_path):
+    """Test that GitOperationError is raised when git fails (not 'not a repo' error)."""
+    tracker = GitTracker(mock_path)
+
+    with patch("subprocess.run") as mock_run:
+        mock_result = MagicMock()
+        mock_result.returncode = 128
+        mock_result.stderr = "fatal: some other git error"
+        mock_run.return_value = mock_result
+
+        with pytest.raises(GitOperationError, match="git ls-files failed"):
+            tracker.get_tracked_python_files()
+
+
+def test_get_tracked_python_files__fallback_for_non_git_directory(mock_path):
+    """Test fallback to rglob when directory is not a git repo."""
     tracker = GitTracker(mock_path)
 
     # Create file structure
@@ -120,8 +145,10 @@ def test_get_tracked_python_files__git_failure_fallback(mock_path):
     (mock_path / "node_modules/ignored.py").touch()
 
     with patch("subprocess.run") as mock_run:
-        # Mock git failure
-        mock_run.side_effect = subprocess.SubprocessError("Git not found")
+        mock_result = MagicMock()
+        mock_result.returncode = 128
+        mock_result.stderr = "fatal: not a git repository (or any parent)"
+        mock_run.return_value = mock_result
 
         files = tracker.get_tracked_python_files()
 
@@ -428,3 +455,65 @@ def test_has_previous_commit__returns_false_for_initial_commit(tmp_path):
 
     tracker = GitTracker(tmp_path)
     assert tracker.has_previous_commit() is False
+
+
+# -----------------------------------------------------------------------------
+# extract_specific_files_from_commit Tests
+# -----------------------------------------------------------------------------
+
+
+def test_extract_specific_files_from_commit__extracts_requested_files(git_repo):
+    """Integration test: Verify extracting specific files from a commit."""
+    import shutil
+
+    tracker = GitTracker(git_repo)
+
+    # Extract only main.py from HEAD (both main.py and utils.py exist)
+    temp_dir = tracker.extract_specific_files_from_commit("HEAD", ["main.py"])
+    assert temp_dir is not None
+    assert temp_dir.exists()
+
+    try:
+        # main.py should exist
+        assert (temp_dir / "main.py").exists()
+        # utils.py should NOT exist (we only requested main.py)
+        assert not (temp_dir / "utils.py").exists()
+    finally:
+        if temp_dir and temp_dir.exists():
+            shutil.rmtree(temp_dir)
+
+
+def test_extract_specific_files_from_commit__returns_none_for_empty_list(git_repo):
+    """Verify extract_specific_files_from_commit returns None for empty file list."""
+    tracker = GitTracker(git_repo)
+
+    result = tracker.extract_specific_files_from_commit("HEAD", [])
+    assert result is None
+
+
+def test_extract_specific_files_from_commit__returns_none_for_nonexistent_files(git_repo):
+    """Verify extract_specific_files_from_commit returns None when files don't exist."""
+    tracker = GitTracker(git_repo)
+
+    # Request a file that doesn't exist in HEAD
+    result = tracker.extract_specific_files_from_commit("HEAD", ["nonexistent.py"])
+    assert result is None
+
+
+def test_extract_specific_files_from_commit__handles_multiple_files(git_repo):
+    """Integration test: Verify extracting multiple specific files."""
+    import shutil
+
+    tracker = GitTracker(git_repo)
+
+    # Extract both files from HEAD
+    temp_dir = tracker.extract_specific_files_from_commit("HEAD", ["main.py", "utils.py"])
+    assert temp_dir is not None
+    assert temp_dir.exists()
+
+    try:
+        assert (temp_dir / "main.py").exists()
+        assert (temp_dir / "utils.py").exists()
+    finally:
+        if temp_dir and temp_dir.exists():
+            shutil.rmtree(temp_dir)

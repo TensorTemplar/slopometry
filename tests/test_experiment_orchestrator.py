@@ -208,6 +208,7 @@ class TestAnalyzeCommitChain:
             patch("slopometry.summoner.services.experiment_orchestrator.console"),
             patch("slopometry.summoner.services.experiment_orchestrator.ComplexityAnalyzer"),
         ):
+
             def subprocess_side_effect(*args, **kwargs):
                 result = MagicMock()
                 result.returncode = 0

@@ -20,6 +20,14 @@ class ContextCoverageAnalyzer:
         self.working_directory = working_directory
         self._import_graph: dict[str, set[str]] = {}
         self._reverse_import_graph: dict[str, set[str]] = {}
+        self._tracked_files: list[Path] | None = None
+
+    def _get_tracked_files(self) -> list[Path]:
+        """Get tracked Python files (cached)."""
+        if self._tracked_files is None:
+            tracker = GitTracker(self.working_directory)
+            self._tracked_files = tracker.get_tracked_python_files()
+        return self._tracked_files
 
     def analyze_transcript(self, transcript_path: Path) -> ContextCoverage:
         """Analyze a session transcript to compute context coverage.
@@ -58,23 +66,85 @@ class ContextCoverageAnalyzer:
     def get_affected_dependents(self, changed_files: set[str]) -> list[str]:
         """Identify files that depend on the changed files (potential blind spots).
 
+        Uses grep-based search instead of building full import graph for performance.
+
         Args:
             changed_files: Set of relative file paths that were modified
 
         Returns:
             List of unique file paths that import the changed files
         """
-        self._build_import_graph()
         affected = set()
 
         for file_path in changed_files:
-            dependents = self._reverse_import_graph.get(file_path, set())
+            dependents = self._find_dependents_fast(file_path)
             affected.update(dependents)
 
             tests = self._find_test_files(file_path)
             affected.update(tests)
 
         return sorted(list(affected - changed_files))
+
+    def _find_dependents_fast(self, file_path: str) -> set[str]:
+        """Find files that import the given file using grep (fast).
+
+        Instead of parsing all files to build import graph, grep for import patterns.
+        """
+        import subprocess
+
+        module_patterns = self._get_import_patterns(file_path)
+        if not module_patterns:
+            return set()
+
+        dependents = set()
+
+        for pattern in module_patterns:
+            try:
+                result = subprocess.run(
+                    ["git", "grep", "-l", "-E", pattern],
+                    cwd=self.working_directory,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                if result.returncode == 0:
+                    for line in result.stdout.strip().split("\n"):
+                        if line.endswith(".py") and line != file_path:
+                            dependents.add(line)
+            except (subprocess.TimeoutExpired, subprocess.SubprocessError):
+                pass
+
+        return dependents
+
+    def _get_import_patterns(self, file_path: str) -> list[str]:
+        """Convert a file path to regex patterns that would import it."""
+        path = Path(file_path)
+        patterns = []
+
+        if path.name == "__init__.py":
+            module_parts = list(path.parent.parts)
+        else:
+            module_parts = list(path.parent.parts) + [path.stem]
+
+        if not module_parts or module_parts == ["."]:
+            return []
+
+        if module_parts[0] == "src":
+            module_parts = module_parts[1:]
+
+        if not module_parts:
+            return []
+
+        module_name = ".".join(module_parts)
+
+        patterns.append(f"^(from|import)\\s+{module_name.replace('.', r'\\.')}(\\s|$|,)")
+
+        if len(module_parts) > 1:
+            parent_module = ".".join(module_parts[:-1])
+            last_part = module_parts[-1]
+            patterns.append(f"^from\\s+{parent_module.replace('.', r'\\.')}\\s+import\\s+.*{last_part}")
+
+        return patterns
 
     def _extract_file_events(self, transcript_path: Path) -> tuple[set[str], set[str], dict[str, int], dict[str, int]]:
         """Extract Read and Edit file paths from transcript with their sequence numbers.
@@ -173,9 +243,14 @@ class ContextCoverageAnalyzer:
         return None
 
     def _build_import_graph(self) -> None:
-        """Build import graph for all Python files in working directory."""
-        tracker = GitTracker(self.working_directory)
-        python_files = tracker.get_tracked_python_files()
+        """Build import graph for all Python files in working directory.
+
+        Skips if already built (cached in instance).
+        """
+        if self._import_graph:
+            return
+
+        python_files = self._get_tracked_files()
 
         for file_path in python_files:
             try:
@@ -278,11 +353,8 @@ class ContextCoverageAnalyzer:
             f"test_{source_name}.py",
         ]
 
-        tracker = GitTracker(self.working_directory)
-        tracked_files = tracker.get_tracked_python_files()
-
         test_files = []
-        for file_path in tracked_files:
+        for file_path in self._get_tracked_files():
             try:
                 rel_path = str(file_path.relative_to(self.working_directory))
             except ValueError:

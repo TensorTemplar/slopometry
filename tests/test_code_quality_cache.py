@@ -123,6 +123,7 @@ class TestCodeQualityCacheManager:
 
         # Verify initial state has no coverage
         metrics, _ = manager.get_cached_metrics("sess_1", "/repo", "sha1")
+        assert metrics is not None
         assert metrics.test_coverage_percent is None
 
         # Update with coverage
@@ -131,6 +132,7 @@ class TestCodeQualityCacheManager:
 
         # Verify coverage was cached
         metrics, _ = manager.get_cached_metrics("sess_1", "/repo", "sha1")
+        assert metrics is not None
         assert metrics.test_coverage_percent == 85.5
         assert metrics.test_coverage_source == "coverage.xml"
 

@@ -60,9 +60,12 @@ class TestPostToolUseInputValidation:
 
         input_model = PostToolUseInput(**data)
         assert input_model.tool_response == notebook_cells
+        assert isinstance(input_model.tool_response, list)
         assert len(input_model.tool_response) == 2
-        assert input_model.tool_response[0]["cellType"] == "markdown"
-        assert input_model.tool_response[1]["cellType"] == "code"
+        cell0 = input_model.tool_response[0]
+        cell1 = input_model.tool_response[1]
+        assert isinstance(cell0, dict) and cell0["cellType"] == "markdown"
+        assert isinstance(cell1, dict) and cell1["cellType"] == "code"
 
     def test_posttooluse_with_empty_list_response__validates_correctly(self):
         """Test that PostToolUseInput accepts empty list responses."""
