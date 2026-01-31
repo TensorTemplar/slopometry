@@ -2,10 +2,16 @@
 
 import shutil
 import sys
+from importlib.metadata import version
 
 import click
 
 from slopometry.display.console import console
+
+
+def get_version() -> str:
+    """Get package version."""
+    return version("slopometry")
 
 
 def check_slopometry_in_path() -> bool:
@@ -21,6 +27,7 @@ def warn_if_not_in_path() -> None:
 
 
 @click.group()
+@click.version_option(version=get_version(), prog_name="slopometry")
 def cli() -> None:
     """Slopometry - Claude Code session tracker.
 

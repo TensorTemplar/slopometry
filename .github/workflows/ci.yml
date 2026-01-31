@@ -43,7 +43,7 @@ jobs:
         uses: astral-sh/setup-uv@v4
 
       - name: Install slopometry from checkout
-        run: uv tool install .
+        run: uv tool install . --find-links "https://github.com/Droidcraft/rust-code-analysis/releases/expanded_assets/python-2026.1.31"
 
       - name: Run QPE check
         id: qpe

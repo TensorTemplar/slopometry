@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "slopometry"
-version = "20260125-2"
+version = "2026.1.25.2"
 description = "Opinionated code quality metrics for code agents and humans"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -29,7 +29,6 @@ dependencies = [
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
     "sqlite-utils>=3.0",
-    "radon>=6.0.1",
     "toml>=0.10.2",
     "pydantic-ai>=1.33.0",
     "pandas>=2.0.0",
@@ -38,6 +37,7 @@ dependencies = [
     "huggingface-hub>=0.20.0",
     "coverage>=7.0.0",
     "tiktoken>=0.7.0",
+    "rust-code-analysis>=2026.1.31",
 ]
 
 [project.optional-dependencies]
@@ -127,4 +127,7 @@ precision = 2
 directory = "htmlcov"
 
 [tool.pyrefly]
-search_path = ["src", "tests"]
+search_path = ["src", "tests", "src/slopometry/stubs"]
+
+[tool.uv]
+find-links = ["https://github.com/Droidcraft/rust-code-analysis/releases/expanded_assets/python-2026.1.31"]

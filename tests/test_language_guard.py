@@ -30,7 +30,7 @@ class TestLanguageDetector:
         assert len(unsupported) == 0
 
     def test_detect_languages__reports_unsupported_languages(self, tmp_path: Path) -> None:
-        """Should report unsupported languages like Rust, Go, TypeScript."""
+        """Should report unsupported languages like Go, TypeScript (but Rust is now supported)."""
         # Create a git repo with mixed files
         subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
         (tmp_path / "main.rs").write_text("fn main() {}")
@@ -41,8 +41,7 @@ class TestLanguageDetector:
         detector = LanguageDetector(tmp_path)
         supported, unsupported = detector.detect_languages()
 
-        assert len(supported) == 0  # No Python
-        assert "Rust" in unsupported
+        assert ProjectLanguage.RUST in supported  # Rust is now supported
         assert "Go" in unsupported
         assert "TypeScript" in unsupported
 
@@ -71,13 +70,15 @@ class TestLanguageDetector:
         subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
         (tmp_path / "main.py").write_text("print('hello')")
         (tmp_path / "lib.rs").write_text("pub fn foo() {}")
+        (tmp_path / "app.go").write_text("package main")  # Go is still unsupported
         subprocess.run(["git", "add", "."], cwd=tmp_path, capture_output=True)
 
         detector = LanguageDetector(tmp_path)
         supported, unsupported = detector.detect_languages()
 
         assert ProjectLanguage.PYTHON in supported
-        assert "Rust" in unsupported
+        assert ProjectLanguage.RUST in supported  # Rust is now supported
+        assert "Go" in unsupported
 
 
 class TestCheckLanguageSupport:
@@ -99,6 +100,7 @@ class TestCheckLanguageSupport:
         """Should return allowed=False when required Python is not detected."""
         subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
         (tmp_path / "main.rs").write_text("fn main() {}")
+        (tmp_path / "app.go").write_text("package main")  # Go is still unsupported
         subprocess.run(["git", "add", "."], cwd=tmp_path, capture_output=True)
 
         result = check_language_support(tmp_path, ProjectLanguage.PYTHON)
@@ -106,7 +108,8 @@ class TestCheckLanguageSupport:
         assert result.allowed is False
         assert result.required_language == ProjectLanguage.PYTHON
         assert ProjectLanguage.PYTHON not in result.detected_supported
-        assert "Rust" in result.detected_unsupported
+        assert ProjectLanguage.RUST in result.detected_supported  # Rust is now supported
+        assert "Go" in result.detected_unsupported
 
 
 class TestLanguageGuardResult:
@@ -169,8 +172,10 @@ class TestExtensionMaps:
         assert EXTENSION_MAP[".py"] == ProjectLanguage.PYTHON
 
     def test_known_unsupported__contains_common_languages(self) -> None:
-        """Common languages should be in unsupported map."""
-        assert ".rs" in KNOWN_UNSUPPORTED_EXTENSIONS
+        """Common unsupported languages should be in unsupported map (Rust is now supported)."""
+        assert ".rs" not in KNOWN_UNSUPPORTED_EXTENSIONS  # Rust is now supported
+        assert ".rs" in EXTENSION_MAP  # Rust should be in supported map
+        assert EXTENSION_MAP[".rs"] == ProjectLanguage.RUST
         assert ".go" in KNOWN_UNSUPPORTED_EXTENSIONS
         assert ".ts" in KNOWN_UNSUPPORTED_EXTENSIONS
         assert ".js" in KNOWN_UNSUPPORTED_EXTENSIONS
