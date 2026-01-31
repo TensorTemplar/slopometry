@@ -1,6 +1,6 @@
 """Type stubs for rust-code-analysis Python bindings."""
 
-from typing import Iterator
+from collections.abc import Iterator
 
 class CyclomaticMetrics:
     sum: float
