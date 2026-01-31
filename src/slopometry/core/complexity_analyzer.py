@@ -1,13 +1,12 @@
-"""Cognitive complexity analysis using radon."""
+"""Cognitive complexity analysis using rust-code-analysis."""
 
 import logging
 import os
 import time
-import warnings
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from typing import Any
 
+from slopometry.core.code_analyzer import CodeAnalyzer, _analyze_single_file
 from slopometry.core.models import (
     ComplexityDelta,
     ComplexityMetrics,
@@ -16,75 +15,15 @@ from slopometry.core.models import (
 )
 from slopometry.core.python_feature_analyzer import PythonFeatureAnalyzer, _count_loc
 from slopometry.core.settings import settings
+from slopometry.core.tokenizer import count_file_tokens
 
 logger = logging.getLogger(__name__)
 
-CALCULATOR_VERSION = "2024.1.4"
-
-
-def _get_tiktoken_encoder() -> Any:
-    """Get tiktoken encoder, falling back if o200k_base encoding not available.
-
-    Returns:
-        tiktoken Encoder for token counting
-    """
-    import tiktoken
-
-    try:
-        return tiktoken.get_encoding("o200k_base")
-    except Exception as e:
-        logger.debug(f"Falling back to cl100k_base encoding: {e}")
-        return tiktoken.get_encoding("cl100k_base")
-
-
-def _analyze_single_file_extended(file_path: Path) -> FileAnalysisResult | None:
-    """Analyze a single Python file for all metrics.
-
-    Module-level function required for ProcessPoolExecutor pickling.
-    Imports are inside function to avoid serialization issues.
-    """
-    import radon.complexity as cc_lib
-    import radon.metrics as metrics_lib
-
-    encoder = _get_tiktoken_encoder()
-
-    try:
-        content = file_path.read_text(encoding="utf-8")
-
-        # Suppress SyntaxWarning from radon parsing third-party code with invalid escapes
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", category=SyntaxWarning)
-            blocks = cc_lib.cc_visit(content)
-            complexity = sum(block.complexity for block in blocks)
-
-            hal = metrics_lib.h_visit(content)
-            mi = metrics_lib.mi_visit(content, multi=False)
-        tokens = len(encoder.encode(content, disallowed_special=()))
-
-        return FileAnalysisResult(
-            path=str(file_path),
-            complexity=complexity,
-            volume=hal.total.volume,
-            difficulty=hal.total.difficulty,
-            effort=hal.total.effort,
-            mi=mi,
-            tokens=tokens,
-        )
-    except (SyntaxError, UnicodeDecodeError, OSError, ValueError) as e:
-        return FileAnalysisResult(
-            path=str(file_path),
-            complexity=0,
-            volume=0.0,
-            difficulty=0.0,
-            effort=0.0,
-            mi=0.0,
-            tokens=0,
-            error=str(e),
-        )
+CALCULATOR_VERSION = "2024.1.5"
 
 
 class ComplexityAnalyzer:
-    """Analyzes cognitive complexity of Python files using radon."""
+    """Analyzes cognitive complexity of source files using rust-code-analysis."""
 
     def __init__(self, working_directory: Path | None = None):
         """Initialize the analyzer.
@@ -93,6 +32,14 @@ class ComplexityAnalyzer:
             working_directory: Directory to analyze. Defaults to current working directory.
         """
         self.working_directory = working_directory or Path.cwd()
+        self._code_analyzer: CodeAnalyzer | None = None
+
+    @property
+    def code_analyzer(self) -> CodeAnalyzer:
+        """Get the code analyzer, creating it on first access."""
+        if self._code_analyzer is None:
+            self._code_analyzer = CodeAnalyzer()
+        return self._code_analyzer
 
     def analyze_complexity(self) -> ComplexityMetrics:
         """Analyze complexity of Python files in the working directory.
@@ -126,7 +73,7 @@ class ComplexityAnalyzer:
             return current_metrics, ComplexityDelta()
 
     def _analyze_directory(self, directory: Path) -> ComplexityMetrics:
-        """Analyze complexity of Python files in a specific directory.
+        """Analyze complexity of source files in a specific directory.
 
         Files with syntax errors or encoding issues are silently skipped.
 
@@ -136,56 +83,39 @@ class ComplexityAnalyzer:
         Returns:
             ComplexityMetrics with aggregated complexity data.
         """
-        import radon.complexity as cc_lib
-
         from slopometry.core.git_tracker import GitTracker
 
         tracker = GitTracker(directory)
-        python_files = tracker.get_tracked_python_files()
+        python_files = [f for f in tracker.get_tracked_python_files() if f.exists()]
+        rust_files = [f for f in tracker.get_tracked_rust_files() if f.exists()]
+        all_files = python_files + rust_files
 
-        encoder = _get_tiktoken_encoder()
+        results = self.code_analyzer.analyze_files(all_files)
 
         files_by_complexity: dict[str, int] = {}
         all_complexities: list[int] = []
-
         files_by_token_count: dict[str, int] = {}
         all_token_counts: list[int] = []
 
-        for file_path in python_files:
-            if not file_path.exists():
+        for result in results:
+            if result.error:
+                logger.debug(f"Skipping file with error {result.path}: {result.error}")
                 continue
 
-            try:
-                content = file_path.read_text(encoding="utf-8")
-
-                # Suppress SyntaxWarning from radon parsing third-party code
-                with warnings.catch_warnings():
-                    warnings.filterwarnings("ignore", category=SyntaxWarning)
-                    blocks = cc_lib.cc_visit(content)
-                file_complexity = sum(block.complexity for block in blocks)
-
-                relative_path = self._get_relative_path(file_path, directory)
-                files_by_complexity[relative_path] = file_complexity
-                all_complexities.append(file_complexity)
-
-                token_count = len(encoder.encode(content, disallowed_special=()))
-                files_by_token_count[relative_path] = token_count
-                all_token_counts.append(token_count)
-
-            except (SyntaxError, UnicodeDecodeError, OSError) as e:
-                logger.debug(f"Skipping unparseable file {file_path}: {e}")
-                continue
+            relative_path = self._get_relative_path(result.path, directory)
+            files_by_complexity[relative_path] = result.complexity
+            all_complexities.append(result.complexity)
+            files_by_token_count[relative_path] = result.tokens
+            all_token_counts.append(result.tokens)
 
         total_files = len(all_complexities)
         total_complexity = sum(all_complexities)
-
         total_tokens = sum(all_token_counts)
 
         if total_files > 0:
             average_complexity = total_complexity / total_files
             max_complexity = max(all_complexities)
             min_complexity = min(all_complexities)
-
             average_tokens = total_tokens / total_files
             max_tokens = max(all_token_counts)
             min_tokens = min(all_token_counts)
@@ -193,7 +123,6 @@ class ComplexityAnalyzer:
             average_complexity = 0.0
             max_complexity = 0
             min_complexity = 0
-
             average_tokens = 0.0
             max_tokens = 0
             min_tokens = 0
@@ -210,61 +139,6 @@ class ComplexityAnalyzer:
             max_tokens=max_tokens,
             min_tokens=min_tokens,
             files_by_token_count=files_by_token_count,
-        )
-
-    def _process_radon_output(self, radon_data: dict[str, Any], reference_dir: Path | None = None) -> ComplexityMetrics:
-        """Process radon JSON output into ComplexityMetrics.
-
-        Files with parse errors (e.g., Python version mismatch) are tracked separately.
-
-        Args:
-            radon_data: Raw JSON data from radon
-            reference_dir: Reference directory for path calculation (defaults to working_directory)
-
-        Returns:
-            Processed ComplexityMetrics
-        """
-        files_by_complexity = {}
-        all_complexities = []
-        files_with_parse_errors: dict[str, str] = {}
-
-        reference_directory = reference_dir or self.working_directory
-
-        for file_path, functions in radon_data.items():
-            if not functions:
-                continue
-
-            if isinstance(functions, dict) and "error" in functions:
-                relative_path = self._get_relative_path(file_path, reference_directory)
-                files_with_parse_errors[relative_path] = functions.get("error", "Unknown parse error")
-                continue
-
-            file_complexity = sum(func.get("complexity", 0) for func in functions)
-
-            relative_path = self._get_relative_path(file_path, reference_directory)
-            files_by_complexity[relative_path] = file_complexity
-            all_complexities.append(file_complexity)
-
-        total_files = len(all_complexities)
-        total_complexity = sum(all_complexities)
-
-        if total_files > 0:
-            average_complexity = total_complexity / total_files
-            max_complexity = max(all_complexities)
-            min_complexity = min(all_complexities)
-        else:
-            average_complexity = 0.0
-            max_complexity = 0
-            min_complexity = 0
-
-        return ComplexityMetrics(
-            total_files_analyzed=total_files,
-            total_complexity=total_complexity,
-            average_complexity=average_complexity,
-            max_complexity=max_complexity,
-            min_complexity=min_complexity,
-            files_by_complexity=files_by_complexity,
-            files_with_parse_errors=files_with_parse_errors,
         )
 
     def _calculate_delta(
@@ -414,11 +288,11 @@ class ComplexityAnalyzer:
 
     def _analyze_files_parallel(
         self, files: list[Path], max_workers: int | None = None
-    ) -> list[FileAnalysisResult | None]:
+    ) -> list[FileAnalysisResult]:
         """Analyze files in parallel using ProcessPoolExecutor.
 
         Args:
-            files: List of Python file paths to analyze
+            files: List of source file paths to analyze
             max_workers: Maximum number of worker processes (default from settings)
 
         Returns:
@@ -427,10 +301,10 @@ class ComplexityAnalyzer:
         if max_workers is None:
             max_workers = min(os.cpu_count() or 4, settings.max_parallel_workers)
 
-        results: list[FileAnalysisResult | None] = []
+        results: list[FileAnalysisResult] = []
 
         with ProcessPoolExecutor(max_workers=max_workers) as executor:
-            futures = {executor.submit(_analyze_single_file_extended, fp): fp for fp in files}
+            futures = {executor.submit(_analyze_single_file, fp): fp for fp in files}
 
             for future in as_completed(futures):
                 try:
@@ -439,18 +313,27 @@ class ComplexityAnalyzer:
                 except Exception as e:
                     file_path = futures[future]
                     logger.warning(f"Failed to analyze {file_path}: {e}")
-                    results.append(None)
+                    results.append(FileAnalysisResult(
+                        path=str(file_path),
+                        complexity=0,
+                        volume=0.0,
+                        difficulty=0.0,
+                        effort=0.0,
+                        mi=0.0,
+                        tokens=0,
+                        error=str(e),
+                    ))
 
         return results
 
     def analyze_extended_complexity(self, directory: Path | None = None) -> ExtendedComplexityMetrics:
-        """Analyze with CC, Halstead, and MI metrics.
+        """Analyze with CC, Halstead, and MI metrics for all supported languages.
 
         Args:
             directory: Directory to analyze. Defaults to working_directory.
 
         Returns:
-            ExtendedComplexityMetrics with all radon metrics.
+            ExtendedComplexityMetrics with metrics from all supported languages.
         """
         target_dir = directory or self.working_directory
 
@@ -458,13 +341,15 @@ class ComplexityAnalyzer:
 
         tracker = GitTracker(target_dir)
         python_files = [f for f in tracker.get_tracked_python_files() if f.exists()]
+        rust_files = [f for f in tracker.get_tracked_rust_files() if f.exists()]
+        all_files = python_files + rust_files
 
         start_total = time.perf_counter()
 
-        if len(python_files) >= settings.parallel_file_threshold:
-            results = self._analyze_files_parallel(python_files)
+        if len(all_files) >= settings.parallel_file_threshold:
+            results = self._analyze_files_parallel(all_files)
         else:
-            results = [_analyze_single_file_extended(fp) for fp in python_files]
+            results = self.code_analyzer.analyze_files(all_files)
 
         files_by_complexity: dict[str, int] = {}
         files_by_effort: dict[str, float] = {}
@@ -508,8 +393,10 @@ class ComplexityAnalyzer:
             all_token_counts.append(result.tokens)
 
         elapsed_total = time.perf_counter() - start_total
-        mode = "parallel" if len(python_files) >= settings.parallel_file_threshold else "sequential"
-        logger.debug(f"Complexity analysis ({mode}): {len(python_files)} files in {elapsed_total:.2f}s")
+        mode = "parallel" if len(all_files) >= settings.parallel_file_threshold else "sequential"
+        logger.debug(
+            f"Complexity analysis ({mode}): {len(all_files)} files ({len(python_files)} Python + {len(rust_files)} Rust) in {elapsed_total:.2f}s"
+        )
 
         feature_analyzer = PythonFeatureAnalyzer()
 

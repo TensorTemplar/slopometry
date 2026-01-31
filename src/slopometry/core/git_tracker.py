@@ -252,6 +252,69 @@ class GitTracker:
 
         return files
 
+    def get_tracked_rust_files(self) -> list[Path]:
+        """Get list of Rust files tracked by git or not ignored (if untracked).
+
+        For non-git directories, falls back to finding all Rust files while
+        excluding common build directories.
+
+        Returns:
+            List of Path objects for Rust files
+
+        Raises:
+            GitOperationError: If inside a git repo but git command fails
+        """
+        try:
+            cmd = ["git", "ls-files", "--cached", "--others", "--exclude-standard"]
+            result = subprocess.run(
+                cmd,
+                cwd=self.working_dir,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+
+            if result.returncode == 0:
+                files = []
+                for line in result.stdout.splitlines():
+                    if line.endswith(".rs"):
+                        files.append(self.working_dir / line)
+                return files
+
+            # Check if this is a "not a git repo" error vs actual failure
+            stderr = result.stderr.strip().lower()
+            if "not a git repository" in stderr:
+                # Not a git repo - fall back to finding Rust files directly
+                return self._find_rust_files_fallback()
+
+            # Actual git failure in a git repo
+            raise GitOperationError(f"git ls-files failed: {result.stderr.strip()}")
+
+        except subprocess.TimeoutExpired as e:
+            raise GitOperationError(f"git ls-files timed out: {e}") from e
+        except FileNotFoundError as e:
+            raise GitOperationError(f"git not found - is git installed? {e}") from e
+        except subprocess.SubprocessError as e:
+            raise GitOperationError(f"git ls-files failed: {e}") from e
+
+    def _find_rust_files_fallback(self) -> list[Path]:
+        """Find Rust files without git (for non-git directories)."""
+        ignored_dirs = {
+            "target",  # Cargo build output
+            ".cargo",  # Cargo cache
+            ".git",
+            "node_modules",
+        }
+
+        files = []
+        for file_path in self.working_dir.rglob("*.rs"):
+            parts = file_path.relative_to(self.working_dir).parts
+            if any(part in ignored_dirs for part in parts):
+                continue
+            files.append(file_path)
+
+        return files
+
     def extract_files_from_commit(self, commit_ref: str = "HEAD~1") -> Path | None:
         """Extract Python files and coverage.xml from a specific commit to a temporary directory.
 

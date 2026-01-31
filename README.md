@@ -7,6 +7,10 @@ A tool that lurks in the shadows, tracks and analyzes Claude Code sessions provi
 
 **NEWS:** 
 
+**January 2026: BREAKING CHANGE - replaced `radon`, which is abandoned for 5+ years with `rust-code-analysis` that is only abandoned for 3+ years. 
+This allows us to support various unserious languages for analysis in the future (like c++ and typescript) but requires installation from wheels due to rust bindings.
+Bindings are pre-built for MacOS and Linux with Python 3.13, 3.14 and the free-threaded variants with a `t`.
+
 **December 2025: for microsoft employees we now support the Galen metric (Python only for now).**
 
 Set `SLOPOMETRY_ENABLE_WORKING_AT_MICROSOFT=true slopometry latest` or edit your .env to get encouraging messages approved by HR!
@@ -111,8 +115,9 @@ curl -fsSL http://claude.ai/install.sh | bash
 ### Install slopometry as a uv tool
 
 ```bash
-# Install as a global tool
-uv tool install git+https://github.com/TensorTemplar/slopometry.git
+# Install as a global tool (requires find-links for rust-code-analysis dependency)
+uv tool install git+https://github.com/TensorTemplar/slopometry.git \
+  --find-links "https://github.com/Droidcraft/rust-code-analysis/releases/expanded_assets/python-2026.1.31"
 
 # Add tool directory to PATH (required on macOS, may be needed on Linux)
 uv tool update-shell
@@ -124,10 +129,10 @@ source ~/.zshrc  # for zsh
 # Or install from a local directory
 git clone https://github.com/TensorTemplar/slopometry
 cd slopometry
-uv tool install .
+uv tool install . --find-links "https://github.com/Droidcraft/rust-code-analysis/releases/expanded_assets/python-2026.1.31"
 
 # After making code changes, reinstall to update the global tool
-uv tool install . --reinstall
+uv tool install . --reinstall --find-links "https://github.com/Droidcraft/rust-code-analysis/releases/expanded_assets/python-2026.1.31"
 ```
 
 ## Quick Start
@@ -177,12 +182,13 @@ The command will show you the exact instructions to add to your shell configurat
 
 ```bash
 # Upgrade from git
-uv tool install --reinstall git+https://github.com/TensorTemplar/slopometry.git
+uv tool install --reinstall git+https://github.com/TensorTemplar/slopometry.git \
+  --find-links "https://github.com/Droidcraft/rust-code-analysis/releases/expanded_assets/python-2026.1.31"
 
 # Or if installed from local directory
 cd slopometry
 git pull
-uv tool install . --reinstall
+uv tool install . --reinstall --find-links "https://github.com/Droidcraft/rust-code-analysis/releases/expanded_assets/python-2026.1.31"
 
 # Note: After upgrading, you may need to reinstall hooks if the default config changed
 slopometry install

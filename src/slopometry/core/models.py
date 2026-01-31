@@ -199,6 +199,7 @@ class ProjectLanguage(str, Enum):
     """Supported languages for complexity analysis."""
 
     PYTHON = "python"
+    RUST = "rust"
 
 
 class ProjectSource(str, Enum):

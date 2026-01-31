@@ -81,18 +81,24 @@ PYTHON_CONFIG = LanguageConfig(
     ),
 )
 
-# Future language configs can be added here:
-# RUST_CONFIG = LanguageConfig(
-#     language=ProjectLanguage.RUST,
-#     extensions=(".rs",),
-#     git_patterns=("*.rs",),
-#     ignore_dirs=("target",),
-#     test_patterns=("*_test.rs", "tests/**/*.rs"),
-# )
+RUST_CONFIG = LanguageConfig(
+    language=ProjectLanguage.RUST,
+    extensions=(".rs",),
+    git_patterns=("*.rs",),
+    ignore_dirs=(
+        "target",  # Cargo build output
+        ".cargo",  # Cargo cache
+    ),
+    test_patterns=(
+        "*_test.rs",
+        "tests/**/*.rs",
+    ),
+)
 
 # Registry mapping ProjectLanguage to its config
 LANGUAGE_CONFIGS: dict[ProjectLanguage, LanguageConfig] = {
     ProjectLanguage.PYTHON: PYTHON_CONFIG,
+    ProjectLanguage.RUST: RUST_CONFIG,
 }
 
 

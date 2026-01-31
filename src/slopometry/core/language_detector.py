@@ -11,12 +11,11 @@ logger = logging.getLogger(__name__)
 # Map file extensions to supported ProjectLanguage
 EXTENSION_MAP: dict[str, ProjectLanguage] = {
     ".py": ProjectLanguage.PYTHON,
-    # ".rs": ProjectLanguage.RUST,  # Future: Add when rust analyzer ready
+    ".rs": ProjectLanguage.RUST,
 }
 
 # Extensions we recognize but don't support yet (for explicit warnings)
 KNOWN_UNSUPPORTED_EXTENSIONS: dict[str, str] = {
-    ".rs": "Rust",
     ".go": "Go",
     ".ts": "TypeScript",
     ".tsx": "TypeScript",
