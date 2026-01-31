@@ -127,7 +127,7 @@ precision = 2
 directory = "htmlcov"
 
 [tool.pyrefly]
-search_path = ["src", "tests"]
+search_path = ["src", "tests", "src/slopometry/stubs"]
 
 [tool.uv]
 find-links = ["https://github.com/Droidcraft/rust-code-analysis/releases/expanded_assets/python-2026.1.31"]

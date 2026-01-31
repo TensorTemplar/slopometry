@@ -15,7 +15,6 @@ from slopometry.core.models import (
 )
 from slopometry.core.python_feature_analyzer import PythonFeatureAnalyzer, _count_loc
 from slopometry.core.settings import settings
-from slopometry.core.tokenizer import count_file_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -286,9 +285,7 @@ class ComplexityAnalyzer:
         except (ValueError, OSError):
             return str(file_path)
 
-    def _analyze_files_parallel(
-        self, files: list[Path], max_workers: int | None = None
-    ) -> list[FileAnalysisResult]:
+    def _analyze_files_parallel(self, files: list[Path], max_workers: int | None = None) -> list[FileAnalysisResult]:
         """Analyze files in parallel using ProcessPoolExecutor.
 
         Args:
@@ -313,16 +310,18 @@ class ComplexityAnalyzer:
                 except Exception as e:
                     file_path = futures[future]
                     logger.warning(f"Failed to analyze {file_path}: {e}")
-                    results.append(FileAnalysisResult(
-                        path=str(file_path),
-                        complexity=0,
-                        volume=0.0,
-                        difficulty=0.0,
-                        effort=0.0,
-                        mi=0.0,
-                        tokens=0,
-                        error=str(e),
-                    ))
+                    results.append(
+                        FileAnalysisResult(
+                            path=str(file_path),
+                            complexity=0,
+                            volume=0.0,
+                            difficulty=0.0,
+                            effort=0.0,
+                            mi=0.0,
+                            tokens=0,
+                            error=str(e),
+                        )
+                    )
 
         return results
 

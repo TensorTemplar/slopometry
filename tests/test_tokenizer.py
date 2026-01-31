@@ -65,9 +65,7 @@ class TestCountFileTokens:
         result = count_file_tokens(missing_file)
         assert result == 0
 
-    def test_count_file_tokens__unreadable_file_returns_zero(
-        self, tmp_path: Path
-    ) -> None:
+    def test_count_file_tokens__unreadable_file_returns_zero(self, tmp_path: Path) -> None:
         """Should return 0 when file cannot be read."""
         test_file = tmp_path / "test.py"
         test_file.write_text("content")

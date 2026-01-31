@@ -1,15 +1,14 @@
 """Tests for unified code analyzer using rust-code-analysis."""
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 from slopometry.core.code_analyzer import (
-    CodeAnalysisError,
+    SUPPORTED_EXTENSIONS,
     CodeAnalysisNotInstalledError,
     CodeAnalyzer,
-    SUPPORTED_EXTENSIONS,
     _analyze_single_file,
     _safe_float,
 )
