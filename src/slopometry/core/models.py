@@ -719,6 +719,20 @@ class NextFeaturePrediction(BaseModel):
         return [story for story in self.user_stories if story.priority <= 2]
 
 
+class ScopedSmell(BaseModel):
+    """A smell classified for a specific session context."""
+
+    model_config = ConfigDict(frozen=True)
+
+    label: str
+    name: str
+    count: int
+    change: int
+    actionable_files: list[str]
+    guidance: str
+    is_blocking: bool
+
+
 class SmellData(BaseModel):
     """Structured smell data with direct field access (no getattr needed)."""
 

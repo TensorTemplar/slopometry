@@ -11,6 +11,7 @@ from slopometry.core.hook_handler import (
     format_code_smell_feedback,
     format_context_coverage_feedback,
     parse_hook_input,
+    scope_smells_for_session,
 )
 from slopometry.core.models import (
     ComplexityDelta,
@@ -223,9 +224,9 @@ Something else
 class TestFormatCodeSmellFeedback:
     """Tests for code smell feedback formatting."""
 
-    def test_format_code_smell_feedback__returns_empty_when_no_smells(self):
-        """Test returns empty when no smells detected."""
-        metrics = ExtendedComplexityMetrics(
+    def _make_metrics(self, **kwargs) -> ExtendedComplexityMetrics:
+        """Create metrics with sensible defaults."""
+        defaults = dict(
             total_complexity=0,
             average_complexity=0,
             total_volume=0,
@@ -237,8 +238,15 @@ class TestFormatCodeSmellFeedback:
             total_mi=0,
             average_mi=0,
         )
+        defaults.update(kwargs)
+        return ExtendedComplexityMetrics(**defaults)
 
-        feedback, has_smells, has_blocking = format_code_smell_feedback(metrics, None)
+    def test_format_code_smell_feedback__returns_empty_when_no_smells(self):
+        """Test returns empty when no smells detected."""
+        metrics = self._make_metrics()
+        scoped = scope_smells_for_session(metrics, None, set(), "/tmp")
+
+        feedback, has_smells, has_blocking = format_code_smell_feedback(scoped)
 
         assert has_smells is False
         assert has_blocking is False
@@ -246,23 +254,14 @@ class TestFormatCodeSmellFeedback:
 
     def test_format_code_smell_feedback__includes_smell_when_count_nonzero(self):
         """Test that non-blocking smells only show when there are changes (deltas)."""
-        metrics = ExtendedComplexityMetrics(
-            total_complexity=0,
-            average_complexity=0,
-            total_volume=0,
-            total_effort=0,
-            total_difficulty=0,
-            average_volume=0,
-            average_effort=0,
-            average_difficulty=0,
-            total_mi=0,
-            average_mi=0,
+        metrics = self._make_metrics(
             orphan_comment_count=5,
             orphan_comment_files=["src/foo.py"],
         )
 
         # Without delta, non-blocking smells don't show (no changes to report)
-        feedback, has_smells, has_blocking = format_code_smell_feedback(metrics, None)
+        scoped = scope_smells_for_session(metrics, None, set(), "/tmp")
+        feedback, has_smells, has_blocking = format_code_smell_feedback(scoped)
         assert has_smells is False
         assert has_blocking is False
         assert feedback == ""
@@ -271,7 +270,8 @@ class TestFormatCodeSmellFeedback:
         delta = ComplexityDelta(
             orphan_comment_change=2,  # New orphan comments added
         )
-        feedback, has_smells, has_blocking = format_code_smell_feedback(metrics, delta)
+        scoped = scope_smells_for_session(metrics, delta, set(), "/tmp")
+        feedback, has_smells, has_blocking = format_code_smell_feedback(scoped)
         assert has_smells is True
         assert has_blocking is False
         assert "Orphan Comments" in feedback
@@ -294,24 +294,13 @@ class TestFormatCodeSmellFeedback:
             subprocess.run(["git", "add", "."], cwd=tmppath, capture_output=True)
             subprocess.run(["git", "commit", "-m", "init"], cwd=tmppath, capture_output=True)
 
-            metrics = ExtendedComplexityMetrics(
-                total_complexity=0,
-                average_complexity=0,
-                total_volume=0,
-                total_effort=0,
-                total_difficulty=0,
-                average_volume=0,
-                average_effort=0,
-                average_difficulty=0,
-                total_mi=0,
-                average_mi=0,
+            metrics = self._make_metrics(
                 swallowed_exception_count=2,
                 swallowed_exception_files=["src/bar.py"],
             )
 
-            feedback, has_smells, has_blocking = format_code_smell_feedback(
-                metrics, None, edited_files={"src/bar.py"}, working_directory=str(tmppath)
-            )
+            scoped = scope_smells_for_session(metrics, None, {"src/bar.py"}, str(tmppath))
+            feedback, has_smells, has_blocking = format_code_smell_feedback(scoped)
 
             assert has_smells is True
             assert has_blocking is True
@@ -337,24 +326,13 @@ class TestFormatCodeSmellFeedback:
             subprocess.run(["git", "add", "."], cwd=tmppath, capture_output=True)
             subprocess.run(["git", "commit", "-m", "init"], cwd=tmppath, capture_output=True)
 
-            metrics = ExtendedComplexityMetrics(
-                total_complexity=0,
-                average_complexity=0,
-                total_volume=0,
-                total_effort=0,
-                total_difficulty=0,
-                average_volume=0,
-                average_effort=0,
-                average_difficulty=0,
-                total_mi=0,
-                average_mi=0,
+            metrics = self._make_metrics(
                 test_skip_count=3,
                 test_skip_files=["tests/test_foo.py"],
             )
 
-            feedback, has_smells, has_blocking = format_code_smell_feedback(
-                metrics, None, edited_files={"src/foo.py"}, working_directory=str(tmppath)
-            )
+            scoped = scope_smells_for_session(metrics, None, {"src/foo.py"}, str(tmppath))
+            feedback, has_smells, has_blocking = format_code_smell_feedback(scoped)
 
             assert has_smells is True
             assert has_blocking is True
@@ -384,26 +362,15 @@ class TestFormatCodeSmellFeedback:
             subprocess.run(["git", "add", "."], cwd=tmppath, capture_output=True)
             subprocess.run(["git", "commit", "-m", "init"], cwd=tmppath, capture_output=True)
 
-            metrics = ExtendedComplexityMetrics(
-                total_complexity=0,
-                average_complexity=0,
-                total_volume=0,
-                total_effort=0,
-                total_difficulty=0,
-                average_volume=0,
-                average_effort=0,
-                average_difficulty=0,
-                total_mi=0,
-                average_mi=0,
+            metrics = self._make_metrics(
                 test_skip_count=3,
                 test_skip_files=["tests/test_foo.py"],
             )
 
             # When blocking smells are in unrelated files, they're not blocking
             # and don't show in the summary (no changes to report for unrelated split)
-            feedback, has_smells, has_blocking = format_code_smell_feedback(
-                metrics, None, edited_files={"src/unrelated.py"}, working_directory=str(tmppath)
-            )
+            scoped = scope_smells_for_session(metrics, None, {"src/unrelated.py"}, str(tmppath))
+            feedback, has_smells, has_blocking = format_code_smell_feedback(scoped)
 
             assert has_smells is False
             assert has_blocking is False
@@ -412,9 +379,8 @@ class TestFormatCodeSmellFeedback:
             # Even with a delta, unrelated blocking smells don't show because
             # changes can't be attributed to the unrelated portion
             delta = ComplexityDelta(test_skip_change=1)
-            feedback, has_smells, has_blocking = format_code_smell_feedback(
-                metrics, delta, edited_files={"src/unrelated.py"}, working_directory=str(tmppath)
-            )
+            scoped = scope_smells_for_session(metrics, delta, {"src/unrelated.py"}, str(tmppath))
+            feedback, has_smells, has_blocking = format_code_smell_feedback(scoped)
 
             assert has_smells is False
             assert has_blocking is False
@@ -437,24 +403,13 @@ class TestFormatCodeSmellFeedback:
             subprocess.run(["git", "add", "."], cwd=tmppath, capture_output=True)
             subprocess.run(["git", "commit", "-m", "init"], cwd=tmppath, capture_output=True)
 
-            metrics = ExtendedComplexityMetrics(
-                total_complexity=0,
-                average_complexity=0,
-                total_volume=0,
-                total_effort=0,
-                total_difficulty=0,
-                average_volume=0,
-                average_effort=0,
-                average_difficulty=0,
-                total_mi=0,
-                average_mi=0,
+            metrics = self._make_metrics(
                 swallowed_exception_count=3,
                 swallowed_exception_files=["src/foo.py", "src/bar.py", "src/baz.py"],
             )
 
-            feedback, has_smells, has_blocking = format_code_smell_feedback(
-                metrics, None, edited_files={"src/bar.py"}, working_directory=str(tmppath)
-            )
+            scoped = scope_smells_for_session(metrics, None, {"src/bar.py"}, str(tmppath))
+            feedback, has_smells, has_blocking = format_code_smell_feedback(scoped)
 
             assert has_smells is True
             assert has_blocking is True
@@ -482,24 +437,13 @@ class TestFormatCodeSmellFeedback:
             subprocess.run(["git", "add", "."], cwd=tmppath, capture_output=True)
             subprocess.run(["git", "commit", "-m", "init"], cwd=tmppath, capture_output=True)
 
-            metrics = ExtendedComplexityMetrics(
-                total_complexity=0,
-                average_complexity=0,
-                total_volume=0,
-                total_effort=0,
-                total_difficulty=0,
-                average_volume=0,
-                average_effort=0,
-                average_difficulty=0,
-                total_mi=0,
-                average_mi=0,
+            metrics = self._make_metrics(
                 test_skip_count=2,
                 test_skip_files=["tests/test_foo.py", "tests/test_bar.py"],
             )
 
-            feedback, has_smells, has_blocking = format_code_smell_feedback(
-                metrics, None, edited_files={"src/foo.py"}, working_directory=str(tmppath)
-            )
+            scoped = scope_smells_for_session(metrics, None, {"src/foo.py"}, str(tmppath))
+            feedback, has_smells, has_blocking = format_code_smell_feedback(scoped)
 
             assert has_smells is True
             assert has_blocking is True
@@ -508,18 +452,7 @@ class TestFormatCodeSmellFeedback:
 
     def test_format_code_smell_feedback__unread_tests_are_blocking(self):
         """Test that unread related tests trigger blocking when context_coverage provided."""
-        metrics = ExtendedComplexityMetrics(
-            total_complexity=0,
-            average_complexity=0,
-            total_volume=0,
-            total_effort=0,
-            total_difficulty=0,
-            average_volume=0,
-            average_effort=0,
-            average_difficulty=0,
-            total_mi=0,
-            average_mi=0,
-        )
+        metrics = self._make_metrics()
 
         context_coverage = ContextCoverage(
             files_edited=["src/foo.py"],
@@ -534,9 +467,8 @@ class TestFormatCodeSmellFeedback:
             ],
         )
 
-        feedback, has_smells, has_blocking = format_code_smell_feedback(
-            metrics, None, context_coverage=context_coverage
-        )
+        scoped = scope_smells_for_session(metrics, None, set(), "/tmp", context_coverage=context_coverage)
+        feedback, has_smells, has_blocking = format_code_smell_feedback(scoped)
 
         assert has_smells is True
         assert has_blocking is True
@@ -546,18 +478,7 @@ class TestFormatCodeSmellFeedback:
 
     def test_format_code_smell_feedback__read_tests_not_blocking(self):
         """Test that read tests are not included in unread tests blocking."""
-        metrics = ExtendedComplexityMetrics(
-            total_complexity=0,
-            average_complexity=0,
-            total_volume=0,
-            total_effort=0,
-            total_difficulty=0,
-            average_volume=0,
-            average_effort=0,
-            average_difficulty=0,
-            total_mi=0,
-            average_mi=0,
-        )
+        metrics = self._make_metrics()
 
         context_coverage = ContextCoverage(
             files_edited=["src/foo.py"],
@@ -572,13 +493,228 @@ class TestFormatCodeSmellFeedback:
             ],
         )
 
-        feedback, has_smells, has_blocking = format_code_smell_feedback(
-            metrics, None, context_coverage=context_coverage
-        )
+        scoped = scope_smells_for_session(metrics, None, set(), "/tmp", context_coverage=context_coverage)
+        feedback, has_smells, has_blocking = format_code_smell_feedback(scoped)
 
         assert has_smells is False
         assert has_blocking is False
         assert "Unread Related Tests" not in feedback
+
+    def test_format_code_smell_feedback__non_blocking_smells_only_list_edited_files(self):
+        """Test that non-blocking smell file lists are filtered to edited + test files."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            subprocess.run(["git", "init"], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=tmppath, capture_output=True)
+
+            src_dir = tmppath / "src"
+            src_dir.mkdir()
+            (src_dir / "edited.py").write_text("def edited(): pass")
+            (src_dir / "unrelated.py").write_text("def unrelated(): pass")
+
+            subprocess.run(["git", "add", "."], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=tmppath, capture_output=True)
+
+            metrics = self._make_metrics(
+                inline_import_count=10,
+                inline_import_files=["src/edited.py", "src/unrelated.py", "src/other.py"],
+            )
+
+            delta = ComplexityDelta(inline_import_change=3)
+            scoped = scope_smells_for_session(metrics, delta, {"src/edited.py"}, str(tmppath))
+            feedback, has_smells, has_blocking = format_code_smell_feedback(scoped)
+
+            assert has_smells is True
+            assert has_blocking is False
+            # Total count is repo-level
+            assert "10" in feedback
+            assert "(+3)" in feedback
+            # Only edited file is listed, not unrelated ones
+            assert "edited.py" in feedback
+            assert "unrelated.py" not in feedback
+            assert "other.py" not in feedback
+
+
+class TestScopeSmellsForSession:
+    """Tests for scope_smells_for_session classification logic."""
+
+    def _make_metrics(self, **kwargs) -> ExtendedComplexityMetrics:
+        """Create metrics with sensible defaults."""
+        defaults = dict(
+            total_complexity=0,
+            average_complexity=0,
+            total_volume=0,
+            total_effort=0,
+            total_difficulty=0,
+            average_volume=0,
+            average_effort=0,
+            average_difficulty=0,
+            total_mi=0,
+            average_mi=0,
+        )
+        defaults.update(kwargs)
+        return ExtendedComplexityMetrics(**defaults)
+
+    def test_scope_smells_for_session__returns_empty_when_no_smells(self):
+        """Test returns empty list when metrics have no smells."""
+        metrics = self._make_metrics()
+        result = scope_smells_for_session(metrics, None, set(), "/tmp")
+        assert result == []
+
+    def test_scope_smells_for_session__classifies_swallowed_exception_as_blocking_when_in_edited_files(self):
+        """Test that swallowed_exception in edited files is classified as blocking."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            subprocess.run(["git", "init"], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=tmppath, capture_output=True)
+
+            src_dir = tmppath / "src"
+            src_dir.mkdir()
+            (src_dir / "foo.py").write_text("def foo(): pass")
+
+            subprocess.run(["git", "add", "."], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=tmppath, capture_output=True)
+
+            metrics = self._make_metrics(
+                swallowed_exception_count=1,
+                swallowed_exception_files=["src/foo.py"],
+            )
+
+            result = scope_smells_for_session(metrics, None, {"src/foo.py"}, str(tmppath))
+
+            blocking = [s for s in result if s.is_blocking]
+            assert len(blocking) == 1
+            assert blocking[0].name == "swallowed_exception"
+            assert blocking[0].actionable_files == ["src/foo.py"]
+
+    def test_scope_smells_for_session__classifies_swallowed_exception_as_non_blocking_when_unrelated(self):
+        """Test that swallowed_exception in unrelated files is non-blocking."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            subprocess.run(["git", "init"], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=tmppath, capture_output=True)
+
+            src_dir = tmppath / "src"
+            src_dir.mkdir()
+            (src_dir / "foo.py").write_text("def foo(): pass")
+            (src_dir / "bar.py").write_text("def bar(): pass")
+
+            subprocess.run(["git", "add", "."], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=tmppath, capture_output=True)
+
+            metrics = self._make_metrics(
+                swallowed_exception_count=1,
+                swallowed_exception_files=["src/foo.py"],
+            )
+
+            result = scope_smells_for_session(metrics, None, {"src/bar.py"}, str(tmppath))
+
+            blocking = [s for s in result if s.is_blocking]
+            assert len(blocking) == 0
+            non_blocking = [s for s in result if s.name == "swallowed_exception"]
+            assert len(non_blocking) == 1
+            assert non_blocking[0].is_blocking is False
+
+    def test_scope_smells_for_session__splits_blocking_smell_files_between_related_and_unrelated(self):
+        """Test that a blocking smell with mixed files produces two ScopedSmells."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            subprocess.run(["git", "init"], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=tmppath, capture_output=True)
+
+            src_dir = tmppath / "src"
+            src_dir.mkdir()
+            (src_dir / "edited.py").write_text("def edited(): pass")
+            (src_dir / "other.py").write_text("def other(): pass")
+
+            subprocess.run(["git", "add", "."], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=tmppath, capture_output=True)
+
+            metrics = self._make_metrics(
+                swallowed_exception_count=2,
+                swallowed_exception_files=["src/edited.py", "src/other.py"],
+            )
+
+            result = scope_smells_for_session(metrics, None, {"src/edited.py"}, str(tmppath))
+
+            swallowed = [s for s in result if s.name == "swallowed_exception"]
+            assert len(swallowed) == 2
+            blocking = [s for s in swallowed if s.is_blocking]
+            non_blocking = [s for s in swallowed if not s.is_blocking]
+            assert len(blocking) == 1
+            assert blocking[0].actionable_files == ["src/edited.py"]
+            assert len(non_blocking) == 1
+            assert non_blocking[0].actionable_files == ["src/other.py"]
+
+    def test_scope_smells_for_session__non_blocking_smell_preserves_repo_count_and_change(self):
+        """Test that non-blocking smells keep repo-level count and delta."""
+        metrics = self._make_metrics(
+            orphan_comment_count=5,
+            orphan_comment_files=["src/a.py", "src/b.py"],
+        )
+        delta = ComplexityDelta(orphan_comment_change=2)
+
+        result = scope_smells_for_session(metrics, delta, set(), "/tmp")
+
+        orphan = [s for s in result if s.name == "orphan_comment"]
+        assert len(orphan) == 1
+        assert orphan[0].count == 5
+        assert orphan[0].change == 2
+        assert orphan[0].is_blocking is False
+
+    def test_scope_smells_for_session__unread_tests_produce_synthetic_blocking_smell(self):
+        """Test that unread related tests from context_coverage produce a blocking ScopedSmell."""
+        metrics = self._make_metrics()
+        context_coverage = ContextCoverage(
+            files_edited=["src/foo.py"],
+            files_read=["src/foo.py"],
+            file_coverage=[
+                FileCoverageStatus(
+                    file_path="src/foo.py",
+                    was_read_before_edit=True,
+                    test_files=["tests/test_foo.py"],
+                    test_files_read=[],
+                )
+            ],
+        )
+
+        result = scope_smells_for_session(metrics, None, set(), "/tmp", context_coverage=context_coverage)
+
+        blocking = [s for s in result if s.is_blocking]
+        assert len(blocking) == 1
+        assert blocking[0].name == "unread_related_tests"
+        assert blocking[0].actionable_files == ["tests/test_foo.py"]
+
+    def test_scope_smells_for_session__filters_actionable_files_for_non_blocking_with_edits(self):
+        """Test that non-blocking smells only list actionable files when edited_files is provided."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            subprocess.run(["git", "init"], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=tmppath, capture_output=True)
+
+            src_dir = tmppath / "src"
+            src_dir.mkdir()
+            (src_dir / "edited.py").write_text("def edited(): pass")
+            (src_dir / "other.py").write_text("def other(): pass")
+
+            subprocess.run(["git", "add", "."], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=tmppath, capture_output=True)
+
+            metrics = self._make_metrics(
+                orphan_comment_count=3,
+                orphan_comment_files=["src/edited.py", "src/other.py"],
+            )
+
+            result = scope_smells_for_session(metrics, None, {"src/edited.py"}, str(tmppath))
+
+            orphan = [s for s in result if s.name == "orphan_comment"]
+            assert len(orphan) == 1
+            assert orphan[0].actionable_files == ["src/edited.py"]
 
 
 class TestGetRelatedFilesViaImports:
