@@ -1,12 +1,14 @@
 """Tests for the save-transcript command."""
 
+import json
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import Mock, patch
 
 from click.testing import CliRunner
 
-from slopometry.core.models import PlanEvolution, SessionStatistics, TodoItem
+from slopometry.core.models import AgentTool, PlanEvolution, SessionMetadata, SessionStatistics, TodoItem, TokenUsage
+from slopometry.core.transcript_token_analyzer import TranscriptMetadata, extract_transcript_metadata
 from slopometry.solo.cli.commands import (
     _find_plan_names_from_transcript,
     save_transcript,
@@ -93,6 +95,11 @@ class TestSaveTranscript:
         assert session_dir.exists()
         assert (session_dir / "transcript.jsonl").exists()
         assert (session_dir / "transcript.jsonl").read_text() == '{"test": "data"}'
+        assert (session_dir / "session_metadata.json").exists()
+
+        metadata = json.loads((session_dir / "session_metadata.json").read_text())
+        assert metadata["session_id"] == session_id
+        assert metadata["agent_tool"] == "claude_code"
 
     def test_save_transcript__copies_plans_from_transcript_references(self, tmp_path) -> None:
         """Test copying plans referenced in transcript."""
@@ -357,3 +364,158 @@ class TestSaveTranscript:
         assert result.exit_code == 0
         assert "Cancelled" in result.output
         assert "Saved transcript to:" not in result.output
+
+
+class TestExtractTranscriptMetadata:
+    """Tests for the extract_transcript_metadata function."""
+
+    @staticmethod
+    def _fixture_transcript_path() -> Path:
+        path = Path(__file__).parent / "fixtures" / "transcript.jsonl"
+        assert path.exists(), f"transcript.jsonl fixture missing at {path}"
+        return path
+
+    def test_extract_transcript_metadata__extracts_version_and_model(self) -> None:
+        """Real transcript fixture contains version, model, and branch."""
+        meta = extract_transcript_metadata(self._fixture_transcript_path())
+
+        assert meta.agent_version == "2.0.65"
+        assert meta.model == "claude-opus-4-5-20251101"
+        assert meta.git_branch == "opinionated-metrics"
+
+    def test_extract_transcript_metadata__missing_fields_returns_none(self, tmp_path: Path) -> None:
+        """Transcript with no version/model/branch fields returns None values."""
+        transcript = tmp_path / "bare.jsonl"
+        transcript.write_text(
+            '{"type":"summary","summary":"test"}\n{"type":"user","message":{"role":"user","content":"hello"}}\n'
+        )
+
+        meta = extract_transcript_metadata(transcript)
+
+        assert meta.agent_version is None
+        assert meta.model is None
+        assert meta.git_branch is None
+
+    def test_extract_transcript_metadata__handles_missing_file(self) -> None:
+        """Missing file returns all-None metadata without raising."""
+        meta = extract_transcript_metadata(Path("/nonexistent/transcript.jsonl"))
+
+        assert meta.agent_version is None
+        assert meta.model is None
+        assert meta.git_branch is None
+
+    def test_extract_transcript_metadata__handles_malformed_json(self, tmp_path: Path) -> None:
+        """Malformed JSON lines are skipped without error."""
+        transcript = tmp_path / "malformed.jsonl"
+        transcript.write_text('not json at all\n{"version":"1.0.0","gitBranch":"main","type":"user"}\n')
+
+        meta = extract_transcript_metadata(transcript)
+
+        assert meta.agent_version == "1.0.0"
+        assert meta.git_branch == "main"
+        assert meta.model is None
+
+    def test_extract_transcript_metadata__returns_pydantic_model(self, tmp_path: Path) -> None:
+        """Return type is TranscriptMetadata, not a raw dict."""
+        transcript = tmp_path / "empty.jsonl"
+        transcript.write_text("")
+
+        meta = extract_transcript_metadata(transcript)
+
+        assert isinstance(meta, TranscriptMetadata)
+
+
+class TestSessionMetadata:
+    """Tests for the SessionMetadata model."""
+
+    def test_session_metadata__serializes_with_token_usage(self) -> None:
+        """SessionMetadata JSON includes nested token_usage breakdown."""
+        token_usage = TokenUsage(
+            total_input_tokens=5000,
+            total_output_tokens=2000,
+            exploration_input_tokens=3000,
+            exploration_output_tokens=1000,
+            implementation_input_tokens=2000,
+            implementation_output_tokens=1000,
+            subagent_tokens=500,
+        )
+        metadata = SessionMetadata(
+            session_id="test-session-123",
+            agent_tool=AgentTool.CLAUDE_CODE,
+            agent_version="2.0.65",
+            model="claude-opus-4-5-20251101",
+            start_time=datetime(2025, 12, 12, 13, 0, 0),
+            end_time=datetime(2025, 12, 12, 14, 0, 0),
+            total_events=42,
+            working_directory="/home/user/project",
+            git_branch="main",
+            token_usage=token_usage,
+        )
+
+        data = json.loads(metadata.model_dump_json())
+
+        assert data["token_usage"]["total_input_tokens"] == 5000
+        assert data["token_usage"]["total_output_tokens"] == 2000
+        assert data["token_usage"]["exploration_input_tokens"] == 3000
+        assert data["token_usage"]["subagent_tokens"] == 500
+
+    def test_session_metadata__agent_tool_discriminator(self) -> None:
+        """AgentTool enum serializes as its string value."""
+        metadata = SessionMetadata(
+            session_id="test-123",
+            agent_tool=AgentTool.CLAUDE_CODE,
+            start_time=datetime(2025, 1, 1),
+            working_directory="/tmp",
+        )
+
+        data = json.loads(metadata.model_dump_json())
+        assert data["agent_tool"] == "claude_code"
+
+        metadata_oc = SessionMetadata(
+            session_id="test-456",
+            agent_tool=AgentTool.OPENCODE,
+            start_time=datetime(2025, 1, 1),
+            working_directory="/tmp",
+        )
+
+        data_oc = json.loads(metadata_oc.model_dump_json())
+        assert data_oc["agent_tool"] == "opencode"
+
+    def test_session_metadata__optional_fields_default_to_none(self) -> None:
+        """Optional fields default to None when not provided."""
+        metadata = SessionMetadata(
+            session_id="test-789",
+            agent_tool=AgentTool.CLAUDE_CODE,
+            start_time=datetime(2025, 1, 1),
+            working_directory="/tmp",
+        )
+
+        assert metadata.agent_version is None
+        assert metadata.model is None
+        assert metadata.end_time is None
+        assert metadata.git_branch is None
+        assert metadata.token_usage is None
+        assert metadata.total_events == 0
+
+    def test_session_metadata__roundtrip_json(self) -> None:
+        """SessionMetadata survives JSON serialization roundtrip."""
+        original = SessionMetadata(
+            session_id="roundtrip-test",
+            agent_tool=AgentTool.CLAUDE_CODE,
+            agent_version="2.0.65",
+            model="claude-opus-4-5-20251101",
+            start_time=datetime(2025, 12, 12, 13, 0, 0),
+            total_events=10,
+            working_directory="/home/user/project",
+            git_branch="feature-branch",
+        )
+
+        json_str = original.model_dump_json()
+        restored = SessionMetadata.model_validate_json(json_str)
+
+        assert restored.session_id == original.session_id
+        assert restored.agent_tool == original.agent_tool
+        assert restored.agent_version == original.agent_version
+        assert restored.model == original.model
+        assert restored.total_events == original.total_events
+        assert restored.git_branch == original.git_branch

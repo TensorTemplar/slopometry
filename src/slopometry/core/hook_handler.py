@@ -514,14 +514,11 @@ def extract_dev_guidelines_from_claude_md(working_directory: str) -> str:
 
 
 def _get_related_files_via_imports(edited_files: set[str], working_directory: str) -> set[str]:
-    """Build set of files related to edited files via import graph.
+    """Build set of files related to edited files for blocking smell scoping.
 
-    Uses the ContextCoverageAnalyzer to find:
-    - Files that import the edited files (dependents) - these could break from our changes
-    - Test files for edited files
-
-    Note: We intentionally do NOT include files that edited files import, because
-    changes to the edited file don't affect its dependencies.
+    Only includes edited files and their test files. Does NOT include reverse
+    import graph dependents — those files weren't edited, so their pre-existing
+    smells are not actionable in the stop hook.
 
     Args:
         edited_files: Set of files edited in this session
@@ -541,9 +538,6 @@ def _get_related_files_via_imports(edited_files: set[str], working_directory: st
     analyzer._build_import_graph()
 
     for edited_file in edited_files:
-        dependents = analyzer._reverse_import_graph.get(edited_file, set())
-        related.update(dependents)
-
         test_files = analyzer._find_test_files(edited_file)
         related.update(test_files)
 

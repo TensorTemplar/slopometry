@@ -107,7 +107,9 @@ class TestCurrentImpactService:
         assert result.current_metrics.total_files_analyzed > 0
         assert result.current_metrics.total_complexity > 0
 
-    def test_analyze_previous_commit__returns_analysis_with_correct_source(self, test_repo_path, real_baseline, test_db):
+    def test_analyze_previous_commit__returns_analysis_with_correct_source(
+        self, test_repo_path, real_baseline, test_db
+    ):
         """Test that analyzing previous commit sets the correct source."""
         assert real_baseline is not None, "Baseline computation failed"
 
@@ -242,7 +244,9 @@ class TestCurrentImpactService:
         assert result is None
         assert any("Failed to get changed files" in record.message for record in caplog.records)
 
-    def test_analyze_uncommitted_changes__uses_cache_on_second_call(self, test_repo_path, real_baseline, test_db, caplog):
+    def test_analyze_uncommitted_changes__uses_cache_on_second_call(
+        self, test_repo_path, real_baseline, test_db, caplog
+    ):
         """Test that second call with same state uses cached metrics."""
         assert real_baseline is not None, "Baseline computation failed"
 
@@ -287,8 +291,7 @@ class TestCurrentImpactService:
 
         # Modify an existing tracked Python file
         target_file = test_repo_path / "src" / "slopometry" / "core" / "models.py"
-        if not target_file.exists():
-            pytest.skip("models.py not found in test repo")
+        assert target_file.exists(), f"models.py not found in cloned test repo at {target_file}"
 
         original_content = target_file.read_text()
 

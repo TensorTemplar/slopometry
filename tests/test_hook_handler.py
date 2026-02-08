@@ -584,45 +584,41 @@ class TestFormatCodeSmellFeedback:
 class TestGetRelatedFilesViaImports:
     """Tests for import graph-based file relationship detection."""
 
-    def test_get_related_files_via_imports__finds_dependents_not_imports(self):
-        """Test that files importing edited files are found, but not files that edited files import."""
+    def test_get_related_files_via_imports__only_includes_edited_and_test_files(self):
+        """Test that only edited files and their test files are related, not import dependents."""
         with tempfile.TemporaryDirectory() as tmpdir:
             tmppath = Path(tmpdir)
 
-            # Initialize git repo (required for git_tracker)
             subprocess.run(["git", "init"], cwd=tmppath, capture_output=True)
             subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmppath, capture_output=True)
             subprocess.run(["git", "config", "user.name", "Test"], cwd=tmppath, capture_output=True)
 
-            # Create src directory with modules
             src_dir = tmppath / "src"
             src_dir.mkdir()
 
-            # core.py - a dependency
+            # core.py - a dependency of service.py
             (src_dir / "core.py").write_text("def core_func(): pass")
 
             # service.py - the file we'll edit (imports core.py)
             (src_dir / "service.py").write_text("from src.core import core_func\ndef service_func(): pass")
 
-            # handler.py - imports service.py (is a dependent)
+            # handler.py - imports service.py (is a dependent, but NOT edited)
             (src_dir / "handler.py").write_text("from src.service import service_func")
 
             # unrelated.py - doesn't import service.py
             (src_dir / "unrelated.py").write_text("def other(): pass")
 
-            # Track files in git
             subprocess.run(["git", "add", "."], cwd=tmppath, capture_output=True)
             subprocess.run(["git", "commit", "-m", "init"], cwd=tmppath, capture_output=True)
 
-            # Get related files for editing service.py
             edited = {"src/service.py"}
             related = _get_related_files_via_imports(edited, str(tmppath))
 
             # Should include the edited file
             assert "src/service.py" in related
-            # Should include handler.py (imports service.py - is a dependent)
-            assert "src/handler.py" in related
-            # Should NOT include core.py (service.py imports it, but changes don't flow upstream)
+            # Should NOT include handler.py (imports service.py but wasn't edited)
+            assert "src/handler.py" not in related
+            # Should NOT include core.py (service.py imports it)
             assert "src/core.py" not in related
             # Should NOT include unrelated.py
             assert "src/unrelated.py" not in related

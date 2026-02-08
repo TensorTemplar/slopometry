@@ -856,51 +856,31 @@ class FeatureVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def _is_swallowed_exception(self, handler: ast.ExceptHandler) -> bool:
-        """Check if exception handler just swallows (pass/continue/empty body).
+        """Check if exception handler swallows without observable side effects.
 
-        Not considered swallowed if the handler logs the exception.
+        A handler is swallowed if ALL statements are inert (pass, continue,
+        break, assignments) and NONE are observable (logging, print, raise,
+        return, function calls, yield).
         """
         if not handler.body:
             return True
 
-        # Check if any statement in the handler is a logging call
         for stmt in handler.body:
-            if self._is_logging_call(stmt):
+            if not self._is_inert_statement(stmt):
                 return False
 
-        # Single statement that's pass/continue is swallowed
-        if len(handler.body) == 1:
-            stmt = handler.body[0]
-            if isinstance(stmt, ast.Pass | ast.Continue):
-                return True
+        return True
 
-        return False
+    def _is_inert_statement(self, stmt: ast.stmt) -> bool:
+        """Check if a statement has no observable side effects.
 
-    def _is_logging_call(self, stmt: ast.stmt) -> bool:
-        """Check if a statement is a logging/print call."""
-        if not isinstance(stmt, ast.Expr):
-            return False
-        if not isinstance(stmt.value, ast.Call):
-            return False
-
-        call = stmt.value
-        func = call.func
-
-        # Check for print() call
-        if isinstance(func, ast.Name) and func.id == "print":
+        Inert statements: pass, continue, break, simple assignments,
+        augmented assignments (+=, etc.), and type annotations.
+        """
+        if isinstance(stmt, ast.Pass | ast.Continue | ast.Break):
             return True
-
-        # Check for attribute calls like logger.warning, logging.info, console.print
-        if isinstance(func, ast.Attribute):
-            # logger.*, logging.*
-            if isinstance(func.value, ast.Name):
-                if func.value.id in ("logger", "logging", "log", "console"):
-                    return True
-            # self.logger.*
-            if isinstance(func.value, ast.Attribute):
-                if func.value.attr in ("logger", "log"):
-                    return True
-
+        if isinstance(stmt, ast.Assign | ast.AugAssign | ast.AnnAssign):
+            return True
         return False
 
     def visit_Import(self, node: ast.Import) -> None:

@@ -255,6 +255,7 @@ class TestPythonFeatureAnalyzerIntegration:
                 any_count += visitor.any_type_refs
                 str_count += visitor.str_type_refs
             except (SyntaxError, UnicodeDecodeError):
+                print(f"Skipping unparseable file: {py_file}")
                 continue
 
         # Baseline sanity checks - slopometry codebase should have:
@@ -281,6 +282,7 @@ class TestPythonFeatureAnalyzerIntegration:
                 total_refs += visitor.total_type_refs
                 any_count += visitor.any_type_refs
             except (SyntaxError, UnicodeDecodeError):
+                print(f"Skipping unparseable file: {py_file}")
                 continue
 
         if total_refs > 0:
@@ -741,14 +743,60 @@ except Exception as e:
 
         assert visitor.swallowed_exceptions == 0
 
-    def test_visit_try__ignores_except_with_multiple_statements(self) -> None:
-        """Test that except block with multiple statements is not flagged."""
+    def test_visit_try__ignores_except_with_function_call(self) -> None:
+        """Test that except block with a function call is not flagged."""
         code = """
 try:
     risky()
 except Exception:
-    log_error()
+    handle_error()
     pass
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.swallowed_exceptions == 0
+
+    def test_visit_try__detects_multi_statement_inert_handler(self) -> None:
+        """Test that except block with only assignments and pass/continue is flagged."""
+        code = """
+for item in items:
+    try:
+        process(item)
+    except Exception:
+        skip_count += 1
+        continue
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.swallowed_exceptions == 1
+
+    def test_visit_try__ignores_handler_with_raise(self) -> None:
+        """Test that except block that re-raises is not flagged."""
+        code = """
+try:
+    risky()
+except ValueError:
+    error_count += 1
+    raise
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.swallowed_exceptions == 0
+
+    def test_visit_try__ignores_handler_with_return(self) -> None:
+        """Test that except block with return is not flagged."""
+        code = """
+def func():
+    try:
+        risky()
+    except Exception:
+        return None
 """
         tree = ast.parse(code)
         visitor = FeatureVisitor()

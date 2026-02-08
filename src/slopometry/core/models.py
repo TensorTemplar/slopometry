@@ -9,6 +9,13 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class AgentTool(str, Enum):
+    """Agent tool that produced the session."""
+
+    CLAUDE_CODE = "claude_code"
+    OPENCODE = "opencode"
+
+
 class SmellCategory(str, Enum):
     """Category of code smell for organization and filtering."""
 
@@ -56,7 +63,7 @@ SMELL_REGISTRY: dict[str, SmellDefinition] = {
         label="Swallowed Exceptions",
         category=SmellCategory.GENERAL,
         weight=0.15,
-        guidance="BLOCKING: You MUST present a table with columns [Location | Purpose] for each and ask user to confirm silent failure is acceptable",
+        guidance="BLOCKING: You MUST present a table with columns [Location | Purpose | Justification ] for each and ask user to confirm silent failure is acceptable",
         count_field="swallowed_exception_count",
         files_field="swallowed_exception_files",
     ),
@@ -493,6 +500,21 @@ class TokenUsage(BaseModel):
         return (self.exploration_tokens / total * 100) if total > 0 else 0.0
 
 
+class SessionMetadata(BaseModel):
+    """Structured metadata for a saved session, agent-tool-agnostic."""
+
+    session_id: str
+    agent_tool: AgentTool
+    agent_version: str | None = None
+    model: str | None = None
+    start_time: datetime
+    end_time: datetime | None = None
+    total_events: int = 0
+    working_directory: str
+    git_branch: str | None = None
+    token_usage: TokenUsage | None = None
+
+
 class PlanEvolution(BaseModel):
     """Tracks how the plan evolves through TodoWrite events."""
 
@@ -803,7 +825,7 @@ class ExtendedComplexityMetrics(ComplexityMetrics):
     swallowed_exception_count: int = SmellField(
         label="Swallowed Exceptions",
         files_field="swallowed_exception_files",
-        guidance="BLOCKING: You MUST present a table with columns [Location | Purpose] for each and ask user to confirm silent failure is acceptable",
+        guidance="BLOCKING: You MUST present a table with columns [Location | Purpose | Justification ] for each and ask user to confirm silent failure is acceptable",
     )
     type_ignore_count: int = SmellField(
         label="Type Ignores",
