@@ -1,10 +1,13 @@
 """Plan evolution analysis for TodoWrite events."""
 
+import logging
 import re
 from datetime import datetime
 from typing import Any
 
 from slopometry.core.models import PlanEvolution, PlanStep, TodoItem, ToolType
+
+logger = logging.getLogger(__name__)
 
 
 class PlanAnalyzer:
@@ -79,7 +82,8 @@ class PlanAnalyzer:
             try:
                 todo = TodoItem(**todo_data)
                 current_todos[todo.content] = todo
-            except Exception:
+            except Exception as e:
+                logger.debug(f"Skipping malformed todo item: {e}")
                 continue
 
         plan_step = self._calculate_plan_step(current_todos, timestamp)

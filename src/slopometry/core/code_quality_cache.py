@@ -5,7 +5,7 @@ import sqlite3
 from datetime import datetime, timedelta
 
 from slopometry.core.complexity_analyzer import CALCULATOR_VERSION
-from slopometry.core.models import ComplexityDelta, ExtendedComplexityMetrics
+from slopometry.core.models import CacheUpdateError, ComplexityDelta, ExtendedComplexityMetrics
 
 
 class CodeQualityCacheManager:
@@ -37,33 +37,9 @@ class CodeQualityCacheManager:
             if working_tree_hash is None:
                 cursor = self.db_connection.execute(
                     """
-                    SELECT complexity_metrics_json, complexity_delta_json 
-                    FROM code_quality_cache 
-                    WHERE session_id = ? AND repository_path = ? AND commit_sha = ? 
-                      AND working_tree_hash IS NULL
-                      AND (calculator_version = ? OR calculator_version IS NULL)
-                    """,
-                    (session_id, repository_path, commit_sha, CALCULATOR_VERSION),
-                )
-            else:
-                cursor = self.db_connection.execute(
-                    """
-                    SELECT complexity_metrics_json, complexity_delta_json 
-                    FROM code_quality_cache 
-                    WHERE session_id = ? AND repository_path = ? AND commit_sha = ? 
-                      AND working_tree_hash = ?
-                      AND (calculator_version = ? OR calculator_version IS NULL)
-                    """,
-                    (session_id, repository_path, commit_sha, working_tree_hash, CALCULATOR_VERSION),
-                )
-            row = cursor.fetchone()
-
-            if working_tree_hash is None:
-                cursor = self.db_connection.execute(
-                    """
-                    SELECT complexity_metrics_json, complexity_delta_json 
-                    FROM code_quality_cache 
-                    WHERE session_id = ? AND repository_path = ? AND commit_sha = ? 
+                    SELECT complexity_metrics_json, complexity_delta_json
+                    FROM code_quality_cache
+                    WHERE session_id = ? AND repository_path = ? AND commit_sha = ?
                       AND working_tree_hash IS NULL
                       AND calculator_version = ?
                     """,
@@ -72,9 +48,9 @@ class CodeQualityCacheManager:
             else:
                 cursor = self.db_connection.execute(
                     """
-                    SELECT complexity_metrics_json, complexity_delta_json 
-                    FROM code_quality_cache 
-                    WHERE session_id = ? AND repository_path = ? AND commit_sha = ? 
+                    SELECT complexity_metrics_json, complexity_delta_json
+                    FROM code_quality_cache
+                    WHERE session_id = ? AND repository_path = ? AND commit_sha = ?
                       AND working_tree_hash = ?
                       AND calculator_version = ?
                     """,
@@ -214,9 +190,9 @@ class CodeQualityCacheManager:
     def update_cached_coverage(
         self,
         session_id: str,
-        test_coverage_percent: float,
+        test_coverage_percent: float | None,
         test_coverage_source: str,
-    ) -> bool:
+    ) -> bool | CacheUpdateError:
         """Update test coverage fields in cached metrics for a session.
 
         Args:
@@ -225,7 +201,7 @@ class CodeQualityCacheManager:
             test_coverage_source: Source file path (e.g., coverage.xml)
 
         Returns:
-            True if successfully updated, False otherwise
+            True if successfully updated, CacheUpdateError otherwise
         """
         try:
             cursor = self.db_connection.execute(
@@ -234,7 +210,10 @@ class CodeQualityCacheManager:
             )
             row = cursor.fetchone()
             if not row:
-                return False
+                return CacheUpdateError(
+                    message="No cached metrics found for session",
+                    session_id=session_id,
+                )
 
             metrics_data = json.loads(row[0])
             metrics_data["test_coverage_percent"] = test_coverage_percent
@@ -247,8 +226,11 @@ class CodeQualityCacheManager:
             self.db_connection.commit()
             return True
 
-        except (sqlite3.Error, json.JSONDecodeError, Exception):
-            return False
+        except (sqlite3.Error, json.JSONDecodeError) as e:
+            return CacheUpdateError(
+                message=str(e),
+                session_id=session_id,
+            )
 
     def get_cache_statistics(self) -> dict[str, int]:
         """Get statistics about the cache.

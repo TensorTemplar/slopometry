@@ -104,8 +104,9 @@ class ComplexityAnalyzer:
             relative_path = self._get_relative_path(result.path, directory)
             files_by_complexity[relative_path] = result.complexity
             all_complexities.append(result.complexity)
-            files_by_token_count[relative_path] = result.tokens
-            all_token_counts.append(result.tokens)
+            if isinstance(result.tokens, int):
+                files_by_token_count[relative_path] = result.tokens
+                all_token_counts.append(result.tokens)
 
         total_files = len(all_complexities)
         total_complexity = sum(all_complexities)
@@ -388,8 +389,9 @@ class ComplexityAnalyzer:
             files_by_mi[relative_path] = result.mi
             mi_file_count += 1
 
-            files_by_token_count[relative_path] = result.tokens
-            all_token_counts.append(result.tokens)
+            if isinstance(result.tokens, int):
+                files_by_token_count[relative_path] = result.tokens
+                all_token_counts.append(result.tokens)
 
         elapsed_total = time.perf_counter() - start_total
         mode = "parallel" if len(all_files) >= settings.parallel_file_threshold else "sequential"

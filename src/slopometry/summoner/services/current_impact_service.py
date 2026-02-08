@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 from slopometry.core.complexity_analyzer import ComplexityAnalyzer
+from slopometry.core.database import EventDatabase
 from slopometry.core.models import (
     AnalysisSource,
     ComplexityDelta,
@@ -15,17 +16,21 @@ from slopometry.core.models import (
     RepoBaseline,
 )
 from slopometry.core.working_tree_extractor import WorkingTreeExtractor
+from slopometry.core.working_tree_state import WorkingTreeStateCalculator
 from slopometry.summoner.services.impact_calculator import ImpactCalculator
 from slopometry.summoner.services.qpe_calculator import QPECalculator
 
 logger = logging.getLogger(__name__)
 
+CURRENT_IMPACT_SESSION_ID = "current-impact"
+
 
 class CurrentImpactService:
     """Service for analyzing impact of uncommitted changes."""
 
-    def __init__(self):
+    def __init__(self, db: EventDatabase | None = None):
         self.impact_calculator = ImpactCalculator()
+        self.db = db or EventDatabase()
 
     def analyze_uncommitted_changes(
         self,
@@ -51,15 +56,11 @@ class CurrentImpactService:
 
         baseline_metrics = baseline.current_metrics
 
-        temp_dir = extractor.extract_working_state()
+        wt_calculator = WorkingTreeStateCalculator(repo_path)
+        commit_sha = wt_calculator.get_current_commit_sha()
+        working_tree_hash = wt_calculator.calculate_working_tree_hash(commit_sha) if commit_sha else None
 
-        if not temp_dir:
-            current_metrics = analyzer.analyze_extended_complexity()
-        else:
-            try:
-                current_metrics = analyzer.analyze_extended_complexity(temp_dir)
-            finally:
-                shutil.rmtree(temp_dir, ignore_errors=True)
+        current_metrics = self._get_or_compute_metrics(repo_path, commit_sha, working_tree_hash, extractor, analyzer)
 
         current_delta = self._compute_delta(baseline_metrics, current_metrics)
 
@@ -257,6 +258,62 @@ class CurrentImpactService:
         tokens_changed = current_metrics.total_tokens - baseline.oldest_commit_tokens
 
         return GalenMetrics.calculate(tokens_changed=tokens_changed, period_days=period_days)
+
+    def _get_or_compute_metrics(
+        self,
+        repo_path: Path,
+        commit_sha: str | None,
+        working_tree_hash: str | None,
+        extractor: WorkingTreeExtractor,
+        analyzer: ComplexityAnalyzer,
+    ) -> ExtendedComplexityMetrics:
+        """Get metrics from cache or compute fresh.
+
+        Args:
+            repo_path: Path to the repository
+            commit_sha: Current commit SHA
+            working_tree_hash: Hash of uncommitted changes
+            extractor: Working tree extractor for temp dir creation
+            analyzer: Complexity analyzer
+
+        Returns:
+            ExtendedComplexityMetrics for current state
+        """
+        from slopometry.core.code_quality_cache import CodeQualityCacheManager
+
+        if commit_sha:
+            with self.db._get_db_connection() as conn:
+                cache_manager = CodeQualityCacheManager(conn)
+                cached_metrics, _ = cache_manager.get_cached_metrics(
+                    CURRENT_IMPACT_SESSION_ID, str(repo_path), commit_sha, working_tree_hash
+                )
+                if cached_metrics:
+                    logger.debug("Using cached metrics for current-impact")
+                    return cached_metrics
+
+        temp_dir = extractor.extract_working_state()
+
+        if not temp_dir:
+            current_metrics = analyzer.analyze_extended_complexity()
+        else:
+            try:
+                current_metrics = analyzer.analyze_extended_complexity(temp_dir)
+            finally:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+
+        if commit_sha:
+            with self.db._get_db_connection() as conn:
+                cache_manager = CodeQualityCacheManager(conn)
+                cache_manager.save_metrics_to_cache(
+                    CURRENT_IMPACT_SESSION_ID,
+                    str(repo_path),
+                    commit_sha,
+                    current_metrics,
+                    working_tree_hash=working_tree_hash,
+                )
+                logger.debug("Cached metrics for current-impact")
+
+        return current_metrics
 
     def _compute_delta(
         self,

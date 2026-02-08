@@ -308,6 +308,25 @@ class HookEvent(BaseModel):
     transcript_path: str | None = None
 
 
+class TokenCountError(BaseModel):
+    """Error that occurred during token counting."""
+
+    model_config = ConfigDict(frozen=True)
+
+    message: str
+    path: str
+
+
+class CacheUpdateError(BaseModel):
+    """Error that occurred during cache update operation."""
+
+    model_config = ConfigDict(frozen=True)
+
+    message: str
+    session_id: str
+    operation: str = "update_coverage"
+
+
 class FileAnalysisResult(BaseModel):
     """Result from analyzing a single Python file for complexity metrics."""
 
@@ -317,7 +336,7 @@ class FileAnalysisResult(BaseModel):
     difficulty: float
     effort: float
     mi: float
-    tokens: int
+    tokens: int | TokenCountError | None = None
     error: str | None = None
 
 
@@ -919,14 +938,16 @@ class ExperimentRun(BaseModel):
 
     id: str = Field(default_factory=lambda: str(uuid4()))
     repository_path: Path
-    start_commit: str  # SHA of starting commit (e.g., HEAD~1)
-    target_commit: str  # SHA of target commit (e.g., HEAD)
+    start_commit: str = Field(description="SHA of starting commit (e.g., HEAD~1)")
+    target_commit: str = Field(description="SHA of target commit (e.g., HEAD)")
     process_id: int
     worktree_path: Path | None = None
     start_time: datetime = Field(default_factory=datetime.now)
     end_time: datetime | None = None
     status: ExperimentStatus = ExperimentStatus.PENDING
-    nfp_objective: NextFeaturePrediction | None = None  # Feature objectives for this experiment
+    nfp_objective: NextFeaturePrediction | None = Field(
+        default=None, description="Feature objectives for this experiment"
+    )
 
 
 class ExperimentProgress(BaseModel):
@@ -935,7 +956,7 @@ class ExperimentProgress(BaseModel):
     experiment_id: str
     timestamp: datetime = Field(default_factory=datetime.now)
     current_metrics: ExtendedComplexityMetrics
-    target_metrics: ExtendedComplexityMetrics  # From HEAD commit
+    target_metrics: ExtendedComplexityMetrics = Field(description="Metrics from HEAD commit")
 
     # Legacy CLI metrics (deprecated - use qpe_score instead)
     cli_score: float = Field(
@@ -958,15 +979,15 @@ class CommitComplexitySnapshot(BaseModel):
     timestamp: datetime
     complexity_metrics: ExtendedComplexityMetrics
     parent_commit_sha: str | None = None
-    complexity_delta: ComplexityDelta | None = None  # Delta from parent
+    complexity_delta: ComplexityDelta | None = Field(default=None, description="Delta from parent commit")
 
 
 class CommitChain(BaseModel):
     """Represents a chain of commits with complexity evolution."""
 
     repository_path: Path
-    base_commit: str  # Starting point (e.g., HEAD~10)
-    head_commit: str  # End point (e.g., HEAD)
+    base_commit: str = Field(description="Starting point (e.g., HEAD~10)")
+    head_commit: str = Field(description="End point (e.g., HEAD)")
     commits: list[CommitComplexitySnapshot] = Field(default_factory=list)
     total_complexity_growth: int = 0
     average_complexity_per_commit: float = 0.0
@@ -976,8 +997,8 @@ class ComplexityEvolution(BaseModel):
     """Tracks how complexity evolves across commits."""
 
     commit_sha: str
-    cumulative_complexity: int  # Total complexity up to this commit
-    incremental_complexity: int  # Complexity added in this commit
+    cumulative_complexity: int = Field(description="Total complexity up to this commit")
+    incremental_complexity: int = Field(description="Complexity added in this commit")
     files_modified: int
     functions_added: int
     functions_removed: int
@@ -1487,6 +1508,16 @@ class ContextCoverage(BaseModel):
     def total_blind_spots(self) -> int:
         """Total number of related files that were never read."""
         return len(self.blind_spots)
+
+    @property
+    def has_gaps(self) -> bool:
+        """Whether there are any coverage gaps requiring attention."""
+        return (
+            self.files_read_before_edit_ratio < 1.0
+            or self.overall_imports_coverage < 100
+            or self.overall_dependents_coverage < 100
+            or bool(self.blind_spots)
+        )
 
 
 class LanguageGuardResult(BaseModel):

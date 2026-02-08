@@ -1,5 +1,6 @@
 """Tests for project_guard.py."""
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -9,6 +10,38 @@ from slopometry.core.project_guard import (
     detect_multi_project_directory,
     guard_single_project,
 )
+
+
+def _init_git_repo(path: Path) -> None:
+    """Initialize a real git repo with an initial commit."""
+    subprocess.run(["git", "init", str(path)], capture_output=True, check=True)
+    subprocess.run(
+        ["git", "-C", str(path), "config", "user.email", "test@test.com"],
+        capture_output=True,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(path), "config", "user.name", "Test"],
+        capture_output=True,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(path), "config", "commit.gpgsign", "false"],
+        capture_output=True,
+        check=True,
+    )
+    # Need at least one commit for gitignore to work
+    (path / ".gitkeep").write_text("")
+    subprocess.run(
+        ["git", "-C", str(path), "add", ".gitkeep"],
+        capture_output=True,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(path), "commit", "-m", "init"],
+        capture_output=True,
+        check=True,
+    )
 
 
 class TestDetectMultiProjectDirectory:
@@ -77,6 +110,80 @@ class TestDetectMultiProjectDirectory:
         (tmp_path / "somefile.txt").write_text("hello")
         projects = detect_multi_project_directory(tmp_path)
         assert projects == []
+
+    def test_detect_multi_project_directory__skips_gitignored_subdirs(self, tmp_path: Path) -> None:
+        """Gitignored subdirectories with .git are excluded from detection."""
+        # Create a git repo at tmp_path with gitignore rules
+        _init_git_repo(tmp_path)
+        (tmp_path / ".gitignore").write_text("playground/\nreferences/\n")
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "add", ".gitignore"],
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "commit", "-m", "add gitignore"],
+            capture_output=True,
+            check=True,
+        )
+
+        # Create a workspace subdir (no .git) — this is the scan root
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+
+        # Gitignored subdirs with their own .git repos
+        for name in ["playground/sam3", "references/ag-ui", "references/pydantic-ai"]:
+            subdir = workspace / name
+            subdir.mkdir(parents=True)
+            (subdir / ".git").mkdir()
+
+        # All subdirs are gitignored, so nothing should be detected
+        projects = detect_multi_project_directory(workspace)
+        assert projects == []
+
+    def test_detect_multi_project_directory__counts_non_ignored_subdirs(self, tmp_path: Path) -> None:
+        """Non-ignored subdirs with .git are counted even when ignored ones exist."""
+        _init_git_repo(tmp_path)
+        (tmp_path / ".gitignore").write_text("vendor/\n")
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "add", ".gitignore"],
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "commit", "-m", "add gitignore"],
+            capture_output=True,
+            check=True,
+        )
+
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+
+        # Ignored subdir with .git
+        vendor = workspace / "vendor" / "lib"
+        vendor.mkdir(parents=True)
+        (vendor / ".git").mkdir()
+
+        # Non-ignored subdir with .git — should be detected
+        real_project = workspace / "services" / "api"
+        real_project.mkdir(parents=True)
+        (real_project / ".git").mkdir()
+
+        projects = detect_multi_project_directory(workspace)
+        assert projects == ["services/api"]
+
+    def test_detect_multi_project_directory__no_git_root_scans_all(self, tmp_path: Path) -> None:
+        """When not inside a git repo, all subdirs are scanned (no filtering)."""
+        # No git init on tmp_path — not a git repo
+        proj1 = tmp_path / "proj1"
+        proj2 = tmp_path / "proj2"
+        proj1.mkdir()
+        proj2.mkdir()
+        (proj1 / ".git").mkdir()
+        (proj2 / ".git").mkdir()
+
+        projects = detect_multi_project_directory(tmp_path)
+        assert sorted(projects) == ["proj1", "proj2"]
 
 
 class TestGuardSingleProject:

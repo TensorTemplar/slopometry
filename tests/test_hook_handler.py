@@ -811,3 +811,144 @@ class TestFormattersInterpretZScore:
         assert _interpret_z_score(-2.0) == "much worse than avg"
         assert _interpret_z_score(-0.8) == "worse than avg"
         assert _interpret_z_score(0.0) == "about avg"
+
+
+class TestHookHandlerSmokeTests:
+    """Smoke tests to ensure hook handlers don't crash with valid input."""
+
+    def _init_git_repo(self, path: Path) -> None:
+        """Initialize a git repo for testing."""
+        subprocess.run(["git", "init"], cwd=path, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "config", "--local", "user.email", "test@example.com"],
+            cwd=path,
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "--local", "user.name", "Test"],
+            cwd=path,
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "--local", "commit.gpgsign", "false"],
+            cwd=path,
+            capture_output=True,
+            check=True,
+        )
+
+    def test_handle_hook__pre_tool_use_does_not_crash(self):
+        """Smoke test: PreToolUse hook should not crash."""
+        import json
+        from io import StringIO
+        from unittest.mock import patch
+
+        from slopometry.core.hook_handler import handle_hook
+        from slopometry.core.models import HookEventType
+
+        input_data = {
+            "session_id": "smoke-test-session",
+            "transcript_path": "/tmp/test.jsonl",
+            "tool_name": "Bash",
+            "tool_input": {"command": "ls"},
+        }
+
+        with patch("sys.stdin", StringIO(json.dumps(input_data))):
+            result = handle_hook(event_type_override=HookEventType.PRE_TOOL_USE)
+
+        assert result == 0
+
+    def test_handle_hook__post_tool_use_does_not_crash(self):
+        """Smoke test: PostToolUse hook should not crash."""
+        import json
+        from io import StringIO
+        from unittest.mock import patch
+
+        from slopometry.core.hook_handler import handle_hook
+        from slopometry.core.models import HookEventType
+
+        input_data = {
+            "session_id": "smoke-test-session",
+            "transcript_path": "/tmp/test.jsonl",
+            "tool_name": "Bash",
+            "tool_input": {"command": "ls"},
+            "tool_response": "file1.txt\nfile2.txt",
+        }
+
+        with patch("sys.stdin", StringIO(json.dumps(input_data))):
+            result = handle_hook(event_type_override=HookEventType.POST_TOOL_USE)
+
+        assert result == 0
+
+    def test_handle_hook__notification_does_not_crash(self):
+        """Smoke test: Notification hook should not crash."""
+        import json
+        from io import StringIO
+        from unittest.mock import patch
+
+        from slopometry.core.hook_handler import handle_hook
+        from slopometry.core.models import HookEventType
+
+        input_data = {
+            "session_id": "smoke-test-session",
+            "transcript_path": "/tmp/test.jsonl",
+            "message": "Test notification",
+        }
+
+        with patch("sys.stdin", StringIO(json.dumps(input_data))):
+            result = handle_hook(event_type_override=HookEventType.NOTIFICATION)
+
+        assert result == 0
+
+    def test_handle_hook__stop_does_not_crash(self):
+        """Smoke test: Stop hook should not crash."""
+        import json
+        from io import StringIO
+        from unittest.mock import patch
+
+        from slopometry.core.hook_handler import handle_hook
+        from slopometry.core.models import HookEventType
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            self._init_git_repo(tmppath)
+            (tmppath / "test.py").write_text("x = 1")
+            subprocess.run(["git", "add", "."], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=tmppath, capture_output=True)
+
+            input_data = {
+                "session_id": "smoke-test-stop",
+                "transcript_path": "/tmp/test.jsonl",
+                "stop_hook_active": False,
+            }
+
+            with (
+                patch("sys.stdin", StringIO(json.dumps(input_data))),
+                patch("os.getcwd", return_value=str(tmppath)),
+            ):
+                result = handle_hook(event_type_override=HookEventType.STOP)
+
+            # Stop hook returns 0 (no feedback) or 2 (with feedback) - both are valid
+            assert result in (0, 2)
+
+    def test_handle_hook__subagent_stop_does_not_crash(self):
+        """Smoke test: SubagentStop hook should not crash and return 0."""
+        import json
+        from io import StringIO
+        from unittest.mock import patch
+
+        from slopometry.core.hook_handler import handle_hook
+        from slopometry.core.models import HookEventType
+
+        input_data = {
+            "session_id": "smoke-test-subagent",
+            "transcript_path": "/tmp/test.jsonl",
+            "stop_hook_active": True,
+        }
+
+        with patch("sys.stdin", StringIO(json.dumps(input_data))):
+            result = handle_hook(event_type_override=HookEventType.STOP)
+
+        # Subagent stops should return 0 (no feedback for subagents)
+        assert result == 0

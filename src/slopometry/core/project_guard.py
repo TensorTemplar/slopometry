@@ -65,6 +65,54 @@ def _is_git_submodule(path: Path, root: Path) -> bool:
     return False
 
 
+def _get_git_root(path: Path) -> Path | None:
+    """Find the enclosing git repo root for a path.
+
+    Returns None if the path is not inside a git repository.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(path), "rev-parse", "--show-toplevel"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            return Path(result.stdout.strip())
+    except Exception as e:
+        logger.debug(f"Failed to find git root for {path}: {e}")
+    return None
+
+
+def _is_gitignored_batch(paths: list[Path], git_root: Path) -> set[Path]:
+    """Batch-check which paths are gitignored.
+
+    Uses `git check-ignore` to determine which of the given paths are
+    covered by gitignore rules. Returns the set of ignored paths.
+    Fails open: if the command fails, returns an empty set.
+    """
+    if not paths:
+        return set()
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(git_root), "check-ignore", *[str(p) for p in paths]],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        # git check-ignore exits 0 if any path is ignored, 1 if none are ignored
+        if result.returncode in (0, 1):
+            ignored = set()
+            for line in result.stdout.strip().split("\n"):
+                line = line.strip()
+                if line:
+                    ignored.add(Path(line).resolve())
+            return ignored
+    except Exception as e:
+        logger.debug(f"Failed to check gitignore for paths: {e}")
+    return set()
+
+
 def detect_multi_project_directory(
     root: Path,
     max_depth: int = 2,
@@ -82,6 +130,7 @@ def detect_multi_project_directory(
     """
     root = root.resolve()
     projects: list[str] = []
+    git_root = _get_git_root(root)
 
     def scan_dir(path: Path, depth: int) -> None:
         if depth > max_depth:
@@ -95,11 +144,17 @@ def detect_multi_project_directory(
             return
 
         try:
-            for child in path.iterdir():
-                if child.is_dir() and not child.name.startswith("."):
-                    scan_dir(child, depth + 1)
+            children = [child for child in path.iterdir() if child.is_dir() and not child.name.startswith(".")]
         except PermissionError as e:
             logger.debug(f"Permission denied scanning directory {path}: {e}")
+            return
+
+        if git_root and children:
+            ignored = _is_gitignored_batch(children, git_root)
+            children = [c for c in children if c.resolve() not in ignored]
+
+        for child in children:
+            scan_dir(child, depth + 1)
 
     scan_dir(root, 0)
     return projects

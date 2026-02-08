@@ -3,7 +3,13 @@
 import pytest
 from pydantic import ValidationError
 
-from slopometry.core.models import ExtendedComplexityMetrics, UserStoryDisplayData, UserStoryStatistics
+from slopometry.core.models import (
+    ContextCoverage,
+    ExtendedComplexityMetrics,
+    FileCoverageStatus,
+    UserStoryDisplayData,
+    UserStoryStatistics,
+)
 
 
 class TestExtendedComplexityMetrics:
@@ -95,3 +101,60 @@ class TestUserStoryDisplayData:
         assert display_data.rating == "3/5"
         assert display_data.model == "gemini-2.5-pro"
         assert display_data.repository == "slopometry"
+
+
+def test_context_coverage_has_gaps__returns_false_when_perfect():
+    """Test that has_gaps returns False when all coverage metrics are perfect."""
+    coverage = ContextCoverage(
+        files_edited=["src/foo.py"],
+        files_read=["src/foo.py"],
+        file_coverage=[
+            FileCoverageStatus(
+                file_path="src/foo.py",
+                was_read_before_edit=True,
+                imports_coverage=100.0,
+                dependents_coverage=100.0,
+            )
+        ],
+        blind_spots=[],
+    )
+
+    assert coverage.has_gaps is False
+
+
+def test_context_coverage_has_gaps__returns_true_when_read_ratio_low():
+    """Test that has_gaps returns True when files weren't read before edit."""
+    coverage = ContextCoverage(
+        files_edited=["src/foo.py"],
+        files_read=[],
+        file_coverage=[
+            FileCoverageStatus(
+                file_path="src/foo.py",
+                was_read_before_edit=False,
+                imports_coverage=100.0,
+                dependents_coverage=100.0,
+            )
+        ],
+        blind_spots=[],
+    )
+
+    assert coverage.has_gaps is True
+
+
+def test_context_coverage_has_gaps__returns_true_when_blind_spots():
+    """Test that has_gaps returns True when there are blind spots."""
+    coverage = ContextCoverage(
+        files_edited=["src/foo.py"],
+        files_read=["src/foo.py"],
+        file_coverage=[
+            FileCoverageStatus(
+                file_path="src/foo.py",
+                was_read_before_edit=True,
+                imports_coverage=100.0,
+                dependents_coverage=100.0,
+            )
+        ],
+        blind_spots=["src/bar.py"],
+    )
+
+    assert coverage.has_gaps is True

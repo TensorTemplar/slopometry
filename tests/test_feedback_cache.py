@@ -471,3 +471,66 @@ class TestBuildArtifactFiltering:
             key_after = _compute_feedback_cache_key(str(tmppath), set(), feedback_hash)
 
             assert key_before == key_after, "*.egg-info directory should be ignored"
+
+
+def test_feedback_cache__slopometry_dir_visibility_does_not_affect_key():
+    """Verify cache key is stable whether .slopometry/ is in gitignore or not.
+
+    This is the critical test: the cache key should remain stable when:
+    1. .slopometry/ is NOT in gitignore (shows as untracked)
+    2. .slopometry/ IS in gitignore (hidden from git)
+    3. .gitignore is modified but not committed
+
+    The key only depends on: commit SHA, Python file content, edited files, and feedback hash.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmppath = Path(tmpdir)
+        _init_git_repo(tmppath)
+
+        # Create Python file and gitignore WITHOUT .slopometry entry
+        (tmppath / "test.py").write_text("def foo(): pass")
+        (tmppath / ".gitignore").write_text("__pycache__/\n")
+        _commit_all(tmppath)
+
+        # Modify Python file (uncommitted)
+        (tmppath / "test.py").write_text("def foo(): return 1")
+
+        feedback_hash = "test_feedback_hash"
+
+        # Scenario 1: .slopometry NOT in gitignore
+        key1 = _compute_feedback_cache_key(str(tmppath), {"test.py"}, feedback_hash)
+
+        # Save cache (creates .slopometry/ directory)
+        _save_feedback_cache(str(tmppath), key1)
+
+        # Scenario 2: Add .slopometry to gitignore (uncommitted)
+        (tmppath / ".gitignore").write_text("__pycache__/\n.slopometry/\n")
+        key2 = _compute_feedback_cache_key(str(tmppath), {"test.py"}, feedback_hash)
+
+        # Scenario 3: Remove .slopometry from gitignore
+        (tmppath / ".gitignore").write_text("__pycache__/\n")
+        key3 = _compute_feedback_cache_key(str(tmppath), {"test.py"}, feedback_hash)
+
+        assert key1 == key2, "Adding .slopometry to gitignore should not change cache key"
+        assert key2 == key3, "Removing .slopometry from gitignore should not change cache key"
+        assert key1 == key3, "Cache key should be identical across all scenarios"
+
+
+def test_feedback_cache__gitignore_modification_does_not_invalidate():
+    """Verify that modifying .gitignore (non-Python file) doesn't invalidate cache."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmppath = Path(tmpdir)
+        _init_git_repo(tmppath)
+        (tmppath / "test.py").write_text("def foo(): pass")
+        (tmppath / ".gitignore").write_text("*.pyc\n")
+        _commit_all(tmppath)
+
+        feedback_hash = "feedbackhash1234"
+        key_before = _compute_feedback_cache_key(str(tmppath), set(), feedback_hash)
+
+        # Modify .gitignore (uncommitted)
+        (tmppath / ".gitignore").write_text("*.pyc\n.slopometry/\n__pycache__/\n")
+
+        key_after = _compute_feedback_cache_key(str(tmppath), set(), feedback_hash)
+
+        assert key_before == key_after, ".gitignore modifications should not invalidate cache"

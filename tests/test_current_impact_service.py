@@ -6,12 +6,18 @@ from pathlib import Path
 import pytest
 
 from slopometry.core.complexity_analyzer import ComplexityAnalyzer
+from slopometry.core.database import EventDatabase
 from slopometry.core.models import AnalysisSource, HistoricalMetricStats, RepoBaseline
 from slopometry.summoner.services.current_impact_service import CurrentImpactService
 
 
 class TestCurrentImpactService:
     """Integration tests for CurrentImpactService."""
+
+    @pytest.fixture
+    def test_db(self, tmp_path):
+        """Isolated database scoped to each test to prevent cache leaks."""
+        return EventDatabase(db_path=tmp_path / "test.db")
 
     @pytest.fixture(scope="module")
     def real_baseline(self):
@@ -59,31 +65,22 @@ class TestCurrentImpactService:
 
         return dest_repo_path
 
-    def test_analyze_uncommitted_changes__no_changes_returns_none(self, test_repo_path, real_baseline):
+    def test_analyze_uncommitted_changes__no_changes_returns_none(self, test_repo_path, real_baseline, test_db):
         """Test that analyzing a clean repo returns None."""
         assert real_baseline is not None, "Baseline computation failed - fixture returned None"
 
-        # Setup
-        service = CurrentImpactService()
+        service = CurrentImpactService(db=test_db)
 
-        # Use valid baseline from source repo (path differs but complexity is same)
-        # We need to patch the baseline repository_path to match test_repo_path
-        # or mock the baseline checking if it validates path.
-        # But analyze_uncommitted_changes only uses baseline.current_metrics.
-
-        # Mock baseline service to return our pre-computed baseline
-
-        # Analyze
         result = service.analyze_uncommitted_changes(test_repo_path, real_baseline)
 
         # Should be None as there are no changes
         assert result is None
 
-    def test_analyze_uncommitted_changes__detects_changes(self, test_repo_path, real_baseline):
+    def test_analyze_uncommitted_changes__detects_changes(self, test_repo_path, real_baseline, test_db):
         """Test analyzing a repo with uncommitted changes."""
         assert real_baseline is not None, "Baseline computation failed - fixture returned None"
 
-        service = CurrentImpactService()
+        service = CurrentImpactService(db=test_db)
 
         # Modify a python file
         target_file = test_repo_path / "src" / "slopometry" / "core" / "models.py"
@@ -110,11 +107,11 @@ class TestCurrentImpactService:
         assert result.current_metrics.total_files_analyzed > 0
         assert result.current_metrics.total_complexity > 0
 
-    def test_analyze_previous_commit__returns_analysis_with_correct_source(self, test_repo_path, real_baseline):
+    def test_analyze_previous_commit__returns_analysis_with_correct_source(self, test_repo_path, real_baseline, test_db):
         """Test that analyzing previous commit sets the correct source."""
         assert real_baseline is not None, "Baseline computation failed"
 
-        service = CurrentImpactService()
+        service = CurrentImpactService(db=test_db)
 
         # The test_repo_path is a clone with commits, so previous commit should exist
         result = service.analyze_previous_commit(test_repo_path, real_baseline)
@@ -127,11 +124,10 @@ class TestCurrentImpactService:
             assert len(result.analyzed_commit_sha) == 8  # Short SHA
             assert len(result.base_commit_sha) == 8  # Short SHA
 
-    def test_analyze_previous_commit__returns_none_when_no_previous_commit(self, tmp_path, real_baseline):
+    def test_analyze_previous_commit__returns_none_when_no_previous_commit(self, tmp_path, real_baseline, test_db):
         """Test that analyze_previous_commit returns None for repos with only one commit."""
         assert real_baseline is not None, "Baseline computation failed"
 
-        # Create a repo with only one commit
         repo_path = tmp_path / "single_commit_repo"
         repo_path.mkdir()
 
@@ -165,16 +161,15 @@ class TestCurrentImpactService:
             capture_output=True,
         )
 
-        service = CurrentImpactService()
+        service = CurrentImpactService(db=test_db)
         result = service.analyze_previous_commit(repo_path, real_baseline)
 
         assert result is None
 
-    def test_analyze_previous_commit__returns_none_when_no_python_changes(self, tmp_path, real_baseline):
+    def test_analyze_previous_commit__returns_none_when_no_python_changes(self, tmp_path, real_baseline, test_db):
         """Test that analyze_previous_commit returns None when last commit has no Python changes."""
         assert real_baseline is not None, "Baseline computation failed"
 
-        # Create a repo with two commits, but the last one has no Python changes
         repo_path = tmp_path / "no_python_changes_repo"
         repo_path.mkdir()
 
@@ -220,14 +215,14 @@ class TestCurrentImpactService:
             capture_output=True,
         )
 
-        service = CurrentImpactService()
+        service = CurrentImpactService(db=test_db)
         result = service.analyze_previous_commit(repo_path, real_baseline)
 
         # Should return None because no Python files were changed
         assert result is None
 
     def test_analyze_previous_commit__logs_debug_on_git_operation_error(
-        self, test_repo_path, real_baseline, caplog, monkeypatch
+        self, test_repo_path, real_baseline, test_db, caplog, monkeypatch
     ):
         """Test that analyze_previous_commit logs debug messages on GitOperationError."""
         assert real_baseline is not None, "Baseline computation failed"
@@ -239,10 +234,86 @@ class TestCurrentImpactService:
 
         monkeypatch.setattr(GitTracker, "get_changed_python_files", mock_get_changed_python_files)
 
-        service = CurrentImpactService()
+        service = CurrentImpactService(db=test_db)
 
         with caplog.at_level(logging.DEBUG, logger="slopometry.summoner.services.current_impact_service"):
             result = service.analyze_previous_commit(test_repo_path, real_baseline)
 
         assert result is None
         assert any("Failed to get changed files" in record.message for record in caplog.records)
+
+    def test_analyze_uncommitted_changes__uses_cache_on_second_call(self, test_repo_path, real_baseline, test_db, caplog):
+        """Test that second call with same state uses cached metrics."""
+        assert real_baseline is not None, "Baseline computation failed"
+
+        service = CurrentImpactService(db=test_db)
+
+        # Modify a python file to have uncommitted changes
+        target_file = test_repo_path / "src" / "slopometry" / "core" / "models.py"
+        if not target_file.exists():
+            target_file = test_repo_path / "test_file.py"
+            target_file.write_text("def foo():\n    pass\n")
+        else:
+            with open(target_file, "a") as f:
+                f.write("\n\ndef cached_test_func(x):\n    return x * 2\n")
+
+        # First call - should compute and cache
+        with caplog.at_level(logging.DEBUG, logger="slopometry.summoner.services.current_impact_service"):
+            result1 = service.analyze_uncommitted_changes(test_repo_path, real_baseline)
+
+        assert result1 is not None
+        cached_logged = any("Cached metrics for current-impact" in record.message for record in caplog.records)
+        assert cached_logged, "First call should cache metrics"
+
+        caplog.clear()
+
+        # Second call - should use cache
+        with caplog.at_level(logging.DEBUG, logger="slopometry.summoner.services.current_impact_service"):
+            result2 = service.analyze_uncommitted_changes(test_repo_path, real_baseline)
+
+        assert result2 is not None
+        using_cache_logged = any(
+            "Using cached metrics for current-impact" in record.message for record in caplog.records
+        )
+        assert using_cache_logged, "Second call should use cached metrics"
+
+    def test_analyze_uncommitted_changes__cache_invalidated_on_file_change(
+        self, test_repo_path, real_baseline, test_db, caplog
+    ):
+        """Test that cache is invalidated when working tree changes."""
+        assert real_baseline is not None, "Baseline computation failed"
+
+        service = CurrentImpactService(db=test_db)
+
+        # Modify an existing tracked Python file
+        target_file = test_repo_path / "src" / "slopometry" / "core" / "models.py"
+        if not target_file.exists():
+            pytest.skip("models.py not found in test repo")
+
+        original_content = target_file.read_text()
+
+        # First modification
+        target_file.write_text(original_content + "\n\ndef cache_invalidation_test_v1():\n    return 1\n")
+
+        # First call - compute and cache
+        with caplog.at_level(logging.DEBUG, logger="slopometry.summoner.services.current_impact_service"):
+            result1 = service.analyze_uncommitted_changes(test_repo_path, real_baseline)
+
+        assert result1 is not None
+        caplog.clear()
+
+        # Second modification - should invalidate cache due to different content hash
+        target_file.write_text(original_content + "\n\ndef cache_invalidation_test_v2():\n    return 2\n")
+
+        # Second call - should recompute (different working tree hash)
+        with caplog.at_level(logging.DEBUG, logger="slopometry.summoner.services.current_impact_service"):
+            result2 = service.analyze_uncommitted_changes(test_repo_path, real_baseline)
+
+        assert result2 is not None
+        # Should NOT see "Using cached metrics" since file changed
+        using_cache_logged = any(
+            "Using cached metrics for current-impact" in record.message for record in caplog.records
+        )
+        cached_logged = any("Cached metrics for current-impact" in record.message for record in caplog.records)
+        assert not using_cache_logged, "Changed file should invalidate cache"
+        assert cached_logged, "Should cache new metrics after recomputation"

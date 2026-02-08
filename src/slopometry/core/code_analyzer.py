@@ -71,7 +71,6 @@ def _analyze_single_file(file_path: Path) -> FileAnalysisResult:
             difficulty=0.0,
             effort=0.0,
             mi=0.0,
-            tokens=0,
             error=str(e),
         )
 
@@ -126,7 +125,6 @@ class CodeAnalyzer:
                 difficulty=0.0,
                 effort=0.0,
                 mi=0.0,
-                tokens=0,
                 error=str(e),
             )
 

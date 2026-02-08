@@ -378,7 +378,11 @@ def handle_stop_event(session_id: str, parsed_input: "StopInput | SubagentStopIn
     cache_stable_parts: list[str] = []  # Only code-based feedback (stable between tool calls)
 
     # Get edited files from git (more reliable than transcript-based context coverage)
-    edited_files = get_modified_python_files(stats.working_directory)
+    try:
+        edited_files = get_modified_python_files(stats.working_directory)
+    except (ValueError, RuntimeError) as e:
+        logger.debug(f"Failed to get modified Python files: {e}")
+        edited_files = set()
 
     # Code smells - ALWAYS check (independent of enable_complexity_feedback)
     # This is stable (based on code state, not session activity)
@@ -392,7 +396,7 @@ def handle_stop_event(session_id: str, parsed_input: "StopInput | SubagentStopIn
 
     # Context coverage - informational but NOT stable (changes with every Read/Glob/Grep)
     # Excluded from cache hash to avoid invalidation on tool calls
-    if settings.enable_complexity_feedback and stats.context_coverage and stats.context_coverage.files_edited:
+    if settings.enable_complexity_feedback and stats.context_coverage and stats.context_coverage.has_gaps:
         context_feedback = format_context_coverage_feedback(stats.context_coverage)
         if context_feedback:
             feedback_parts.append(context_feedback)
