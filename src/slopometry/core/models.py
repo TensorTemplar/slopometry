@@ -158,6 +158,15 @@ SMELL_REGISTRY: dict[str, SmellDefinition] = {
         count_field="passthrough_wrapper_count",
         files_field="passthrough_wrapper_files",
     ),
+    "sys_path_manipulation": SmellDefinition(
+        internal_name="sys_path_manipulation",
+        label="sys.path Manipulation",
+        category=SmellCategory.PYTHON,
+        weight=0.10,
+        guidance="sys.path mutations bypass the package system — restructure package boundaries and use absolute imports from installed packages instead",
+        count_field="sys_path_manipulation_count",
+        files_field="sys_path_manipulation_files",
+    ),
 }
 
 
@@ -420,6 +429,7 @@ class ComplexityDelta(BaseModel):
     single_method_class_change: int = 0
     deep_inheritance_change: int = 0
     passthrough_wrapper_change: int = 0
+    sys_path_manipulation_change: int = 0
 
     def get_smell_changes(self) -> dict[str, int]:
         """Return smell name to change value mapping for direct access."""
@@ -437,6 +447,7 @@ class ComplexityDelta(BaseModel):
             "single_method_class": self.single_method_class_change,
             "deep_inheritance": self.deep_inheritance_change,
             "passthrough_wrapper": self.passthrough_wrapper_change,
+            "sys_path_manipulation": self.sys_path_manipulation_change,
         }
 
 
@@ -866,6 +877,11 @@ class ExtendedComplexityMetrics(ComplexityMetrics):
         files_field="passthrough_wrapper_files",
         guidance="Function that just delegates to another with same args; consider removing indirection",
     )
+    sys_path_manipulation_count: int = SmellField(
+        label="sys.path Manipulation",
+        files_field="sys_path_manipulation_files",
+        guidance="sys.path mutations bypass the package system — restructure package boundaries and use absolute imports from installed packages instead",
+    )
 
     # LOC metrics (for file filtering in QPE)
     total_loc: int = Field(default=0, description="Total lines of code across all files")
@@ -889,6 +905,7 @@ class ExtendedComplexityMetrics(ComplexityMetrics):
         default_factory=list, description="Files with deep inheritance (>2 bases)"
     )
     passthrough_wrapper_files: list[str] = Field(default_factory=list, description="Files with pass-through wrappers")
+    sys_path_manipulation_files: list[str] = Field(default_factory=list, description="Files with sys.path mutations")
 
     def get_smells(self) -> list["SmellData"]:
         """Return all smell data as structured objects with direct field access."""
@@ -957,6 +974,11 @@ class ExtendedComplexityMetrics(ComplexityMetrics):
                 name="passthrough_wrapper",
                 count=self.passthrough_wrapper_count,
                 files=self.passthrough_wrapper_files,
+            ),
+            SmellData(
+                name="sys_path_manipulation",
+                count=self.sys_path_manipulation_count,
+                files=self.sys_path_manipulation_files,
             ),
         ]
 
@@ -1353,21 +1375,17 @@ class ImpactAssessment(BaseModel):
 
 
 class QPEScore(BaseModel):
-    """Quality-Per-Effort score for principled code quality comparison.
+    """Quality score for principled code quality comparison.
 
-    Provides two metrics for different use cases:
-    - qpe: Effort-normalized score for GRPO rollout comparison (same spec)
-    - qpe_absolute: Raw quality without effort normalization (cross-project/temporal)
-
-    Uses MI as sole quality signal with sigmoid-saturated smell penalties.
+    Single metric: adjusted quality = MI * (1 - smell_penalty) + bonuses.
+    Used for temporal tracking (delta between commits), cross-project comparison,
+    and GRPO rollout advantage computation.
     """
 
-    qpe: float = Field(description="Quality-per-effort score for GRPO (higher is better)")
-    qpe_absolute: float = Field(description="Quality without effort normalization (for cross-project/temporal)")
+    qpe: float = Field(description="Adjusted quality score (higher is better)")
     mi_normalized: float = Field(description="Maintainability Index normalized to 0-1")
     smell_penalty: float = Field(description="Penalty from code smells (sigmoid-saturated, 0-0.9 range)")
     adjusted_quality: float = Field(description="MI after smell penalty applied")
-    effort_factor: float = Field(description="log(total_halstead_effort + 1)")
 
     smell_counts: dict[str, int] = Field(
         default_factory=dict, description="Individual smell counts contributing to penalty"
@@ -1398,8 +1416,7 @@ class CrossProjectComparison(BaseModel):
 class LeaderboardEntry(BaseModel):
     """A persistent record of a project's quality score at a specific commit.
 
-    Used for cross-project quality comparison. Stores absolute quality (qpe_absolute)
-    rather than effort-normalized QPE, since effort varies between projects.
+    Used for cross-project quality comparison and temporal tracking.
     """
 
     id: int | None = Field(default=None, description="Database ID")
@@ -1408,7 +1425,7 @@ class LeaderboardEntry(BaseModel):
     commit_sha_short: str = Field(description="7-character short git hash")
     commit_sha_full: str = Field(description="Full git hash for deduplication")
     measured_at: datetime = Field(default_factory=datetime.now, description="Date of the analyzed commit")
-    qpe_score: float = Field(description="Absolute quality score (qpe_absolute) for cross-project comparison")
+    qpe_score: float = Field(description="Quality score for cross-project comparison")
     mi_normalized: float = Field(description="Maintainability Index normalized to 0-1")
     smell_penalty: float = Field(description="Penalty from code smells")
     adjusted_quality: float = Field(description="MI × (1 - smell_penalty) + bonuses")

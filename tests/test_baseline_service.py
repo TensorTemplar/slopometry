@@ -178,12 +178,10 @@ class TestGetOrComputeBaseline:
                 trend_coefficient=0.0,
             ),
             current_qpe=QPEScore(
-                qpe=0.03,
-                qpe_absolute=0.45,
+                qpe=0.45,
                 mi_normalized=0.5,
                 smell_penalty=0.1,
                 adjusted_quality=0.45,
-                effort_factor=15.0,
                 smell_counts={},
             ),
         )

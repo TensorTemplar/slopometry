@@ -1387,16 +1387,11 @@ def display_qpe_score(
         metrics: Extended complexity metrics for context
     """
 
-    console.print("\n[bold]Quality-Per-Effort Score[/bold]")
+    console.print("\n[bold]Quality Score[/bold]")
 
-    # Show both QPE metrics
-    qpe_color = "green" if qpe_score.qpe > 0.05 else "yellow" if qpe_score.qpe > 0.02 else "red"
-    qual_color = "green" if qpe_score.qpe_absolute > 0.6 else "yellow" if qpe_score.qpe_absolute > 0.4 else "red"
+    qpe_color = "green" if qpe_score.qpe > 0.6 else "yellow" if qpe_score.qpe > 0.4 else "red"
     console.print(
-        f"  [bold]QPE (GRPO):[/bold] [{qpe_color}]{qpe_score.qpe:.4f}[/{qpe_color}]  [dim]effort-normalized for rollout comparison[/dim]"
-    )
-    console.print(
-        f"  [bold]Quality:[/bold]    [{qual_color}]{qpe_score.qpe_absolute:.4f}[/{qual_color}]  [dim]absolute for cross-project/temporal[/dim]"
+        f"  [bold]QPE:[/bold] [{qpe_color}]{qpe_score.qpe:.4f}[/{qpe_color}]"
     )
 
     component_table = Table(title="QPE Components", show_header=True)
@@ -1421,12 +1416,6 @@ def display_qpe_score(
         "Adjusted Quality",
         f"{qpe_score.adjusted_quality:.3f}",
         "MI × (1 - smell_penalty) + bonuses",
-    )
-
-    component_table.add_row(
-        "Effort Factor",
-        f"{qpe_score.effort_factor:.2f}",
-        f"log(Halstead Effort + 1), raw: {metrics.total_effort:.0f}",
     )
 
     console.print(component_table)
@@ -1472,11 +1461,10 @@ def display_cross_project_comparison(comparison: "CrossProjectComparison") -> No
     table.add_column("QPE", justify="right")
     table.add_column("MI", justify="right")
     table.add_column("Smell Penalty", justify="right")
-    table.add_column("Effort", justify="right")
 
     for rank, result in enumerate(comparison.rankings, 1):
         rank_style = "green" if rank == 1 else "yellow" if rank == 2 else ""
-        qpe_color = "green" if result.qpe_score.qpe > 0.05 else "yellow" if result.qpe_score.qpe > 0.02 else "red"
+        qpe_color = "green" if result.qpe_score.qpe > 0.6 else "yellow" if result.qpe_score.qpe > 0.4 else "red"
         smell_color = (
             "green"
             if result.qpe_score.smell_penalty < 0.1
@@ -1491,11 +1479,10 @@ def display_cross_project_comparison(comparison: "CrossProjectComparison") -> No
             f"[{qpe_color}]{result.qpe_score.qpe:.4f}[/{qpe_color}]",
             f"{result.metrics.average_mi:.1f}",
             f"[{smell_color}]{result.qpe_score.smell_penalty:.3f}[/{smell_color}]",
-            f"{result.metrics.total_effort:.0f}",
         )
 
     console.print(table)
-    console.print("\n[dim]Higher QPE = better quality per effort | Higher Quality = better absolute quality[/dim]")
+    console.print("\n[dim]Higher QPE = better quality[/dim]")
 
 
 def display_leaderboard(entries: list) -> None:

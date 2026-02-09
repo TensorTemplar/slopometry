@@ -965,3 +965,108 @@ def foo():
         visitor.visit(tree)
 
         assert visitor.dynamic_executions == 3
+
+
+class TestSysPathManipulationDetection:
+    """Tests for sys.path manipulation detection."""
+
+    def test_sys_path_manipulation__detects_sys_path_insert(self) -> None:
+        """Test detection of sys.path.insert() calls."""
+        code = """
+import sys
+sys.path.insert(0, "/some/path")
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.sys_path_manipulations == 1
+
+    def test_sys_path_manipulation__detects_sys_path_append(self) -> None:
+        """Test detection of sys.path.append() calls."""
+        code = """
+import sys
+sys.path.append("/some/path")
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.sys_path_manipulations == 1
+
+    def test_sys_path_manipulation__detects_sys_path_extend(self) -> None:
+        """Test detection of sys.path.extend() calls."""
+        code = """
+import sys
+sys.path.extend(["/path1", "/path2"])
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.sys_path_manipulations == 1
+
+    def test_sys_path_manipulation__detects_sys_path_remove(self) -> None:
+        """Test detection of sys.path.remove() calls."""
+        code = """
+import sys
+sys.path.remove("/some/path")
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.sys_path_manipulations == 1
+
+    def test_sys_path_manipulation__detects_sys_path_assignment(self) -> None:
+        """Test detection of sys.path = [...] direct assignment."""
+        code = """
+import sys
+sys.path = ["/custom/path"]
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.sys_path_manipulations == 1
+
+    def test_sys_path_manipulation__detects_sys_path_augmented_assignment(self) -> None:
+        """Test detection of sys.path += [...] augmented assignment."""
+        code = """
+import sys
+sys.path += ["/extra/path"]
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.sys_path_manipulations == 1
+
+    def test_sys_path_manipulation__ignores_sys_path_read(self) -> None:
+        """Reading sys.path (e.g. print(sys.path)) should NOT trigger the smell."""
+        code = """
+import sys
+print(sys.path)
+x = sys.path
+for p in sys.path:
+    print(p)
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.sys_path_manipulations == 0
+
+    def test_sys_path_manipulation__counts_multiple_mutations(self) -> None:
+        """Multiple sys.path mutations in one file are counted individually."""
+        code = """
+import sys
+sys.path.insert(0, "/first")
+sys.path.append("/second")
+sys.path += ["/third"]
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.sys_path_manipulations == 3

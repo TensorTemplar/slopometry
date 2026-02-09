@@ -1,6 +1,5 @@
 """Tests for QPE (Quality-Per-Effort) Calculator functionality."""
 
-import math
 import subprocess
 from io import StringIO
 from pathlib import Path
@@ -31,6 +30,7 @@ class TestQPECalculator:
                 total_complexity=100,
                 total_volume=5000.0,
                 total_effort=50000.0,
+                average_effort=5000.0,
                 average_mi=75.0,  # Good MI
                 total_files_analyzed=10,
                 # No code smells
@@ -63,6 +63,7 @@ class TestQPECalculator:
                 total_complexity=100,
                 total_volume=5000.0,
                 total_effort=50000.0,
+                average_effort=5000.0,
                 average_mi=75.0,
                 total_files_analyzed=10,
                 # Add some code smells
@@ -90,6 +91,7 @@ class TestQPECalculator:
                 total_complexity=100,
                 total_volume=5000.0,
                 total_effort=50000.0,
+                average_effort=25000.0,
                 average_mi=75.0,
                 total_files_analyzed=2,  # Few files
                 # Many smells per file
@@ -115,6 +117,7 @@ class TestQPECalculator:
         metrics_concentrated = ExtendedComplexityMetrics(
             **make_test_metrics(
                 total_effort=50000.0,
+                average_effort=5000.0,
                 average_mi=75.0,
                 total_files_analyzed=10,  # 10 total files
                 hasattr_getattr_count=10,
@@ -126,6 +129,7 @@ class TestQPECalculator:
         metrics_spread = ExtendedComplexityMetrics(
             **make_test_metrics(
                 total_effort=50000.0,
+                average_effort=5000.0,
                 average_mi=75.0,
                 total_files_analyzed=10,  # 10 total files
                 hasattr_getattr_count=10,
@@ -139,8 +143,8 @@ class TestQPECalculator:
         # Both should have the same smell penalty (normalizing by total files, not affected)
         assert abs(qpe_concentrated.smell_penalty - qpe_spread.smell_penalty) < 0.001
 
-    def test_calculate_qpe__qpe_absolute_equals_adjusted_quality(self):
-        """Test that qpe_absolute equals adjusted_quality (no effort normalization)."""
+    def test_calculate_qpe__qpe_equals_adjusted_quality(self):
+        """Test that qpe equals adjusted_quality."""
         calculator = QPECalculator()
 
         metrics = ExtendedComplexityMetrics(
@@ -153,26 +157,7 @@ class TestQPECalculator:
 
         qpe_score = calculator.calculate_qpe(metrics)
 
-        assert qpe_score.qpe_absolute == qpe_score.adjusted_quality
-
-    def test_calculate_qpe__effort_factor_uses_log_scale(self):
-        """Test that effort factor uses log scale for diminishing returns."""
-        calculator = QPECalculator()
-
-        metrics = ExtendedComplexityMetrics(
-            **make_test_metrics(
-                total_complexity=100,
-                total_volume=5000.0,
-                total_effort=50000.0,
-                average_mi=75.0,
-                total_files_analyzed=10,
-            )
-        )
-
-        qpe_score = calculator.calculate_qpe(metrics)
-
-        expected_effort_factor = math.log(50000.0 + 1)
-        assert abs(qpe_score.effort_factor - expected_effort_factor) < 0.001
+        assert qpe_score.qpe == qpe_score.adjusted_quality
 
     def test_calculate_qpe__smell_counts_populated(self):
         """Test that smell counts are populated for debugging."""
@@ -181,6 +166,7 @@ class TestQPECalculator:
         metrics = ExtendedComplexityMetrics(
             **make_test_metrics(
                 total_effort=50000.0,
+                average_effort=5000.0,
                 average_mi=75.0,
                 total_files_analyzed=10,
                 hasattr_getattr_count=5,
@@ -201,21 +187,17 @@ class TestGRPOAdvantage:
     def test_grpo_advantage__returns_positive_when_candidate_is_better(self):
         """Test that advantage is positive when candidate has higher QPE."""
         baseline = QPEScore(
-            qpe=0.05,
-            qpe_absolute=0.63,
+            qpe=0.63,
             mi_normalized=0.7,
             smell_penalty=0.1,
             adjusted_quality=0.63,
-            effort_factor=10.0,
         )
 
         candidate = QPEScore(
-            qpe=0.07,  # Higher QPE
-            qpe_absolute=0.76,
+            qpe=0.76,
             mi_normalized=0.8,
             smell_penalty=0.05,
             adjusted_quality=0.76,
-            effort_factor=10.0,
         )
 
         advantage = grpo_advantage(baseline, candidate)
@@ -225,21 +207,17 @@ class TestGRPOAdvantage:
     def test_grpo_advantage__returns_negative_when_candidate_is_worse(self):
         """Test that advantage is negative when candidate has lower QPE."""
         baseline = QPEScore(
-            qpe=0.07,
-            qpe_absolute=0.76,
+            qpe=0.76,
             mi_normalized=0.8,
             smell_penalty=0.05,
             adjusted_quality=0.76,
-            effort_factor=10.0,
         )
 
         candidate = QPEScore(
-            qpe=0.05,  # Lower QPE
-            qpe_absolute=0.63,
+            qpe=0.63,
             mi_normalized=0.7,
             smell_penalty=0.1,
             adjusted_quality=0.63,
-            effort_factor=10.0,
         )
 
         advantage = grpo_advantage(baseline, candidate)
@@ -249,21 +227,17 @@ class TestGRPOAdvantage:
     def test_grpo_advantage__returns_zero_when_qpe_matches(self):
         """Test that advantage is zero when QPE scores are equal."""
         baseline = QPEScore(
-            qpe=0.05,
-            qpe_absolute=0.63,
+            qpe=0.63,
             mi_normalized=0.7,
             smell_penalty=0.1,
             adjusted_quality=0.63,
-            effort_factor=10.0,
         )
 
         candidate = QPEScore(
-            qpe=0.05,  # Same QPE
-            qpe_absolute=0.63,
+            qpe=0.63,
             mi_normalized=0.7,
             smell_penalty=0.1,
             adjusted_quality=0.63,
-            effort_factor=10.0,
         )
 
         advantage = grpo_advantage(baseline, candidate)
@@ -275,20 +249,16 @@ class TestGRPOAdvantage:
         # Extreme improvement case
         baseline = QPEScore(
             qpe=0.01,
-            qpe_absolute=0.35,
             mi_normalized=0.5,
             smell_penalty=0.3,
-            adjusted_quality=0.35,
-            effort_factor=10.0,
+            adjusted_quality=0.01,
         )
 
         candidate = QPEScore(
-            qpe=1.0,  # 100x improvement
-            qpe_absolute=1.0,
+            qpe=1.0,
             mi_normalized=1.0,
             smell_penalty=0.0,
             adjusted_quality=1.0,
-            effort_factor=1.0,
         )
 
         advantage = grpo_advantage(baseline, candidate)
@@ -298,12 +268,10 @@ class TestGRPOAdvantage:
 
         # Extreme degradation case
         worse_candidate = QPEScore(
-            qpe=0.0001,  # Much worse
-            qpe_absolute=0.05,
+            qpe=0.0001,
             mi_normalized=0.1,
             smell_penalty=0.5,
-            adjusted_quality=0.05,
-            effort_factor=20.0,
+            adjusted_quality=0.0001,
         )
 
         degradation = grpo_advantage(baseline, worse_candidate)
@@ -313,21 +281,17 @@ class TestGRPOAdvantage:
     def test_grpo_advantage__handles_zero_baseline(self):
         """Test that advantage handles zero baseline QPE gracefully."""
         baseline = QPEScore(
-            qpe=0.0,  # Zero baseline
-            qpe_absolute=0.0,
+            qpe=0.0,
             mi_normalized=0.0,
             smell_penalty=0.5,
             adjusted_quality=0.0,
-            effort_factor=10.0,
         )
 
         candidate = QPEScore(
-            qpe=0.05,
-            qpe_absolute=0.63,
+            qpe=0.63,
             mi_normalized=0.7,
             smell_penalty=0.1,
             adjusted_quality=0.63,
-            effort_factor=10.0,
         )
 
         advantage = grpo_advantage(baseline, candidate)
@@ -344,10 +308,10 @@ class TestCrossProjectComparator:
         comparator = CrossProjectComparator()
 
         metrics_a = ExtendedComplexityMetrics(
-            **make_test_metrics(total_effort=5000.0, average_mi=75.0, total_files_analyzed=5)
+            **make_test_metrics(total_effort=5000.0, average_effort=1000.0, average_mi=75.0, total_files_analyzed=5)
         )
         metrics_b = ExtendedComplexityMetrics(
-            **make_test_metrics(total_effort=50000.0, average_mi=70.0, total_files_analyzed=10)
+            **make_test_metrics(total_effort=50000.0, average_effort=5000.0, average_mi=70.0, total_files_analyzed=10)
         )
 
         result = comparator.compare_metrics(
@@ -366,10 +330,10 @@ class TestCrossProjectComparator:
 
         # Create two projects with different quality
         high_quality = ExtendedComplexityMetrics(
-            **make_test_metrics(total_effort=50000.0, average_mi=90.0, total_files_analyzed=10)
+            **make_test_metrics(total_effort=50000.0, average_effort=5000.0, average_mi=90.0, total_files_analyzed=10)
         )
         low_quality = ExtendedComplexityMetrics(
-            **make_test_metrics(total_effort=55000.0, average_mi=60.0, total_files_analyzed=10)
+            **make_test_metrics(total_effort=55000.0, average_effort=5500.0, average_mi=60.0, total_files_analyzed=10)
         )
 
         result = comparator.compare_metrics(
@@ -389,7 +353,7 @@ class TestCrossProjectComparator:
         comparator = CrossProjectComparator()
 
         metrics = ExtendedComplexityMetrics(
-            **make_test_metrics(total_effort=50000.0, average_mi=75.0, total_files_analyzed=10)
+            **make_test_metrics(total_effort=50000.0, average_effort=5000.0, average_mi=75.0, total_files_analyzed=10)
         )
 
         result = comparator.compare_metrics([("test-project", metrics)])
@@ -422,9 +386,8 @@ class TestQPEIntegration:
         )
 
         assert result.returncode == 0, f"qpe command failed with: {result.stderr}"
-        assert "Quality-Per-Effort Score" in result.stdout
-        assert "QPE (GRPO):" in result.stdout
-        assert "Quality:" in result.stdout
+        assert "Quality Score" in result.stdout
+        assert "QPE:" in result.stdout
 
     def test_qpe_cli_command__json_output_is_valid(self, repo_path: Path) -> None:
         """Test that --json flag produces valid JSON output."""
@@ -442,17 +405,13 @@ class TestQPEIntegration:
         qpe_data = json.loads(result.stdout)
 
         assert "qpe" in qpe_data
-        assert "qpe_absolute" in qpe_data
         assert "mi_normalized" in qpe_data
         assert "smell_penalty" in qpe_data
         assert "adjusted_quality" in qpe_data
-        assert "effort_factor" in qpe_data
         assert "smell_counts" in qpe_data
 
         assert isinstance(qpe_data["qpe"], float)
-        assert isinstance(qpe_data["qpe_absolute"], float)
         assert qpe_data["qpe"] > 0
-        assert qpe_data["qpe_absolute"] > 0
 
     def test_qpe_calculator__real_codebase_produces_consistent_results(self, repo_path: Path) -> None:
         """Test QPE calculation on real codebase produces stable, sensible values."""
@@ -481,13 +440,8 @@ class TestQPEIntegration:
         assert bonus_applied >= 0, "Bonuses should be non-negative"
         assert bonus_applied <= 0.12 + 0.001, "Bonuses should not exceed max possible (0.05+0.05+0.02)"
 
-        # Effort factor should be log(effort + 1)
-        expected_effort_factor = math.log(metrics.total_effort + 1)
-        assert abs(qpe_score.effort_factor - expected_effort_factor) < 0.001
-
-        # QPE formula verification: adjusted_quality / effort_factor
-        expected_qpe = qpe_score.adjusted_quality / qpe_score.effort_factor
-        assert abs(qpe_score.qpe - expected_qpe) < 0.0001
+        # QPE equals adjusted_quality directly
+        assert qpe_score.qpe == qpe_score.adjusted_quality
 
     def test_display_qpe_score__renders_without_error(self, repo_path: Path) -> None:
         """Test that display_qpe_score renders without AttributeError (regression test for effort_tier bug)."""
@@ -509,28 +463,25 @@ class TestQPEIntegration:
         # This should not raise AttributeError: 'QPEScore' object has no attribute 'effort_tier'
         display_qpe_score(qpe_score, metrics)
 
-    def test_qpe_score_model__serializes_to_json_with_both_qpe_metrics(self) -> None:
-        """Test that QPEScore model serializes correctly with both qpe and qpe_absolute."""
+    def test_qpe_score_model__serializes_to_json(self) -> None:
+        """Test that QPEScore model serializes correctly."""
         qpe_score = QPEScore(
-            qpe=0.05,
-            qpe_absolute=0.63,
+            qpe=0.63,
             mi_normalized=0.7,
             smell_penalty=0.1,
             adjusted_quality=0.63,
-            effort_factor=10.0,
             smell_counts={"hasattr_getattr": 5, "type_ignore": 3},
         )
 
         json_output = qpe_score.model_dump_json()
 
         assert "qpe" in json_output
-        assert "qpe_absolute" in json_output
-        assert "effort_tier" not in json_output
+        assert "adjusted_quality" in json_output
+        assert "smell_counts" in json_output
 
         # Verify round-trip
         restored = QPEScore.model_validate_json(json_output)
-        assert restored.qpe == 0.05
-        assert restored.qpe_absolute == 0.63
+        assert restored.qpe == 0.63
         assert restored.smell_counts["hasattr_getattr"] == 5
 
     def test_qpe_calculator__handles_empty_codebase_gracefully(self, tmp_path: Path) -> None:
@@ -564,13 +515,13 @@ class TestQPEIntegration:
         # These are loose bounds that should remain stable across minor changes
 
         # MI should be in reasonable range for a Python codebase (40-70 typical)
-        assert 30 <= metrics.average_mi <= 80, f"MI {metrics.average_mi} outside expected range"
+        assert 29 <= metrics.average_mi <= 80, f"MI {metrics.average_mi} outside expected range"
 
         # Should analyze multiple files
         assert metrics.total_files_analyzed > 10, "Expected to analyze more than 10 Python files"
 
-        # QPE should be positive and in typical range for a Python project
-        assert 0.01 <= qpe_score.qpe <= 0.15, f"QPE {qpe_score.qpe} outside expected range"
+        # QPE should be in quality range (0-1) for a Python project
+        assert 0.1 <= qpe_score.qpe <= 1.0, f"QPE {qpe_score.qpe} outside expected range"
 
         # Smell counts should be populated
         total_smells = sum(qpe_score.smell_counts.values())

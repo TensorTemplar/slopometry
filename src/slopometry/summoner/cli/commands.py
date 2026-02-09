@@ -1,6 +1,7 @@
 """CLI commands for summoner features."""
 
 import logging
+import math
 import subprocess
 import sys
 from datetime import datetime
@@ -1136,16 +1137,16 @@ def compare_projects(append_paths: tuple[Path, ...], reset: bool) -> None:
                 commit_sha_short=commit_sha_short,
                 commit_sha_full=commit_sha_full,
                 measured_at=commit_date,
-                qpe_score=qpe_score.qpe_absolute,
+                qpe_score=qpe_score.qpe,
                 mi_normalized=qpe_score.mi_normalized,
                 smell_penalty=qpe_score.smell_penalty,
                 adjusted_quality=qpe_score.adjusted_quality,
-                effort_factor=qpe_score.effort_factor,
+                effort_factor=math.log(metrics.average_effort + 1),
                 total_effort=metrics.total_effort,
                 metrics_json=metrics.model_dump_json(),
             )
             db.save_leaderboard_entry(entry)
-            console.print(f"[green]Added {project_path.name} (Quality: {qpe_score.qpe_absolute:.4f})[/green]")
+            console.print(f"[green]Added {project_path.name} (Quality: {qpe_score.qpe:.4f})[/green]")
 
         console.print()
 

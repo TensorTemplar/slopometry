@@ -100,6 +100,11 @@ class FeatureStats(BaseModel):
         files_field="passthrough_wrapper_files",
         guidance="Function that just delegates to another with same args; consider removing indirection",
     )
+    sys_path_manipulation_count: int = SmellField(
+        label="sys.path Manipulation",
+        files_field="sys_path_manipulation_files",
+        guidance="sys.path mutations bypass the package system — restructure package boundaries and use absolute imports from installed packages instead",
+    )
 
     total_loc: int = Field(default=0, description="Total lines of code")
     code_loc: int = Field(default=0, description="Non-blank, non-comment lines (for QPE file filtering)")
@@ -117,6 +122,7 @@ class FeatureStats(BaseModel):
     single_method_class_files: set[str] = Field(default_factory=set)
     deep_inheritance_files: set[str] = Field(default_factory=set)
     passthrough_wrapper_files: set[str] = Field(default_factory=set)
+    sys_path_manipulation_files: set[str] = Field(default_factory=set)
 
 
 def _count_loc(content: str) -> tuple[int, int]:
@@ -178,6 +184,7 @@ def _analyze_single_file_features(file_path: Path) -> FeatureStats | None:
         single_method_class_count=ast_stats.single_method_class_count,
         deep_inheritance_count=ast_stats.deep_inheritance_count,
         passthrough_wrapper_count=ast_stats.passthrough_wrapper_count,
+        sys_path_manipulation_count=ast_stats.sys_path_manipulation_count,
         total_loc=total_loc,
         code_loc=code_loc,
         orphan_comment_files={path_str} if orphan_comments > 0 else set(),
@@ -193,6 +200,7 @@ def _analyze_single_file_features(file_path: Path) -> FeatureStats | None:
         single_method_class_files={path_str} if ast_stats.single_method_class_count > 0 else set(),
         deep_inheritance_files={path_str} if ast_stats.deep_inheritance_count > 0 else set(),
         passthrough_wrapper_files={path_str} if ast_stats.passthrough_wrapper_count > 0 else set(),
+        sys_path_manipulation_files={path_str} if ast_stats.sys_path_manipulation_count > 0 else set(),
     )
 
 
@@ -375,6 +383,7 @@ class PythonFeatureAnalyzer:
             single_method_class_count=ast_stats.single_method_class_count,
             deep_inheritance_count=ast_stats.deep_inheritance_count,
             passthrough_wrapper_count=ast_stats.passthrough_wrapper_count,
+            sys_path_manipulation_count=ast_stats.sys_path_manipulation_count,
             total_loc=total_loc,
             code_loc=code_loc,
             orphan_comment_files={path_str} if orphan_comments > 0 else set(),
@@ -390,6 +399,7 @@ class PythonFeatureAnalyzer:
             single_method_class_files={path_str} if ast_stats.single_method_class_count > 0 else set(),
             deep_inheritance_files={path_str} if ast_stats.deep_inheritance_count > 0 else set(),
             passthrough_wrapper_files={path_str} if ast_stats.passthrough_wrapper_count > 0 else set(),
+            sys_path_manipulation_files={path_str} if ast_stats.sys_path_manipulation_count > 0 else set(),
         )
 
     def _is_nonempty_init(self, file_path: Path, tree: ast.Module) -> bool:
@@ -503,6 +513,7 @@ class PythonFeatureAnalyzer:
             single_method_class_count=s1.single_method_class_count + s2.single_method_class_count,
             deep_inheritance_count=s1.deep_inheritance_count + s2.deep_inheritance_count,
             passthrough_wrapper_count=s1.passthrough_wrapper_count + s2.passthrough_wrapper_count,
+            sys_path_manipulation_count=s1.sys_path_manipulation_count + s2.sys_path_manipulation_count,
             total_loc=s1.total_loc + s2.total_loc,
             code_loc=s1.code_loc + s2.code_loc,
             orphan_comment_files=s1.orphan_comment_files | s2.orphan_comment_files,
@@ -518,6 +529,7 @@ class PythonFeatureAnalyzer:
             single_method_class_files=s1.single_method_class_files | s2.single_method_class_files,
             deep_inheritance_files=s1.deep_inheritance_files | s2.deep_inheritance_files,
             passthrough_wrapper_files=s1.passthrough_wrapper_files | s2.passthrough_wrapper_files,
+            sys_path_manipulation_files=s1.sys_path_manipulation_files | s2.sys_path_manipulation_files,
         )
 
 
@@ -548,6 +560,7 @@ class FeatureVisitor(ast.NodeVisitor):
         self.single_method_classes = 0
         self.deep_inheritances = 0
         self.passthrough_wrappers = 0
+        self.sys_path_manipulations = 0
 
     @property
     def stats(self) -> FeatureStats:
@@ -572,6 +585,7 @@ class FeatureVisitor(ast.NodeVisitor):
             single_method_class_count=self.single_method_classes,
             deep_inheritance_count=self.deep_inheritances,
             passthrough_wrapper_count=self.passthrough_wrappers,
+            sys_path_manipulation_count=self.sys_path_manipulations,
         )
 
     def _collect_type_names(self, node: ast.AST | None) -> None:
@@ -744,6 +758,9 @@ class FeatureVisitor(ast.NodeVisitor):
         if self._is_dynamic_execution_call(node):
             self.dynamic_executions += 1
 
+        if self._is_sys_path_mutation_call(node):
+            self.sys_path_manipulations += 1
+
         self.generic_visit(node)
 
     def _is_deprecated_decorator(self, node: ast.AST) -> bool:
@@ -809,6 +826,29 @@ class FeatureVisitor(ast.NodeVisitor):
             return func.id in ("eval", "exec", "compile")
         return False
 
+    def _is_sys_path_mutation_call(self, node: ast.Call) -> bool:
+        """Check for sys.path.insert/append/extend/remove calls."""
+        func = node.func
+        if not isinstance(func, ast.Attribute):
+            return False
+        if func.attr not in ("insert", "append", "extend", "remove"):
+            return False
+        # func.value should be sys.path (ast.Attribute(attr="path") on ast.Name(id="sys"))
+        value = func.value
+        if not isinstance(value, ast.Attribute) or value.attr != "path":
+            return False
+        return isinstance(value.value, ast.Name) and value.value.id == "sys"
+
+    @staticmethod
+    def _is_sys_path_target(target: ast.AST) -> bool:
+        """Check if an assignment target is sys.path."""
+        return (
+            isinstance(target, ast.Attribute)
+            and target.attr == "path"
+            and isinstance(target.value, ast.Name)
+            and target.value.id == "sys"
+        )
+
     def _is_passthrough(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
         """Check if function just returns a call with same arguments.
 
@@ -847,6 +887,19 @@ class FeatureVisitor(ast.NodeVisitor):
             self._in_type_checking_block = False
         else:
             self.generic_visit(node)
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        """Detect sys.path = [...] assignments."""
+        for target in node.targets:
+            if self._is_sys_path_target(target):
+                self.sys_path_manipulations += 1
+        self.generic_visit(node)
+
+    def visit_AugAssign(self, node: ast.AugAssign) -> None:
+        """Detect sys.path += [...] augmented assignments."""
+        if self._is_sys_path_target(node.target):
+            self.sys_path_manipulations += 1
+        self.generic_visit(node)
 
     def visit_Try(self, node: ast.Try) -> None:
         """Detect swallowed exceptions (except blocks with only pass/continue/empty)."""

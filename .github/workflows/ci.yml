@@ -71,7 +71,6 @@ jobs:
             | MI (normalized) | ${qpe.mi_normalized.toFixed(3)} | Maintainability Index / 100 |
             | Smell Penalty | ${qpe.smell_penalty.toFixed(3)} | Weighted code smell deduction |
             | Adjusted Quality | ${qpe.adjusted_quality.toFixed(3)} | MI × (1 - smell_penalty) + bonuses |
-            | Effort Factor | ${qpe.effort_factor.toFixed(2)} | log(Halstead Effort + 1) |
 
             <details>
             <summary>Code Smell Breakdown</summary>
@@ -82,7 +81,7 @@ jobs:
 
             </details>
 
-            > Higher QPE = better quality per unit effort`;
+            > Higher QPE = better quality`;
 
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,

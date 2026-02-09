@@ -1,8 +1,7 @@
-"""Quality-Per-Effort (QPE) calculator for principled code quality comparison.
+"""Quality (QPE) calculator for principled code quality comparison.
 
-Provides two metrics for different use cases:
-- qpe: Effort-normalized for GRPO rollout comparison (same spec)
-- qpe_absolute: Raw quality for cross-project/temporal comparison
+Single metric: adjusted quality = MI * (1 - smell_penalty) + bonuses.
+Used for temporal delta tracking, cross-project comparison, and GRPO advantage.
 
 Key properties:
 - Uses MI as sole quality signal (no double-counting with CC/Volume)
@@ -28,18 +27,15 @@ class QPECalculator:
     """Quality-Per-Effort calculator for principled comparison."""
 
     def calculate_qpe(self, metrics: ExtendedComplexityMetrics) -> QPEScore:
-        """Calculate Quality-Per-Effort score.
+        """Calculate quality score.
 
         Formula:
-            qpe = adjusted_quality / effort_factor (for GRPO)
-            qpe_absolute = adjusted_quality (for cross-project/temporal)
+            qpe = mi_normalized * (1 - smell_penalty) + bonuses
 
         Where:
-            adjusted_quality = mi_normalized * (1 - smell_penalty) + bonuses
             mi_normalized = average_mi / 100.0
             smell_penalty = 0.9 * (1 - exp(-smell_penalty_raw * steepness))
             smell_penalty_raw = weighted_smell_sum / effective_files
-            effort_factor = log(total_halstead_effort + 1)
             bonuses = test_bonus + type_bonus + docstring_bonus
 
         Smell penalty uses:
@@ -99,22 +95,11 @@ class QPECalculator:
 
         adjusted_quality = mi_normalized * (1 - smell_penalty) + total_bonus
 
-        # Effort normalization using log for diminishing returns
-        effort_factor = math.log(metrics.total_effort + 1)
-
-        # qpe: effort-normalized for GRPO rollouts
-        qpe = adjusted_quality / effort_factor if effort_factor > 0 else 0.0
-
-        # qpe_absolute: raw quality for cross-project/temporal comparison
-        qpe_absolute = adjusted_quality
-
         return QPEScore(
-            qpe=qpe,
-            qpe_absolute=qpe_absolute,
+            qpe=adjusted_quality,
             mi_normalized=mi_normalized,
             smell_penalty=smell_penalty,
             adjusted_quality=adjusted_quality,
-            effort_factor=effort_factor,
             smell_counts=smell_counts,
         )
 
