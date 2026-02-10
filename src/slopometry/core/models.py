@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class AgentTool(str, Enum):
@@ -21,7 +21,6 @@ class SmellCategory(str, Enum):
 
     GENERAL = "general"
     PYTHON = "python"
-    RUST = "rust"
 
 
 class SmellDefinition(BaseModel):
@@ -209,6 +208,57 @@ def SmellField(
             "files_field": files_field,
         },
     )
+
+
+class BaselineStrategy(str, Enum):
+    """How to select commits for building the historic quality baseline.
+
+    MERGE_ANCHORED: Follows first-parent (trunk) history, so each delta represents
+    the net quality effect of one accepted merge/PR. Best for repos using merge
+    workflows where merges are quality checkpoints (code review happened).
+
+    TIME_SAMPLED: Samples commits at regular time intervals within a bounded
+    lookback window. Prevents the 'N commits = 2 days' problem in active repos.
+    Best for repos with linear history (squash merges, rebase workflows).
+
+    AUTO: Examines recent commit history to compute merge ratio. If merges are
+    frequent enough (above configurable threshold), uses MERGE_ANCHORED.
+    Otherwise falls back to TIME_SAMPLED.
+    """
+
+    MERGE_ANCHORED = "merge_anchored"
+    TIME_SAMPLED = "time_sampled"
+    AUTO = "auto"
+
+
+class ResolvedBaselineStrategy(BaseModel):
+    """Records which baseline strategy was actually used after AUTO resolution.
+
+    AUTO never appears as the resolved strategy -- it always resolves to one of
+    the concrete strategies. This model is stored with the cached baseline so
+    we can invalidate the cache when the user changes strategy settings.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    requested: BaselineStrategy = Field(description="Strategy requested via settings (may be AUTO)")
+    resolved: BaselineStrategy = Field(
+        description="Concrete strategy actually used (never AUTO). "
+        "MERGE_ANCHORED uses first-parent trunk history at merge points. "
+        "TIME_SAMPLED samples commits at regular time intervals within a bounded lookback window."
+    )
+    merge_ratio: float = Field(
+        description="Fraction of merge commits in the detection sample (0.0-1.0). "
+        "Used by AUTO to decide strategy: above threshold -> MERGE_ANCHORED, below -> TIME_SAMPLED."
+    )
+    total_commits_sampled: int = Field(description="Number of recent commits examined during strategy auto-detection")
+
+    @field_validator("resolved")
+    @classmethod
+    def resolved_must_be_concrete(cls, v: BaselineStrategy) -> BaselineStrategy:
+        if v == BaselineStrategy.AUTO:
+            raise ValueError("resolved strategy cannot be AUTO")
+        return v
 
 
 class ProjectLanguage(str, Enum):
@@ -986,9 +1036,9 @@ class ExtendedComplexityMetrics(ComplexityMetrics):
         """Return smell name to files mapping for filtering."""
         return {smell.name: smell.files for smell in self.get_smells()}
 
-    def get_smell_counts(self) -> dict[str, int]:
-        """Return smell name to count mapping for display."""
-        return {smell.name: smell.count for smell in self.get_smells()}
+    def get_smell_counts(self) -> "SmellCounts":
+        """Return smell counts as a typed model for QPE and display."""
+        return SmellCounts(**{smell.name: smell.count for smell in self.get_smells()})
 
 
 class ExperimentRun(BaseModel):
@@ -1293,6 +1343,13 @@ class RepoBaseline(BaseModel):
     qpe_stats: HistoricalMetricStats | None = Field(default=None, description="QPE statistics from commit history")
     current_qpe: "QPEScore | None" = Field(default=None, description="QPE score at HEAD")
 
+    strategy: ResolvedBaselineStrategy | None = Field(
+        default=None,
+        description="Which baseline computation strategy produced this baseline. "
+        "None for legacy baselines computed before strategy support was added. "
+        "Used for cache invalidation: strategy mismatch with current settings triggers recomputation.",
+    )
+
 
 class ZScoreInterpretation(str, Enum):
     """Human-readable interpretation of Z-score values."""
@@ -1374,6 +1431,32 @@ class ImpactAssessment(BaseModel):
         return ZScoreInterpretation.from_z_score(self.qpe_z_score, verbose)
 
 
+class SmellCounts(BaseModel):
+    """Per-smell occurrence counts from complexity analysis.
+
+    Every field corresponds to a smell in SMELL_REGISTRY. Using explicit fields
+    instead of dict[str, int] so access is validated at construction time and
+    there is no need for .get() defaults or key existence checks.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    orphan_comment: int = 0
+    untracked_todo: int = 0
+    swallowed_exception: int = 0
+    test_skip: int = 0
+    type_ignore: int = 0
+    dynamic_execution: int = 0
+    inline_import: int = 0
+    dict_get_with_default: int = 0
+    hasattr_getattr: int = 0
+    nonempty_init: int = 0
+    single_method_class: int = 0
+    deep_inheritance: int = 0
+    passthrough_wrapper: int = 0
+    sys_path_manipulation: int = 0
+
+
 class QPEScore(BaseModel):
     """Quality score for principled code quality comparison.
 
@@ -1387,8 +1470,84 @@ class QPEScore(BaseModel):
     smell_penalty: float = Field(description="Penalty from code smells (sigmoid-saturated, 0-0.9 range)")
     adjusted_quality: float = Field(description="MI after smell penalty applied")
 
-    smell_counts: dict[str, int] = Field(
-        default_factory=dict, description="Individual smell counts contributing to penalty"
+    smell_counts: SmellCounts = Field(
+        default_factory=SmellCounts, description="Individual smell counts contributing to penalty"
+    )
+
+
+class SmellAdvantage(BaseModel):
+    """Per-smell contribution to the GRPO advantage signal.
+
+    The aggregate grpo_advantage() collapses all quality into a single scalar.
+    SmellAdvantage decomposes that into individual smell contributions, enabling:
+    - Interpretability: which specific smells drove the advantage/disadvantage
+    - Per-smell reward shaping: downstream GRPO training can weight individual
+      smell improvements differently
+    - Debugging: understand why two implementations scored differently
+
+    The weighted_delta uses the same weights from SMELL_REGISTRY that feed into
+    QPE's smell_penalty calculation, ensuring consistency between the aggregate
+    and decomposed signals.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    smell_name: str = Field(
+        description="Internal name from SMELL_REGISTRY (e.g., 'swallowed_exception', 'hasattr_getattr')"
+    )
+    baseline_count: int = Field(description="Number of this smell in the baseline/reference implementation")
+    candidate_count: int = Field(description="Number of this smell in the candidate implementation being evaluated")
+    weight: float = Field(
+        description="Smell weight from SMELL_REGISTRY (0.02-0.15). "
+        "Higher weight means this smell has more impact on QPE penalty."
+    )
+    weighted_delta: float = Field(
+        description="(candidate_count - baseline_count) * weight. "
+        "Negative = candidate improved (fewer smells). "
+        "Positive = candidate regressed (more smells). "
+        "Zero = no change for this smell type."
+    )
+
+
+class ImplementationComparison(BaseModel):
+    """Result of comparing two parallel implementations via their subtree prefixes.
+
+    This is the primary output for GRPO-based quality comparison. Two code subtrees
+    (e.g., two implementations of the same feature living side-by-side in the repo)
+    are analyzed independently and compared using QPE + smell decomposition.
+
+    The aggregate_advantage is the main GRPO reward signal: positive means B is
+    better, negative means A is better, bounded to (-1, 1) via tanh.
+    """
+
+    prefix_a: str = Field(
+        description="Subtree path prefix for implementation A (e.g., 'vendor/lib-a'). "
+        "All Python files under this prefix are analyzed as a unit."
+    )
+    prefix_b: str = Field(
+        description="Subtree path prefix for implementation B (e.g., 'vendor/lib-b'). "
+        "Compared against prefix_a to determine which implementation is better."
+    )
+    ref: str = Field(
+        description="Git ref both subtrees were extracted from (e.g., 'HEAD', 'main', commit SHA). "
+        "Both prefixes are analyzed at this same point in history."
+    )
+    qpe_a: "QPEScore" = Field(
+        description="Full QPE score for implementation A including MI, smell penalty, and per-smell counts"
+    )
+    qpe_b: "QPEScore" = Field(
+        description="Full QPE score for implementation B including MI, smell penalty, and per-smell counts"
+    )
+    aggregate_advantage: float = Field(
+        description="GRPO advantage of B over A, bounded (-1, 1) via tanh. "
+        "Positive = B is better quality. Negative = A is better."
+    )
+    smell_advantages: list[SmellAdvantage] = Field(
+        default_factory=list, description="Per-smell advantage breakdown sorted by impact magnitude."
+    )
+    winner: str = Field(
+        description="Which prefix produced better code: prefix_a value, prefix_b value, or 'tie'. "
+        "Tie declared when |aggregate_advantage| < 0.01 (within deadband)."
     )
 
 
@@ -1488,6 +1647,12 @@ class CurrentChangesAnalysis(BaseModel):
 
     galen_metrics: GalenMetrics | None = Field(
         default=None, description="Developer productivity metrics based on token throughput"
+    )
+
+    smell_advantages: list["SmellAdvantage"] = Field(
+        default_factory=list,
+        description="Per-smell advantage breakdown between baseline and current QPE. "
+        "Shows which specific smells changed and their weighted impact.",
     )
 
 

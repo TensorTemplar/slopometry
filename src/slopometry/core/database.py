@@ -28,7 +28,9 @@ from slopometry.core.models import (
     PlanEvolution,
     Project,
     ProjectSource,
+    QPEScore,
     RepoBaseline,
+    ResolvedBaselineStrategy,
     SessionStatistics,
     ToolType,
     UserStory,
@@ -385,23 +387,18 @@ class EventDatabase:
 
             events = []
             for row in rows:
-                row_keys = row.keys()
                 git_state = None
-                if "git_state" in row_keys and row["git_state"]:
+                if row["git_state"]:
                     try:
                         git_state_data = json.loads(row["git_state"])
                         git_state = GitState.model_validate(git_state_data)
                     except (json.JSONDecodeError, ValueError):
                         git_state = None
 
-                working_directory = (
-                    row["working_directory"]
-                    if "working_directory" in row_keys and row["working_directory"]
-                    else "Unknown"
-                )
+                working_directory = row["working_directory"] or "Unknown"
 
                 project = None
-                if "project_name" in row_keys and row["project_name"]:
+                if row["project_name"]:
                     project = Project(
                         name=row["project_name"],
                         source=ProjectSource(row["project_source"]),
@@ -564,62 +561,71 @@ class EventDatabase:
                 git_tracker = GitTracker()
                 commits_made = git_tracker.calculate_commits_made(initial_git_state, final_git_state)
 
-            stats = SessionStatistics(
-                session_id=session_id,
-                start_time=datetime.fromisoformat(stats_row["start_time"]),
-                end_time=datetime.fromisoformat(stats_row["end_time"]) if stats_row["end_time"] else None,
-                total_events=stats_row["total_events"],
-                working_directory=working_directory,
-                project=project,
-                transcript_path=transcript_path,
-                events_by_type=events_by_type,
-                tool_usage=tool_usage,
-                error_count=stats_row["error_count"],
-                total_duration_ms=stats_row["total_duration_ms"],
-                initial_git_state=initial_git_state,
-                final_git_state=final_git_state,
-                commits_made=commits_made,
+            average_tool_duration_ms = (
+                stats_row["total_duration_ms"] / stats_row["events_with_duration"]
+                if stats_row["events_with_duration"] > 0
+                else None
             )
 
-            if stats_row["events_with_duration"] > 0:
-                stats.average_tool_duration_ms = stats_row["total_duration_ms"] / stats_row["events_with_duration"]
-
-        stats.complexity_metrics, stats.complexity_delta = self._get_session_complexity_metrics(
-            session_id, stats.working_directory, stats.initial_git_state
+        # Compute optional enrichments before constructing the stats object
+        complexity_metrics, complexity_delta = self._get_session_complexity_metrics(
+            session_id, working_directory, initial_git_state
         )
 
+        plan_evolution = None
         try:
-            stats.plan_evolution = self._calculate_plan_evolution(session_id)
-            if stats.plan_evolution and stats.transcript_path:
+            plan_evolution = self._calculate_plan_evolution(session_id)
+            if plan_evolution and transcript_path:
                 try:
                     from slopometry.core.transcript_token_analyzer import analyze_transcript_tokens
 
-                    transcript_path = Path(stats.transcript_path)
-                    if transcript_path.exists():
-                        stats.plan_evolution.token_usage = analyze_transcript_tokens(transcript_path)
+                    tp = Path(transcript_path)
+                    if tp.exists():
+                        plan_evolution.token_usage = analyze_transcript_tokens(tp)
                 except Exception as e:
                     logger.debug(f"Failed to analyze transcript tokens for session {session_id}: {e}")
         except Exception as e:
             logger.debug(f"Failed to calculate plan evolution for session {session_id}: {e}")
-            stats.plan_evolution = None
 
-        if stats.transcript_path:
+        compact_events = None
+        if transcript_path:
             try:
                 from slopometry.core.compact_analyzer import analyze_transcript_compacts
 
-                transcript_path = Path(stats.transcript_path)
-                if transcript_path.exists():
-                    stats.compact_events = analyze_transcript_compacts(transcript_path)
+                tp = Path(transcript_path)
+                if tp.exists():
+                    compact_events = analyze_transcript_compacts(tp)
             except Exception as e:
                 logger.debug(f"Failed to analyze compact events for session {session_id}: {e}")
 
+        context_coverage = None
         try:
-            stats.context_coverage = self._calculate_context_coverage(stats.transcript_path, stats.working_directory)
+            context_coverage = self._calculate_context_coverage(transcript_path, working_directory)
         except Exception as e:
             logger.debug(f"Failed to calculate context coverage for session {session_id}: {e}")
-            stats.context_coverage = None
 
-        return stats
+        return SessionStatistics(
+            session_id=session_id,
+            start_time=datetime.fromisoformat(stats_row["start_time"]),
+            end_time=datetime.fromisoformat(stats_row["end_time"]) if stats_row["end_time"] else None,
+            total_events=stats_row["total_events"],
+            working_directory=working_directory,
+            project=project,
+            transcript_path=transcript_path,
+            events_by_type=events_by_type,
+            tool_usage=tool_usage,
+            error_count=stats_row["error_count"],
+            total_duration_ms=stats_row["total_duration_ms"],
+            initial_git_state=initial_git_state,
+            final_git_state=final_git_state,
+            commits_made=commits_made,
+            average_tool_duration_ms=average_tool_duration_ms or 0.0,
+            complexity_metrics=complexity_metrics,
+            complexity_delta=complexity_delta,
+            plan_evolution=plan_evolution,
+            compact_events=compact_events or [],
+            context_coverage=context_coverage,
+        )
 
     def _get_session_complexity_metrics(
         self, session_id: str, working_directory: str | None, initial_git_state: GitState | None
@@ -771,7 +777,6 @@ class EventDatabase:
             analyzer = ComplexityAnalyzer(working_directory=Path(working_directory))
 
             complexity_delta = None
-            current_basic = None
 
             current_extended = analyzer.analyze_extended_complexity()
 
@@ -786,54 +791,7 @@ class EventDatabase:
                 with git_tracker.extract_files_from_commit_ctx(baseline_ref) as baseline_dir:
                     if baseline_dir:
                         baseline_extended = analyzer.analyze_extended_complexity(baseline_dir)
-
-                        current_basic = analyzer.analyze_complexity()
-                        baseline_basic = analyzer._analyze_directory(baseline_dir)
-                        complexity_delta = analyzer._calculate_delta(baseline_basic, current_basic)
-
-                        complexity_delta.total_volume_change = (
-                            current_extended.total_volume - baseline_extended.total_volume
-                        )
-                        complexity_delta.avg_volume_change = (
-                            current_extended.average_volume - baseline_extended.average_volume
-                        )
-                        complexity_delta.total_difficulty_change = (
-                            current_extended.total_difficulty - baseline_extended.total_difficulty
-                        )
-                        complexity_delta.avg_difficulty_change = (
-                            current_extended.average_difficulty - baseline_extended.average_difficulty
-                        )
-                        complexity_delta.total_effort_change = (
-                            current_extended.total_effort - baseline_extended.total_effort
-                        )
-                        complexity_delta.total_mi_change = current_extended.total_mi - baseline_extended.total_mi
-                        complexity_delta.avg_mi_change = current_extended.average_mi - baseline_extended.average_mi
-
-                        current_extended.total_complexity = current_basic.total_complexity
-                        current_extended.average_complexity = current_basic.average_complexity
-                        current_extended.max_complexity = current_basic.max_complexity
-                        current_extended.min_complexity = current_basic.min_complexity
-                        current_extended.total_files_analyzed = current_basic.total_files_analyzed
-                        current_extended.files_by_complexity = current_basic.files_by_complexity
-
-                        complexity_delta.orphan_comment_change = (
-                            current_extended.orphan_comment_count - baseline_extended.orphan_comment_count
-                        )
-                        complexity_delta.untracked_todo_change = (
-                            current_extended.untracked_todo_count - baseline_extended.untracked_todo_count
-                        )
-                        complexity_delta.inline_import_change = (
-                            current_extended.inline_import_count - baseline_extended.inline_import_count
-                        )
-                        complexity_delta.dict_get_with_default_change = (
-                            current_extended.dict_get_with_default_count - baseline_extended.dict_get_with_default_count
-                        )
-                        complexity_delta.hasattr_getattr_change = (
-                            current_extended.hasattr_getattr_count - baseline_extended.hasattr_getattr_count
-                        )
-                        complexity_delta.nonempty_init_change = (
-                            current_extended.nonempty_init_count - baseline_extended.nonempty_init_count
-                        )
+                        complexity_delta = analyzer._calculate_delta(baseline_extended, current_extended)
 
             return current_extended, complexity_delta
 
@@ -1097,8 +1055,8 @@ class EventDatabase:
                 complexity_score=row[6],
                 halstead_score=row[7],
                 maintainability_score=row[8],
-                qpe_score=row[9] if len(row) > 9 else None,
-                smell_penalty=row[10] if len(row) > 10 else None,
+                qpe_score=row[9],
+                smell_penalty=row[10],
             )
 
     def create_commit_chain(self, repository_path: str, base_commit: str, head_commit: str, commit_count: int) -> int:
@@ -1615,7 +1573,9 @@ class EventDatabase:
                        effort_delta_mean, effort_delta_std, effort_delta_median, effort_delta_min, effort_delta_max, effort_delta_trend,
                        mi_delta_mean, mi_delta_std, mi_delta_median, mi_delta_min, mi_delta_max, mi_delta_trend,
                        current_metrics_json,
-                       oldest_commit_date, newest_commit_date, oldest_commit_tokens
+                       oldest_commit_date, newest_commit_date, oldest_commit_tokens,
+                       strategy_json,
+                       qpe_stats_json, current_qpe_json
                 FROM repo_baselines
                 WHERE repository_path = ? AND head_commit_sha = ?
                 """,
@@ -1624,6 +1584,18 @@ class EventDatabase:
 
             if not row:
                 return None
+
+            strategy = None
+            if row[26]:
+                strategy = ResolvedBaselineStrategy.model_validate_json(row[26])
+
+            qpe_stats = None
+            if row[27]:
+                qpe_stats = HistoricalMetricStats.model_validate_json(row[27])
+
+            current_qpe = None
+            if row[28]:
+                current_qpe = QPEScore.model_validate_json(row[28])
 
             return RepoBaseline(
                 repository_path=row[0],
@@ -1664,10 +1636,17 @@ class EventDatabase:
                 oldest_commit_date=datetime.fromisoformat(row[23]) if row[23] else None,
                 newest_commit_date=datetime.fromisoformat(row[24]) if row[24] else None,
                 oldest_commit_tokens=row[25],
+                strategy=strategy,
+                qpe_stats=qpe_stats,
+                current_qpe=current_qpe,
             )
 
     def save_baseline(self, baseline: RepoBaseline) -> None:
         """Save computed baseline to cache."""
+        strategy_json = baseline.strategy.model_dump_json() if baseline.strategy else None
+        qpe_stats_json = baseline.qpe_stats.model_dump_json() if baseline.qpe_stats else None
+        current_qpe_json = baseline.current_qpe.model_dump_json() if baseline.current_qpe else None
+
         with self._get_db_connection() as conn:
             conn.execute(
                 """
@@ -1677,8 +1656,10 @@ class EventDatabase:
                     effort_delta_mean, effort_delta_std, effort_delta_median, effort_delta_min, effort_delta_max, effort_delta_trend,
                     mi_delta_mean, mi_delta_std, mi_delta_median, mi_delta_min, mi_delta_max, mi_delta_trend,
                     current_metrics_json,
-                    oldest_commit_date, newest_commit_date, oldest_commit_tokens
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    oldest_commit_date, newest_commit_date, oldest_commit_tokens,
+                    strategy_json,
+                    qpe_stats_json, current_qpe_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     baseline.repository_path,
@@ -1707,6 +1688,9 @@ class EventDatabase:
                     baseline.oldest_commit_date.isoformat() if baseline.oldest_commit_date else None,
                     baseline.newest_commit_date.isoformat() if baseline.newest_commit_date else None,
                     baseline.oldest_commit_tokens,
+                    strategy_json,
+                    qpe_stats_json,
+                    current_qpe_json,
                 ),
             )
             conn.commit()

@@ -6,6 +6,9 @@ import warnings
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+from pydantic import ValidationError
+
 from slopometry.core.settings import Settings
 
 
@@ -283,3 +286,71 @@ class TestUnknownSettingsWarning:
                         slopometry_warnings = [warning for warning in w if "SLOPOMETRY_" in str(warning.message)]
                         assert len(slopometry_warnings) == 1
                         assert "SLOPOMETRY_FAKE_SETTING" in str(slopometry_warnings[0].message)
+
+
+class TestBaselineStrategyValidator:
+    """Tests for baseline_strategy field validator."""
+
+    def test_validate_baseline_strategy__accepts_auto(self):
+        """Test that 'auto' is accepted."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            dotenv_file = temp_path / ".env"
+            dotenv_file.write_text("SLOPOMETRY_BASELINE_STRATEGY=auto\n")
+
+            env_vars_to_clear = [k for k in os.environ.keys() if k.startswith("SLOPOMETRY_")]
+            with patch.dict(os.environ, {}, clear=False):
+                for var in env_vars_to_clear:
+                    os.environ.pop(var, None)
+
+                with patch.object(Settings, "model_config", {**Settings.model_config, "env_file": [str(dotenv_file)]}):
+                    s = Settings()
+                    assert s.baseline_strategy == "auto"
+
+    def test_validate_baseline_strategy__accepts_merge_anchored(self):
+        """Test that 'merge_anchored' is accepted."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            dotenv_file = temp_path / ".env"
+            dotenv_file.write_text("SLOPOMETRY_BASELINE_STRATEGY=merge_anchored\n")
+
+            env_vars_to_clear = [k for k in os.environ.keys() if k.startswith("SLOPOMETRY_")]
+            with patch.dict(os.environ, {}, clear=False):
+                for var in env_vars_to_clear:
+                    os.environ.pop(var, None)
+
+                with patch.object(Settings, "model_config", {**Settings.model_config, "env_file": [str(dotenv_file)]}):
+                    s = Settings()
+                    assert s.baseline_strategy == "merge_anchored"
+
+    def test_validate_baseline_strategy__accepts_time_sampled(self):
+        """Test that 'time_sampled' is accepted."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            dotenv_file = temp_path / ".env"
+            dotenv_file.write_text("SLOPOMETRY_BASELINE_STRATEGY=time_sampled\n")
+
+            env_vars_to_clear = [k for k in os.environ.keys() if k.startswith("SLOPOMETRY_")]
+            with patch.dict(os.environ, {}, clear=False):
+                for var in env_vars_to_clear:
+                    os.environ.pop(var, None)
+
+                with patch.object(Settings, "model_config", {**Settings.model_config, "env_file": [str(dotenv_file)]}):
+                    s = Settings()
+                    assert s.baseline_strategy == "time_sampled"
+
+    def test_validate_baseline_strategy__rejects_invalid_value(self):
+        """Test that invalid values are rejected."""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            dotenv_file = temp_path / ".env"
+            dotenv_file.write_text("SLOPOMETRY_BASELINE_STRATEGY=invalid_strategy\n")
+
+            env_vars_to_clear = [k for k in os.environ.keys() if k.startswith("SLOPOMETRY_")]
+            with patch.dict(os.environ, {}, clear=False):
+                for var in env_vars_to_clear:
+                    os.environ.pop(var, None)
+
+                with patch.object(Settings, "model_config", {**Settings.model_config, "env_file": [str(dotenv_file)]}):
+                    with pytest.raises(ValidationError, match="baseline_strategy"):
+                        Settings()

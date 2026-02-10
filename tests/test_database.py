@@ -38,29 +38,25 @@ def test_user_story_export_functionality() -> None:
         assert output_path.exists(), "Export file was not created"
         assert output_path.stat().st_size > 0, "Export file is empty"
 
-        try:
-            import pandas as pd
+        import pandas as pd
 
-            df = pd.read_parquet(output_path)
+        df = pd.read_parquet(output_path)
 
-            expected_columns = [
-                "id",
-                "created_at",
-                "base_commit",
-                "head_commit",
-                "diff_content",
-                "user_stories",
-                "rating",
-                "guidelines_for_improving",
-                "model_used",
-                "prompt_template",
-                "repository_path",
-            ]
-            assert all(col in df.columns for col in expected_columns)
-            assert len(df) >= 1
-
-        except ImportError:
-            pass
+        expected_columns = [
+            "id",
+            "created_at",
+            "base_commit",
+            "head_commit",
+            "diff_content",
+            "user_stories",
+            "rating",
+            "guidelines_for_improving",
+            "model_used",
+            "prompt_template",
+            "repository_path",
+        ]
+        assert all(col in df.columns for col in expected_columns)
+        assert len(df) >= 1
 
     finally:
         if output_path.exists():

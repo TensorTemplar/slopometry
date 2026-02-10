@@ -174,7 +174,7 @@ You workflow should be incremental with a stepping back review phase after each 
 - Note any design choices or decisions you are not sure about and request the user for comments
 - Look for and point out dead or duplicated code branches that could be DRYed
 - Double check the README.md or other documentation to remove outdated sections
-- Be wary of unconstrained and overly generic types in arguments and returns. Introduce ADT using dedicated Pydantic BaseModel and a domain-driven approach, if the current ones are not sufficient. Use pattern matches on these types instead of hasattr/getattr decomposition
+- Be wary of unconstrained and overly generic types in function signatures, and make sure type hints are present in all signatures. Introduce ADT using dedicated Pydantic BaseModel and a domain-driven approach, if the current ones are not sufficient. Use pattern matches on these types instead of hasattr/getattr decomposition
 - **Leverage Pydantic validation**: When adding new configuration parameters or architectural constraints, use Pydantic field validators (`@field_validator`) to catch errors early with helpful messages
 - **Use domain models**: Replace isinstance/hasattr patterns with domain objects that use pydantic's `BaseModel`
 - Always run tests with pytest as final verification step for newly added code

@@ -4,9 +4,14 @@ import pytest
 from pydantic import ValidationError
 
 from slopometry.core.models import (
+    BaselineStrategy,
     ContextCoverage,
     ExtendedComplexityMetrics,
     FileCoverageStatus,
+    ImplementationComparison,
+    QPEScore,
+    ResolvedBaselineStrategy,
+    SmellAdvantage,
     UserStoryDisplayData,
     UserStoryStatistics,
 )
@@ -158,3 +163,139 @@ def test_context_coverage_has_gaps__returns_true_when_blind_spots():
     )
 
     assert coverage.has_gaps is True
+
+
+def test_resolved_baseline_strategy__rejects_auto_as_resolved() -> None:
+    """Test that resolved strategy cannot be AUTO."""
+    with pytest.raises(ValidationError, match="resolved strategy cannot be AUTO"):
+        ResolvedBaselineStrategy(
+            requested=BaselineStrategy.AUTO,
+            resolved=BaselineStrategy.AUTO,
+            merge_ratio=0.2,
+            total_commits_sampled=100,
+        )
+
+
+def test_resolved_baseline_strategy__accepts_merge_anchored() -> None:
+    """Test that MERGE_ANCHORED is accepted as resolved strategy."""
+    strategy = ResolvedBaselineStrategy(
+        requested=BaselineStrategy.AUTO,
+        resolved=BaselineStrategy.MERGE_ANCHORED,
+        merge_ratio=0.25,
+        total_commits_sampled=200,
+    )
+    assert strategy.resolved == BaselineStrategy.MERGE_ANCHORED
+
+
+def test_resolved_baseline_strategy__accepts_time_sampled() -> None:
+    """Test that TIME_SAMPLED is accepted as resolved strategy."""
+    strategy = ResolvedBaselineStrategy(
+        requested=BaselineStrategy.AUTO,
+        resolved=BaselineStrategy.TIME_SAMPLED,
+        merge_ratio=0.05,
+        total_commits_sampled=200,
+    )
+    assert strategy.resolved == BaselineStrategy.TIME_SAMPLED
+
+
+def test_resolved_baseline_strategy__frozen_rejects_mutation() -> None:
+    """Test that frozen model rejects field mutation."""
+    strategy = ResolvedBaselineStrategy(
+        requested=BaselineStrategy.AUTO,
+        resolved=BaselineStrategy.MERGE_ANCHORED,
+        merge_ratio=0.25,
+        total_commits_sampled=200,
+    )
+    with pytest.raises(ValidationError):
+        strategy.merge_ratio = 0.5  # pyrefly: ignore[read-only]
+
+
+def test_resolved_baseline_strategy__round_trips_json() -> None:
+    """Test JSON serialization round-trip."""
+    strategy = ResolvedBaselineStrategy(
+        requested=BaselineStrategy.AUTO,
+        resolved=BaselineStrategy.MERGE_ANCHORED,
+        merge_ratio=0.25,
+        total_commits_sampled=200,
+    )
+    json_str = strategy.model_dump_json()
+    restored = ResolvedBaselineStrategy.model_validate_json(json_str)
+    assert restored == strategy
+
+
+def test_smell_advantage__frozen_rejects_mutation() -> None:
+    """Test that frozen model rejects field mutation."""
+    sa = SmellAdvantage(
+        smell_name="swallowed_exception",
+        baseline_count=3,
+        candidate_count=1,
+        weight=0.15,
+        weighted_delta=-0.30,
+    )
+    with pytest.raises(ValidationError):
+        sa.weight = 0.5  # pyrefly: ignore[read-only]
+
+
+def test_smell_advantage__stores_all_fields() -> None:
+    """Test that all fields are stored correctly."""
+    sa = SmellAdvantage(
+        smell_name="hasattr_getattr",
+        baseline_count=5,
+        candidate_count=8,
+        weight=0.10,
+        weighted_delta=0.30,
+    )
+    assert sa.smell_name == "hasattr_getattr"
+    assert sa.baseline_count == 5
+    assert sa.candidate_count == 8
+    assert sa.weight == 0.10
+    assert sa.weighted_delta == 0.30
+
+
+def test_implementation_comparison__stores_all_fields() -> None:
+    """Test model creation with all fields."""
+    qpe_a = QPEScore(qpe=0.5, mi_normalized=0.6, smell_penalty=0.1, adjusted_quality=0.5)
+    qpe_b = QPEScore(qpe=0.7, mi_normalized=0.8, smell_penalty=0.05, adjusted_quality=0.7)
+
+    comparison = ImplementationComparison(
+        prefix_a="vendor/lib-a",
+        prefix_b="vendor/lib-b",
+        ref="HEAD",
+        qpe_a=qpe_a,
+        qpe_b=qpe_b,
+        aggregate_advantage=0.35,
+        smell_advantages=[],
+        winner="vendor/lib-b",
+    )
+    assert comparison.prefix_a == "vendor/lib-a"
+    assert comparison.winner == "vendor/lib-b"
+    assert comparison.aggregate_advantage == 0.35
+
+
+def test_implementation_comparison__round_trips_json() -> None:
+    """Test JSON serialization round-trip."""
+    qpe_a = QPEScore(qpe=0.5, mi_normalized=0.6, smell_penalty=0.1, adjusted_quality=0.5)
+    qpe_b = QPEScore(qpe=0.7, mi_normalized=0.8, smell_penalty=0.05, adjusted_quality=0.7)
+
+    comparison = ImplementationComparison(
+        prefix_a="vendor/lib-a",
+        prefix_b="vendor/lib-b",
+        ref="main",
+        qpe_a=qpe_a,
+        qpe_b=qpe_b,
+        aggregate_advantage=0.35,
+        smell_advantages=[
+            SmellAdvantage(
+                smell_name="swallowed_exception",
+                baseline_count=3,
+                candidate_count=1,
+                weight=0.15,
+                weighted_delta=-0.30,
+            )
+        ],
+        winner="vendor/lib-b",
+    )
+    json_str = comparison.model_dump_json()
+    restored = ImplementationComparison.model_validate_json(json_str)
+    assert restored.prefix_a == comparison.prefix_a
+    assert len(restored.smell_advantages) == 1

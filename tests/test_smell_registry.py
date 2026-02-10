@@ -200,15 +200,17 @@ class TestExtendedComplexityMetricsSmellMethods:
         assert smell_files["swallowed_exception"] == ["error_handler.py"]
         assert smell_files["test_skip"] == []
 
-    def test_get_smell_counts__returns_name_to_count_mapping(
+    def test_get_smell_counts__returns_typed_smell_counts_model(
         self, metrics_with_smells: ExtendedComplexityMetrics
     ) -> None:
-        """Verify get_smell_counts returns dict mapping smell names to counts."""
+        """Verify get_smell_counts returns SmellCounts model with correct values."""
+        from slopometry.core.models import SmellCounts
+
         smell_counts = metrics_with_smells.get_smell_counts()
-        assert len(smell_counts) == 14  # 10 original + 3 abstraction smells + sys_path_manipulation
-        assert smell_counts["orphan_comment"] == 3
-        assert smell_counts["swallowed_exception"] == 1
-        assert smell_counts["test_skip"] == 0
+        assert isinstance(smell_counts, SmellCounts)
+        assert smell_counts.orphan_comment == 3
+        assert smell_counts.swallowed_exception == 1
+        assert smell_counts.test_skip == 0
 
 
 class TestComplexityDeltaSmellChanges:

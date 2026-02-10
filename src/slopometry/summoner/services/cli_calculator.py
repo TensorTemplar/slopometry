@@ -5,27 +5,24 @@ DEPRECATED: The CLI score has known issues:
 - Scale-sensitive: Ratio-based scoring penalizes differently based on target magnitude
 - Unbounded output: Not suitable for stable RL training
 
-Use QPECalculator from slopometry.summoner.services.qpe_calculator instead.
+Use calculate_qpe() from slopometry.summoner.services.qpe_calculator instead.
 """
 
 import warnings
 
 from slopometry.core.models import ExtendedComplexityMetrics, QPEScore
-from slopometry.summoner.services.qpe_calculator import QPECalculator
+from slopometry.summoner.services.qpe_calculator import calculate_qpe as _calculate_qpe
 
 
 class CLICalculator:
     """Calculates Completeness Likelihood Improval score.
 
-    DEPRECATED: Use QPECalculator instead. See qpe_calculator.py for the
+    DEPRECATED: Use calculate_qpe() instead. See qpe_calculator.py for the
     principled replacement that:
     - Uses MI as sole quality signal (no double-counting)
     - Normalizes by Halstead Effort for fair comparison
     - Produces bounded output suitable for GRPO
     """
-
-    def __init__(self) -> None:
-        self._qpe_calculator = QPECalculator()
 
     def calculate_qpe(self, metrics: ExtendedComplexityMetrics) -> QPEScore:
         """Calculate Quality-Per-Effort score (recommended).
@@ -38,7 +35,7 @@ class CLICalculator:
         Returns:
             QPEScore with component breakdown
         """
-        return self._qpe_calculator.calculate_qpe(metrics)
+        return _calculate_qpe(metrics)
 
     def calculate_cli(
         self, current: ExtendedComplexityMetrics, target: ExtendedComplexityMetrics

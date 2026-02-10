@@ -104,6 +104,84 @@ def summoner() -> None:
     pass
 
 
+@summoner.command("compare-subtrees")
+@click.argument("prefix_a")
+@click.argument("prefix_b")
+@click.option("--ref", default="HEAD", help="Git ref to analyze (default: HEAD)")
+@click.option(
+    "--repo-path",
+    "-r",
+    type=click.Path(exists=True, path_type=Path),
+    help="Repository path (default: current directory)",
+)
+@click.option(
+    "--json",
+    "output_json",
+    is_flag=True,
+    help="Output as JSON for GRPO pipeline consumption",
+)
+def compare_subtrees(prefix_a: str, prefix_b: str, ref: str, repo_path: Path | None, output_json: bool) -> None:
+    """Compare two subtree prefixes for GRPO quality comparison.
+
+    Analyzes Python files under each prefix independently, computes QPE scores,
+    and returns a bounded advantage signal suitable for GRPO training.
+
+    Example: slopometry summoner compare-subtrees vendor/lib-a vendor/lib-b --ref main
+    """
+    if repo_path is None:
+        repo_path = Path.cwd()
+
+    from slopometry.core.language_guard import check_language_support
+    from slopometry.core.models import ProjectLanguage
+    from slopometry.summoner.services.implementation_comparator import (
+        SubtreeExtractionError,
+        compare_subtrees,
+    )
+
+    guard = check_language_support(repo_path, ProjectLanguage.PYTHON)
+    if warning := guard.format_warning():
+        if not output_json:
+            console.print(f"[dim]{warning}[/dim]")
+
+    try:
+        if not output_json:
+            console.print(f"[bold]Comparing subtrees at {ref}[/bold]")
+            console.print(f"  A: {prefix_a}")
+            console.print(f"  B: {prefix_b}")
+            console.print(f"  Repository: {repo_path}")
+
+        comparison = compare_subtrees(repo_path, prefix_a, prefix_b, ref)
+
+        if comparison is None:
+            if output_json:
+                print('{"error": "No Python files found in one or both subtree prefixes"}')
+            else:
+                console.print("[yellow]No Python files found in one or both subtree prefixes.[/yellow]")
+            return
+
+        if output_json:
+            print(comparison.model_dump_json(indent=2))
+        else:
+            from slopometry.display.formatters import display_implementation_comparison
+
+            display_implementation_comparison(comparison)
+
+    except SubtreeExtractionError as e:
+        if output_json:
+            escaped_msg = str(e).replace('"', '\\"')
+            print(f'{{"error": "{escaped_msg}"}}')
+        else:
+            console.print(f"[red]Subtree extraction failed: {e}[/red]")
+        sys.exit(1)
+    except Exception as e:
+        if output_json:
+            escaped_msg = str(e).replace('"', '\\"')
+            print(f'{{"error": "{escaped_msg}"}}')
+        else:
+            console.print(f"[red]Failed to compare subtrees: {e}[/red]")
+        sys.exit(1)
+
+
 @summoner.command("run-experiments")
 @click.option("--commits", "-c", default=5, help="Number of commits to analyze (default: 5)")
 @click.option("--max-workers", "-w", default=4, help="Maximum parallel workers (default: 4)")
@@ -1020,13 +1098,12 @@ def qpe(repo_path: Path | None, output_json: bool) -> None:
             console.print(f"Repository: {repo_path}")
 
         from slopometry.core.complexity_analyzer import ComplexityAnalyzer
-        from slopometry.summoner.services.qpe_calculator import QPECalculator
+        from slopometry.summoner.services.qpe_calculator import calculate_qpe
 
         analyzer = ComplexityAnalyzer(working_directory=repo_path)
         metrics = analyzer.analyze_extended_complexity()
 
-        qpe_calculator = QPECalculator()
-        qpe_score = qpe_calculator.calculate_qpe(metrics)
+        qpe_score = calculate_qpe(metrics)
 
         if output_json:
             print(qpe_score.model_dump_json(indent=2))
@@ -1087,9 +1164,7 @@ def compare_projects(append_paths: tuple[Path, ...], reset: bool) -> None:
         from slopometry.core.complexity_analyzer import ComplexityAnalyzer
         from slopometry.core.language_guard import check_language_support
         from slopometry.core.models import LeaderboardEntry, ProjectLanguage
-        from slopometry.summoner.services.qpe_calculator import QPECalculator
-
-        qpe_calculator = QPECalculator()
+        from slopometry.summoner.services.qpe_calculator import calculate_qpe
 
         for project_path in append_paths:
             project_path = project_path.resolve()
@@ -1129,7 +1204,7 @@ def compare_projects(append_paths: tuple[Path, ...], reset: bool) -> None:
 
             analyzer = ComplexityAnalyzer(working_directory=project_path)
             metrics = analyzer.analyze_extended_complexity()
-            qpe_score = qpe_calculator.calculate_qpe(metrics)
+            qpe_score = calculate_qpe(metrics)
 
             entry = LeaderboardEntry(
                 project_name=project_path.name,

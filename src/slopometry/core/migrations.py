@@ -332,6 +332,59 @@ class Migration008FixLeaderboardUniqueConstraint(Migration):
         conn.execute("CREATE INDEX IF NOT EXISTS idx_leaderboard_project ON qpe_leaderboard(project_path, measured_at)")
 
 
+class Migration009AddBaselineStrategyColumn(Migration):
+    """Add strategy_json column to repo_baselines for baseline strategy tracking."""
+
+    @property
+    def version(self) -> str:
+        return "009"
+
+    @property
+    def description(self) -> str:
+        return "Add strategy_json column to repo_baselines for baseline strategy tracking"
+
+    def up(self, conn: sqlite3.Connection) -> None:
+        """Add strategy_json column to repo_baselines."""
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='repo_baselines'")
+        if not cursor.fetchone():
+            return
+
+        try:
+            conn.execute("ALTER TABLE repo_baselines ADD COLUMN strategy_json TEXT")
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" not in str(e).lower():
+                raise
+
+
+class Migration010AddBaselineQPEColumns(Migration):
+    """Add QPE stats and current QPE columns to repo_baselines.
+
+    These columns were missing, causing the baseline cache to always appear stale
+    (qpe_stats=None after load triggers recomputation on every run).
+    """
+
+    @property
+    def version(self) -> str:
+        return "010"
+
+    @property
+    def description(self) -> str:
+        return "Add qpe_stats_json and current_qpe_json columns to repo_baselines for cache completeness"
+
+    def up(self, conn: sqlite3.Connection) -> None:
+        """Add QPE columns to repo_baselines."""
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='repo_baselines'")
+        if not cursor.fetchone():
+            return
+
+        for column_name in ("qpe_stats_json", "current_qpe_json"):
+            try:
+                conn.execute(f"ALTER TABLE repo_baselines ADD COLUMN {column_name} TEXT")
+            except sqlite3.OperationalError as e:
+                if "duplicate column name" not in str(e).lower():
+                    raise
+
+
 class MigrationRunner:
     """Manages database migrations."""
 
@@ -346,6 +399,8 @@ class MigrationRunner:
             Migration006AddQPEColumns(),
             Migration007AddQPELeaderboard(),
             Migration008FixLeaderboardUniqueConstraint(),
+            Migration009AddBaselineStrategyColumn(),
+            Migration010AddBaselineQPEColumns(),
         ]
 
     @contextmanager

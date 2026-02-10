@@ -13,12 +13,14 @@ from slopometry.core.models import (
     CurrentChangesAnalysis,
     ExtendedComplexityMetrics,
     GalenMetrics,
+    QPEScore,
     RepoBaseline,
+    SmellAdvantage,
 )
 from slopometry.core.working_tree_extractor import WorkingTreeExtractor
 from slopometry.core.working_tree_state import WorkingTreeStateCalculator
 from slopometry.summoner.services.impact_calculator import ImpactCalculator
-from slopometry.summoner.services.qpe_calculator import QPECalculator
+from slopometry.summoner.services.qpe_calculator import calculate_qpe, smell_advantage
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +64,7 @@ class CurrentImpactService:
 
         current_metrics = self._get_or_compute_metrics(repo_path, commit_sha, working_tree_hash, extractor, analyzer)
 
-        current_delta = self._compute_delta(baseline_metrics, current_metrics)
+        current_delta, smell_advantages, _, _ = self._compute_delta(baseline_metrics, current_metrics)
 
         assessment = self.impact_calculator.calculate_impact(current_delta, baseline)
 
@@ -117,6 +119,7 @@ class CurrentImpactService:
             changed_files_tokens=changed_files_tokens,
             complete_picture_context_size=complete_picture_context_size,
             galen_metrics=galen_metrics,
+            smell_advantages=smell_advantages,
         )
 
     def analyze_previous_commit(
@@ -191,7 +194,7 @@ class CurrentImpactService:
             return None
 
         # Use parent as baseline, HEAD as current
-        current_delta = self._compute_delta(parent_metrics, head_metrics)
+        current_delta, smell_advantages, _, _ = self._compute_delta(parent_metrics, head_metrics)
         assessment = self.impact_calculator.calculate_impact(current_delta, baseline)
 
         from slopometry.core.context_coverage_analyzer import ContextCoverageAnalyzer
@@ -229,6 +232,7 @@ class CurrentImpactService:
             changed_files_tokens=changed_files_tokens,
             complete_picture_context_size=complete_picture_context_size,
             galen_metrics=galen_metrics,
+            smell_advantages=smell_advantages,
         )
 
     def _calculate_galen_metrics(
@@ -319,13 +323,16 @@ class CurrentImpactService:
         self,
         baseline_metrics: ExtendedComplexityMetrics,
         current_metrics: ExtendedComplexityMetrics,
-    ) -> ComplexityDelta:
-        """Compute complexity delta between baseline and current metrics."""
-        qpe_calculator = QPECalculator()
-        baseline_qpe = qpe_calculator.calculate_qpe(baseline_metrics).qpe
-        current_qpe = qpe_calculator.calculate_qpe(current_metrics).qpe
+    ) -> tuple[ComplexityDelta, list[SmellAdvantage], QPEScore, QPEScore]:
+        """Compute complexity delta between baseline and current metrics.
 
-        return ComplexityDelta(
+        Returns:
+            Tuple of (delta, smell_advantages, baseline_qpe_score, current_qpe_score)
+        """
+        baseline_qpe_score = calculate_qpe(baseline_metrics)
+        current_qpe_score = calculate_qpe(current_metrics)
+
+        delta = ComplexityDelta(
             total_complexity_change=(current_metrics.total_complexity - baseline_metrics.total_complexity),
             avg_complexity_change=(current_metrics.average_complexity - baseline_metrics.average_complexity),
             total_volume_change=(current_metrics.total_volume - baseline_metrics.total_volume),
@@ -336,5 +343,9 @@ class CurrentImpactService:
             total_mi_change=current_metrics.total_mi - baseline_metrics.total_mi,
             avg_mi_change=current_metrics.average_mi - baseline_metrics.average_mi,
             net_files_change=(current_metrics.total_files_analyzed - baseline_metrics.total_files_analyzed),
-            qpe_change=current_qpe - baseline_qpe,
+            qpe_change=current_qpe_score.qpe - baseline_qpe_score.qpe,
         )
+
+        advantages = smell_advantage(baseline_qpe_score, current_qpe_score)
+
+        return delta, advantages, baseline_qpe_score, current_qpe_score

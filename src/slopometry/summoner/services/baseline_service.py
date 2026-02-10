@@ -5,7 +5,7 @@ import shutil
 import subprocess
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from statistics import mean, median, stdev
 
@@ -13,11 +13,13 @@ from slopometry.core.complexity_analyzer import ComplexityAnalyzer
 from slopometry.core.database import EventDatabase
 from slopometry.core.git_tracker import GitOperationError, GitTracker
 from slopometry.core.models import (
+    BaselineStrategy,
     HistoricalMetricStats,
     RepoBaseline,
+    ResolvedBaselineStrategy,
 )
 from slopometry.core.settings import settings
-from slopometry.summoner.services.qpe_calculator import QPECalculator
+from slopometry.summoner.services.qpe_calculator import calculate_qpe
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +48,6 @@ def _compute_single_delta_task(repo_path: Path, parent_sha: str, child_sha: str)
     NOTE: Must be at module level because ProcessPoolExecutor requires picklable callables.
     """
     git_tracker = GitTracker(repo_path)
-    qpe_calculator = QPECalculator()
     parent_dir = None
     child_dir = None
 
@@ -69,12 +70,12 @@ def _compute_single_delta_task(repo_path: Path, parent_sha: str, child_sha: str)
         parent_cc = parent_metrics.total_complexity if parent_metrics else 0
         parent_effort = parent_metrics.total_effort if parent_metrics else 0.0
         parent_mi = parent_metrics.total_mi if parent_metrics else 0.0
-        parent_qpe = qpe_calculator.calculate_qpe(parent_metrics).qpe if parent_metrics else 0.0
+        parent_qpe = calculate_qpe(parent_metrics).qpe if parent_metrics else 0.0
 
         child_cc = child_metrics.total_complexity if child_metrics else 0
         child_effort = child_metrics.total_effort if child_metrics else 0.0
         child_mi = child_metrics.total_mi if child_metrics else 0.0
-        child_qpe = qpe_calculator.calculate_qpe(child_metrics).qpe if child_metrics else 0.0
+        child_qpe = calculate_qpe(child_metrics).qpe if child_metrics else 0.0
 
         return CommitDelta(
             cc_delta=child_cc - parent_cc,
@@ -94,6 +95,21 @@ def _compute_single_delta_task(repo_path: Path, parent_sha: str, child_sha: str)
             shutil.rmtree(child_dir, ignore_errors=True)
 
 
+def _parse_commit_log(output: str) -> list[CommitInfo]:
+    """Parse git log output in '%H %ct' format into CommitInfo list."""
+    commits = []
+    for line in output.strip().split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split(" ", 1)
+        if len(parts) == 2:
+            sha, timestamp_str = parts
+            timestamp = datetime.fromtimestamp(int(timestamp_str))
+            commits.append(CommitInfo(sha=sha, timestamp=timestamp))
+    return commits
+
+
 class BaselineService:
     """Computes and manages repository complexity baselines."""
 
@@ -103,15 +119,14 @@ class BaselineService:
     def get_or_compute_baseline(
         self, repo_path: Path, recompute: bool = False, max_workers: int = 4
     ) -> RepoBaseline | None:
-        """Get cached baseline or compute if stale (HEAD changed).
+        """Get cached baseline or compute if stale (HEAD changed or strategy mismatch).
 
-        Args:
-            repo_path: Path to the repository
-            recompute: Force recomputation even if cache is valid
-            max_workers: Number of parallel workers for analysis
-
-        Returns:
-            RepoBaseline or None if computation fails
+        Cache invalidation rules:
+        - HEAD changed -> recompute
+        - Cached baseline has no qpe_stats -> recompute (legacy)
+        - Cached baseline has no strategy -> recompute (pre-strategy baseline)
+        - Explicit strategy setting doesn't match cached resolved strategy -> recompute
+        - AUTO accepts any concrete resolved strategy in cache
         """
         repo_path = repo_path.resolve()
         git_tracker = GitTracker(repo_path)
@@ -123,7 +138,8 @@ class BaselineService:
         if not recompute:
             cached = self.db.get_cached_baseline(str(repo_path), head_sha)
             if cached and cached.qpe_stats is not None:
-                return cached
+                if self._is_cache_strategy_compatible(cached):
+                    return cached
 
         baseline = self.compute_full_baseline(repo_path, max_workers=max_workers)
 
@@ -132,19 +148,47 @@ class BaselineService:
 
         return baseline
 
+    def _is_cache_strategy_compatible(self, cached: RepoBaseline) -> bool:
+        """Check if cached baseline's strategy is compatible with current settings.
+
+        Returns True if cache can be reused, False if recomputation needed.
+        """
+        requested = BaselineStrategy(settings.baseline_strategy)
+
+        if cached.strategy is None:
+            # Legacy baseline without strategy info -> recompute
+            return False
+
+        if requested == BaselineStrategy.AUTO:
+            # AUTO accepts any concrete resolved strategy
+            return True
+
+        # Explicit strategy must match resolved
+        return cached.strategy.resolved == requested
+
     def compute_full_baseline(self, repo_path: Path, max_workers: int = 4) -> RepoBaseline | None:
-        """Compute baseline from entire git history with parallel analysis.
+        """Compute baseline from git history using strategy-based commit selection.
 
-        Args:
-            repo_path: Path to the repository
-            max_workers: Number of parallel workers for commit analysis
+        The strategy determines which commits are selected for delta computation:
+        - MERGE_ANCHORED: first-parent trunk history (merge commits as quality checkpoints)
+        - TIME_SAMPLED: regular time-interval samples within a bounded lookback window
+        - AUTO: detects merge ratio and picks the best strategy
 
-        Returns:
-            RepoBaseline or None if computation fails
+        Delta computation, stats aggregation, and QPE calculation are unchanged --
+        only commit selection varies.
         """
         repo_path = repo_path.resolve()
 
-        commits = self._get_all_commits(repo_path)
+        strategy = self._resolve_strategy(repo_path)
+
+        match strategy.resolved:
+            case BaselineStrategy.MERGE_ANCHORED:
+                commits = self._get_merge_anchored_commits(repo_path)
+            case BaselineStrategy.TIME_SAMPLED:
+                commits = self._get_time_sampled_commits(repo_path)
+            case _:
+                raise ValueError(f"Unexpected resolved strategy: {strategy.resolved}")
+
         if len(commits) < 2:
             return None
 
@@ -170,8 +214,7 @@ class BaselineService:
 
         oldest_commit_tokens = self._get_commit_token_count(repo_path, commits[-1].sha, analyzer)
 
-        qpe_calculator = QPECalculator()
-        current_qpe = qpe_calculator.calculate_qpe(current_metrics)
+        current_qpe = calculate_qpe(current_metrics)
 
         return RepoBaseline(
             repository_path=str(repo_path),
@@ -187,12 +230,83 @@ class BaselineService:
             oldest_commit_tokens=oldest_commit_tokens,
             qpe_stats=self._compute_stats("qpe_delta", qpe_deltas),
             current_qpe=current_qpe,
+            strategy=strategy,
         )
 
-    def _get_all_commits(self, repo_path: Path) -> list[CommitInfo]:
-        """Get all commits with timestamps in topological order (newest first)."""
+    def _resolve_strategy(self, repo_path: Path) -> ResolvedBaselineStrategy:
+        """Resolve the baseline strategy, auto-detecting if needed."""
+        requested = BaselineStrategy(settings.baseline_strategy)
+
+        if requested != BaselineStrategy.AUTO:
+            return ResolvedBaselineStrategy(
+                requested=requested,
+                resolved=requested,
+                merge_ratio=0.0,
+                total_commits_sampled=0,
+            )
+
+        return self._detect_strategy(repo_path)
+
+    def _detect_strategy(self, repo_path: Path) -> ResolvedBaselineStrategy:
+        """Auto-detect the best baseline strategy by examining merge commit ratio.
+
+        Uses fast git rev-list --count operations to determine merge frequency.
+        If merge_ratio > threshold, use MERGE_ANCHORED. Otherwise TIME_SAMPLED.
+        """
+        sample_size = settings.baseline_detection_sample_size
+
+        # Count total commits (capped at sample_size)
+        total_result = subprocess.run(
+            ["git", "rev-list", "--count", f"--max-count={sample_size}", "HEAD"],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        total_commits = int(total_result.stdout.strip()) if total_result.returncode == 0 else 0
+
+        if total_commits == 0:
+            return ResolvedBaselineStrategy(
+                requested=BaselineStrategy.AUTO,
+                resolved=BaselineStrategy.TIME_SAMPLED,
+                merge_ratio=0.0,
+                total_commits_sampled=0,
+            )
+
+        # Count merge commits in the same range
+        merge_result = subprocess.run(
+            ["git", "rev-list", "--merges", "--count", f"--max-count={sample_size}", "HEAD"],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        merge_commits = int(merge_result.stdout.strip()) if merge_result.returncode == 0 else 0
+
+        merge_ratio = merge_commits / total_commits if total_commits > 0 else 0.0
+
+        resolved = (
+            BaselineStrategy.MERGE_ANCHORED
+            if merge_ratio > settings.baseline_merge_ratio_threshold
+            else BaselineStrategy.TIME_SAMPLED
+        )
+
+        return ResolvedBaselineStrategy(
+            requested=BaselineStrategy.AUTO,
+            resolved=resolved,
+            merge_ratio=merge_ratio,
+            total_commits_sampled=total_commits,
+        )
+
+    def _get_merge_anchored_commits(self, repo_path: Path) -> list[CommitInfo]:
+        """Get commits following first-parent (trunk) history.
+
+        --first-parent follows only the trunk line, naturally landing on merge commits.
+        Each delta between consecutive first-parent commits captures the net effect
+        of one accepted merge/PR, filtering out intermediate WIP commits on feature branches.
+        """
         result = subprocess.run(
-            ["git", "log", "--format=%H %ct", "--topo-order", "HEAD"],
+            ["git", "log", "--first-parent", "--format=%H %ct", "--topo-order", "HEAD"],
             cwd=repo_path,
             capture_output=True,
             text=True,
@@ -202,19 +316,60 @@ class BaselineService:
         if result.returncode != 0:
             return []
 
-        commits = []
-        for line in result.stdout.strip().split("\n"):
-            line = line.strip()
-            if not line:
-                continue
-            parts = line.split(" ", 1)
-            if len(parts) == 2:
-                sha, timestamp_str = parts
-                timestamp = datetime.fromtimestamp(int(timestamp_str))
-                commits.append(CommitInfo(sha=sha, timestamp=timestamp))
-
-        # PERF: Limit commits to avoid slow analysis on large repos
+        commits = _parse_commit_log(result.stdout)
         return commits[: settings.baseline_max_commits]
+
+    def _get_time_sampled_commits(self, repo_path: Path) -> list[CommitInfo]:
+        """Get commits sampled at regular time intervals within a bounded lookback window.
+
+        1. Fetches all commits within the lookback window (--after flag)
+        2. Samples one commit per interval (baseline_time_sample_interval_days)
+        3. Always includes newest and oldest commits in window
+        4. Falls back to evenly-spaced if interval produces too few commits
+        """
+        lookback_date = datetime.now() - timedelta(days=settings.baseline_lookback_months * 30)
+        after_str = lookback_date.strftime("%Y-%m-%d")
+
+        result = subprocess.run(
+            ["git", "log", f"--after={after_str}", "--format=%H %ct", "--topo-order", "HEAD"],
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+        if result.returncode != 0:
+            return []
+
+        all_commits = _parse_commit_log(result.stdout)
+
+        if len(all_commits) < 2:
+            return all_commits
+
+        # Sample at regular time intervals
+        interval = timedelta(days=settings.baseline_time_sample_interval_days)
+        sampled = [all_commits[0]]  # Always include newest
+        last_sampled_time = all_commits[0].timestamp
+
+        for commit in all_commits[1:-1]:
+            if abs((last_sampled_time - commit.timestamp).total_seconds()) >= interval.total_seconds():
+                sampled.append(commit)
+                last_sampled_time = commit.timestamp
+
+        # Always include oldest
+        if all_commits[-1].sha != sampled[-1].sha:
+            sampled.append(all_commits[-1])
+
+        # Fall back to evenly-spaced if we got too few
+        min_commits = settings.baseline_time_sample_min_commits
+        if len(sampled) < min_commits and len(all_commits) >= min_commits:
+            step = max(1, len(all_commits) // min_commits)
+            sampled = all_commits[::step]
+            # Ensure last commit is included
+            if sampled[-1].sha != all_commits[-1].sha:
+                sampled.append(all_commits[-1])
+
+        return sampled[: settings.baseline_max_commits]
 
     def _compute_deltas_parallel(
         self,
@@ -242,16 +397,7 @@ class BaselineService:
         return deltas
 
     def _get_commit_token_count(self, repo_path: Path, commit_sha: str, analyzer: ComplexityAnalyzer) -> int | None:
-        """Get total token count for a specific commit.
-
-        Args:
-            repo_path: Path to the repository
-            commit_sha: The commit SHA to analyze
-            analyzer: ComplexityAnalyzer instance
-
-        Returns:
-            Total token count or None if analysis fails
-        """
+        """Get total token count for a specific commit."""
         git_tracker = GitTracker(repo_path)
         commit_dir = None
 
