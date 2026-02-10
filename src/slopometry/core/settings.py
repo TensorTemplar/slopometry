@@ -130,6 +130,44 @@ class Settings(BaseSettings):
 
     baseline_max_commits: int = Field(default=100, description="Maximum commits to analyze for baseline computation")
 
+    baseline_strategy: str = Field(
+        default="auto",
+        description="How to select commits for building the historic quality baseline. "
+        "'auto' detects merge workflow vs linear history and picks the best strategy. "
+        "'merge_anchored' uses first-parent trunk history (best for merge/PR workflows). "
+        "'time_sampled' samples at regular time intervals (best for squash/rebase workflows).",
+    )
+
+    baseline_merge_ratio_threshold: float = Field(
+        default=0.15,
+        description="Merge commit ratio threshold for AUTO strategy detection. "
+        "When the fraction of merge commits in recent history exceeds this value, "
+        "AUTO resolves to MERGE_ANCHORED. Below this, resolves to TIME_SAMPLED.",
+    )
+
+    baseline_lookback_months: int = Field(
+        default=6,
+        description="Maximum lookback window in months for TIME_SAMPLED strategy. "
+        "Bounds the initial git log query via --after flag.",
+    )
+
+    baseline_time_sample_interval_days: int = Field(
+        default=7,
+        description="Sampling interval in days for TIME_SAMPLED strategy. "
+        "One commit is selected per interval. 7 days = weekly quality snapshots.",
+    )
+
+    baseline_time_sample_min_commits: int = Field(
+        default=10,
+        description="Minimum number of sampled commits for TIME_SAMPLED strategy. "
+        "Falls back to evenly-spaced sampling if interval produces fewer.",
+    )
+
+    baseline_detection_sample_size: int = Field(
+        default=200,
+        description="Number of recent commits to examine for AUTO strategy detection.",
+    )
+
     qpe_sigmoid_steepness: float = Field(
         default=2.0,
         description="Steepness factor for QPE smell penalty sigmoid (higher = faster saturation)",
@@ -165,6 +203,15 @@ class Settings(BaseSettings):
     impact_mi_weight: float = Field(
         default=0.50, description="Weight for Maintainability Index in impact score calculation"
     )
+
+    @field_validator("baseline_strategy", mode="before")
+    @classmethod
+    def validate_baseline_strategy(cls, v: str) -> str:
+        """Validate baseline_strategy is one of the allowed values."""
+        allowed = {"auto", "merge_anchored", "time_sampled"}
+        if v not in allowed:
+            raise ValueError(f"baseline_strategy must be one of {allowed}, got '{v}'")
+        return v
 
     @field_validator("database_path", mode="before")
     @classmethod

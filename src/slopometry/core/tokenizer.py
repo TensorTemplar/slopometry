@@ -4,6 +4,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from slopometry.core.models import TokenCountError
+
 logger = logging.getLogger(__name__)
 
 _encoder: Any = None
@@ -43,18 +45,18 @@ def count_tokens(content: str) -> int:
     return len(encoder.encode(content, disallowed_special=()))
 
 
-def count_file_tokens(file_path: Path) -> int:
+def count_file_tokens(file_path: Path) -> int | TokenCountError:
     """Count tokens in a file.
 
     Args:
         file_path: Path to the file to tokenize.
 
     Returns:
-        Number of tokens, or 0 if file cannot be read.
+        Number of tokens, or TokenCountError if file cannot be read.
     """
     try:
         content = file_path.read_text(encoding="utf-8")
         return count_tokens(content)
     except Exception as e:
         logger.warning("Failed to read file for token counting %s: %s", file_path, e)
-        return 0
+        return TokenCountError(message=str(e), path=str(file_path))

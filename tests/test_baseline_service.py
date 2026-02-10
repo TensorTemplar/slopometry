@@ -1,16 +1,24 @@
 """Tests for baseline_service.py."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from conftest import make_test_metrics
 
-from slopometry.core.models import ExtendedComplexityMetrics, HistoricalMetricStats, QPEScore, RepoBaseline
+from slopometry.core.models import (
+    BaselineStrategy,
+    ExtendedComplexityMetrics,
+    HistoricalMetricStats,
+    QPEScore,
+    RepoBaseline,
+    ResolvedBaselineStrategy,
+)
 from slopometry.summoner.services.baseline_service import (
     BaselineService,
     CommitInfo,
     _compute_single_delta_task,
+    _parse_commit_log,
 )
 
 
@@ -178,13 +186,17 @@ class TestGetOrComputeBaseline:
                 trend_coefficient=0.0,
             ),
             current_qpe=QPEScore(
-                qpe=0.03,
-                qpe_absolute=0.45,
+                qpe=0.45,
                 mi_normalized=0.5,
                 smell_penalty=0.1,
                 adjusted_quality=0.45,
-                effort_factor=15.0,
                 smell_counts={},
+            ),
+            strategy=ResolvedBaselineStrategy(
+                requested=BaselineStrategy.AUTO,
+                resolved=BaselineStrategy.MERGE_ANCHORED,
+                merge_ratio=0.25,
+                total_commits_sampled=200,
             ),
         )
         mock_db.get_cached_baseline.return_value = cached_baseline
@@ -303,7 +315,16 @@ class TestComputeFullBaseline:
         mock_db = MagicMock()
         service = BaselineService(db=mock_db)
 
-        with patch.object(service, "_get_all_commits") as mock_get_commits:
+        with (
+            patch.object(service, "_resolve_strategy") as mock_resolve,
+            patch.object(service, "_get_merge_anchored_commits") as mock_get_commits,
+        ):
+            mock_resolve.return_value = ResolvedBaselineStrategy(
+                requested=BaselineStrategy.AUTO,
+                resolved=BaselineStrategy.MERGE_ANCHORED,
+                merge_ratio=0.25,
+                total_commits_sampled=200,
+            )
             mock_get_commits.return_value = [CommitInfo(sha="abc123", timestamp=datetime.now())]
 
             result = service.compute_full_baseline(tmp_path)
@@ -321,10 +342,17 @@ class TestComputeFullBaseline:
         ]
 
         with (
-            patch.object(service, "_get_all_commits") as mock_get_commits,
+            patch.object(service, "_resolve_strategy") as mock_resolve,
+            patch.object(service, "_get_time_sampled_commits") as mock_get_commits,
             patch.object(service, "_compute_deltas_parallel") as mock_deltas,
             patch("slopometry.summoner.services.baseline_service.ComplexityAnalyzer") as MockAnalyzer,
         ):
+            mock_resolve.return_value = ResolvedBaselineStrategy(
+                requested=BaselineStrategy.AUTO,
+                resolved=BaselineStrategy.TIME_SAMPLED,
+                merge_ratio=0.05,
+                total_commits_sampled=200,
+            )
             mock_get_commits.return_value = commits
             mock_deltas.return_value = []  # No deltas computed
             MockAnalyzer.return_value.analyze_extended_complexity.return_value = ExtendedComplexityMetrics(
@@ -393,3 +421,256 @@ class TestComputeSingleDeltaTask:
         assert result.cc_delta == 5  # 15 - 10
         assert result.effort_delta == 50.0  # 150 - 100
         assert result.mi_delta == -5.0  # 75 - 80
+
+
+def test_parse_commit_log__parses_valid_output() -> None:
+    """Test parsing valid git log output."""
+    output = "abc123 1700000000\ndef456 1699999000\n"
+    commits = _parse_commit_log(output)
+
+    assert len(commits) == 2
+    assert commits[0].sha == "abc123"
+    assert commits[1].sha == "def456"
+
+
+def test_parse_commit_log__handles_empty_output() -> None:
+    """Test parsing empty output."""
+    commits = _parse_commit_log("")
+    assert commits == []
+
+
+def test_parse_commit_log__skips_blank_lines() -> None:
+    """Test that blank lines are skipped."""
+    output = "abc123 1700000000\n\ndef456 1699999000\n\n"
+    commits = _parse_commit_log(output)
+    assert len(commits) == 2
+
+
+def test_detect_strategy__returns_merge_anchored_above_threshold(tmp_path: Path) -> None:
+    """Test auto-detection selects MERGE_ANCHORED when merge ratio exceeds threshold."""
+    service = BaselineService(db=MagicMock())
+
+    with patch("slopometry.summoner.services.baseline_service.subprocess.run") as mock_run:
+        mock_result_total = MagicMock()
+        mock_result_total.returncode = 0
+        mock_result_total.stdout = "100"
+
+        mock_result_merges = MagicMock()
+        mock_result_merges.returncode = 0
+        mock_result_merges.stdout = "25"
+
+        mock_run.side_effect = [mock_result_total, mock_result_merges]
+
+        result = service._detect_strategy(tmp_path)
+
+    assert result.resolved == BaselineStrategy.MERGE_ANCHORED
+    assert result.requested == BaselineStrategy.AUTO
+    assert result.merge_ratio == 0.25
+    assert result.total_commits_sampled == 100
+
+
+def test_detect_strategy__returns_time_sampled_below_threshold(tmp_path: Path) -> None:
+    """Test auto-detection selects TIME_SAMPLED when merge ratio is below threshold."""
+    service = BaselineService(db=MagicMock())
+
+    with patch("slopometry.summoner.services.baseline_service.subprocess.run") as mock_run:
+        mock_result_total = MagicMock()
+        mock_result_total.returncode = 0
+        mock_result_total.stdout = "100"
+
+        mock_result_merges = MagicMock()
+        mock_result_merges.returncode = 0
+        mock_result_merges.stdout = "5"
+
+        mock_run.side_effect = [mock_result_total, mock_result_merges]
+
+        result = service._detect_strategy(tmp_path)
+
+    assert result.resolved == BaselineStrategy.TIME_SAMPLED
+    assert result.merge_ratio == 0.05
+
+
+def test_detect_strategy__falls_back_to_time_sampled_on_zero_commits(tmp_path: Path) -> None:
+    """Test auto-detection falls back to TIME_SAMPLED when no commits found."""
+    service = BaselineService(db=MagicMock())
+
+    with patch("slopometry.summoner.services.baseline_service.subprocess.run") as mock_run:
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "0"
+
+        mock_run.return_value = mock_result
+
+        result = service._detect_strategy(tmp_path)
+
+    assert result.resolved == BaselineStrategy.TIME_SAMPLED
+    assert result.merge_ratio == 0.0
+
+
+def test_resolve_strategy__explicit_merge_anchored_skips_detection(tmp_path: Path) -> None:
+    """Test explicit MERGE_ANCHORED doesn't run detection."""
+    service = BaselineService(db=MagicMock())
+
+    with (
+        patch.object(service, "_detect_strategy") as mock_detect,
+        patch("slopometry.summoner.services.baseline_service.settings") as mock_settings,
+    ):
+        mock_settings.baseline_strategy = "merge_anchored"
+
+        result = service._resolve_strategy(tmp_path)
+
+    mock_detect.assert_not_called()
+    assert result.resolved == BaselineStrategy.MERGE_ANCHORED
+    assert result.requested == BaselineStrategy.MERGE_ANCHORED
+
+
+def test_resolve_strategy__auto_runs_detection(tmp_path: Path) -> None:
+    """Test AUTO strategy runs detection."""
+    service = BaselineService(db=MagicMock())
+    expected = ResolvedBaselineStrategy(
+        requested=BaselineStrategy.AUTO,
+        resolved=BaselineStrategy.TIME_SAMPLED,
+        merge_ratio=0.05,
+        total_commits_sampled=100,
+    )
+
+    with (
+        patch.object(service, "_detect_strategy", return_value=expected) as mock_detect,
+        patch("slopometry.summoner.services.baseline_service.settings") as mock_settings,
+    ):
+        mock_settings.baseline_strategy = "auto"
+
+        result = service._resolve_strategy(tmp_path)
+
+    mock_detect.assert_called_once_with(tmp_path)
+    assert result == expected
+
+
+def test_cache_compatible__legacy_baseline_without_strategy_triggers_recompute() -> None:
+    """Test that legacy baselines without strategy trigger recomputation."""
+    service = BaselineService(db=MagicMock())
+    cached = MagicMock()
+    cached.strategy = None
+
+    with patch("slopometry.summoner.services.baseline_service.settings") as mock_settings:
+        mock_settings.baseline_strategy = "auto"
+        assert service._is_cache_strategy_compatible(cached) is False
+
+
+def test_cache_compatible__auto_accepts_any_concrete_strategy() -> None:
+    """Test that AUTO accepts any concrete resolved strategy from cache."""
+    service = BaselineService(db=MagicMock())
+    cached = MagicMock()
+    cached.strategy = ResolvedBaselineStrategy(
+        requested=BaselineStrategy.AUTO,
+        resolved=BaselineStrategy.MERGE_ANCHORED,
+        merge_ratio=0.25,
+        total_commits_sampled=200,
+    )
+
+    with patch("slopometry.summoner.services.baseline_service.settings") as mock_settings:
+        mock_settings.baseline_strategy = "auto"
+        assert service._is_cache_strategy_compatible(cached) is True
+
+
+def test_cache_compatible__explicit_match_returns_true() -> None:
+    """Test that explicit strategy matching cached resolved returns True."""
+    service = BaselineService(db=MagicMock())
+    cached = MagicMock()
+    cached.strategy = ResolvedBaselineStrategy(
+        requested=BaselineStrategy.MERGE_ANCHORED,
+        resolved=BaselineStrategy.MERGE_ANCHORED,
+        merge_ratio=0.0,
+        total_commits_sampled=0,
+    )
+
+    with patch("slopometry.summoner.services.baseline_service.settings") as mock_settings:
+        mock_settings.baseline_strategy = "merge_anchored"
+        assert service._is_cache_strategy_compatible(cached) is True
+
+
+def test_cache_compatible__explicit_mismatch_returns_false() -> None:
+    """Test that explicit strategy not matching cached resolved returns False."""
+    service = BaselineService(db=MagicMock())
+    cached = MagicMock()
+    cached.strategy = ResolvedBaselineStrategy(
+        requested=BaselineStrategy.AUTO,
+        resolved=BaselineStrategy.MERGE_ANCHORED,
+        merge_ratio=0.25,
+        total_commits_sampled=200,
+    )
+
+    with patch("slopometry.summoner.services.baseline_service.settings") as mock_settings:
+        mock_settings.baseline_strategy = "time_sampled"
+        assert service._is_cache_strategy_compatible(cached) is False
+
+
+def test_get_time_sampled_commits__includes_newest_and_oldest(tmp_path: Path) -> None:
+    """Test that time-sampled always includes newest and oldest commits."""
+    service = BaselineService(db=MagicMock())
+
+    now = datetime.now()
+    commits_output = "\n".join(f"sha{i} {int((now - timedelta(days=i * 2)).timestamp())}" for i in range(30))
+
+    with patch("slopometry.summoner.services.baseline_service.subprocess.run") as mock_run:
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = commits_output
+        mock_run.return_value = mock_result
+
+        result = service._get_time_sampled_commits(tmp_path)
+
+    assert result[0].sha == "sha0"  # Newest
+    assert result[-1].sha == "sha29"  # Oldest
+
+
+def test_get_time_sampled_commits__returns_empty_on_git_failure(tmp_path: Path) -> None:
+    """Test that empty list is returned on git failure."""
+    service = BaselineService(db=MagicMock())
+
+    with patch("slopometry.summoner.services.baseline_service.subprocess.run") as mock_run:
+        mock_result = MagicMock()
+        mock_result.returncode = 1
+        mock_run.return_value = mock_result
+
+        result = service._get_time_sampled_commits(tmp_path)
+
+    assert result == []
+
+
+def test_get_merge_anchored_commits__uses_first_parent_flag(tmp_path: Path) -> None:
+    """Test that --first-parent flag is passed to git log."""
+    service = BaselineService(db=MagicMock())
+
+    with patch("slopometry.summoner.services.baseline_service.subprocess.run") as mock_run:
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = "abc123 1700000000\n"
+        mock_run.return_value = mock_result
+
+        service._get_merge_anchored_commits(tmp_path)
+
+    call_args = mock_run.call_args[0][0]
+    assert "--first-parent" in call_args
+
+
+def test_get_merge_anchored_commits__respects_max_commits(tmp_path: Path) -> None:
+    """Test that result is capped by baseline_max_commits."""
+    service = BaselineService(db=MagicMock())
+
+    now = datetime.now()
+    commits_output = "\n".join(f"sha{i} {int((now - timedelta(hours=i)).timestamp())}" for i in range(200))
+
+    with (
+        patch("slopometry.summoner.services.baseline_service.subprocess.run") as mock_run,
+        patch("slopometry.summoner.services.baseline_service.settings") as mock_settings,
+    ):
+        mock_settings.baseline_max_commits = 50
+        mock_result = MagicMock()
+        mock_result.returncode = 0
+        mock_result.stdout = commits_output
+        mock_run.return_value = mock_result
+
+        result = service._get_merge_anchored_commits(tmp_path)
+
+    assert len(result) == 50

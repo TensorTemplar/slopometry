@@ -255,6 +255,7 @@ class TestPythonFeatureAnalyzerIntegration:
                 any_count += visitor.any_type_refs
                 str_count += visitor.str_type_refs
             except (SyntaxError, UnicodeDecodeError):
+                print(f"Skipping unparseable file: {py_file}")
                 continue
 
         # Baseline sanity checks - slopometry codebase should have:
@@ -281,6 +282,7 @@ class TestPythonFeatureAnalyzerIntegration:
                 total_refs += visitor.total_type_refs
                 any_count += visitor.any_type_refs
             except (SyntaxError, UnicodeDecodeError):
+                print(f"Skipping unparseable file: {py_file}")
                 continue
 
         if total_refs > 0:
@@ -741,14 +743,60 @@ except Exception as e:
 
         assert visitor.swallowed_exceptions == 0
 
-    def test_visit_try__ignores_except_with_multiple_statements(self) -> None:
-        """Test that except block with multiple statements is not flagged."""
+    def test_visit_try__ignores_except_with_function_call(self) -> None:
+        """Test that except block with a function call is not flagged."""
         code = """
 try:
     risky()
 except Exception:
-    log_error()
+    handle_error()
     pass
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.swallowed_exceptions == 0
+
+    def test_visit_try__detects_multi_statement_inert_handler(self) -> None:
+        """Test that except block with only assignments and pass/continue is flagged."""
+        code = """
+for item in items:
+    try:
+        process(item)
+    except Exception:
+        skip_count += 1
+        continue
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.swallowed_exceptions == 1
+
+    def test_visit_try__ignores_handler_with_raise(self) -> None:
+        """Test that except block that re-raises is not flagged."""
+        code = """
+try:
+    risky()
+except ValueError:
+    error_count += 1
+    raise
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.swallowed_exceptions == 0
+
+    def test_visit_try__ignores_handler_with_return(self) -> None:
+        """Test that except block with return is not flagged."""
+        code = """
+def func():
+    try:
+        risky()
+    except Exception:
+        return None
 """
         tree = ast.parse(code)
         visitor = FeatureVisitor()
@@ -917,3 +965,108 @@ def foo():
         visitor.visit(tree)
 
         assert visitor.dynamic_executions == 3
+
+
+class TestSysPathManipulationDetection:
+    """Tests for sys.path manipulation detection."""
+
+    def test_sys_path_manipulation__detects_sys_path_insert(self) -> None:
+        """Test detection of sys.path.insert() calls."""
+        code = """
+import sys
+sys.path.insert(0, "/some/path")
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.sys_path_manipulations == 1
+
+    def test_sys_path_manipulation__detects_sys_path_append(self) -> None:
+        """Test detection of sys.path.append() calls."""
+        code = """
+import sys
+sys.path.append("/some/path")
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.sys_path_manipulations == 1
+
+    def test_sys_path_manipulation__detects_sys_path_extend(self) -> None:
+        """Test detection of sys.path.extend() calls."""
+        code = """
+import sys
+sys.path.extend(["/path1", "/path2"])
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.sys_path_manipulations == 1
+
+    def test_sys_path_manipulation__detects_sys_path_remove(self) -> None:
+        """Test detection of sys.path.remove() calls."""
+        code = """
+import sys
+sys.path.remove("/some/path")
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.sys_path_manipulations == 1
+
+    def test_sys_path_manipulation__detects_sys_path_assignment(self) -> None:
+        """Test detection of sys.path = [...] direct assignment."""
+        code = """
+import sys
+sys.path = ["/custom/path"]
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.sys_path_manipulations == 1
+
+    def test_sys_path_manipulation__detects_sys_path_augmented_assignment(self) -> None:
+        """Test detection of sys.path += [...] augmented assignment."""
+        code = """
+import sys
+sys.path += ["/extra/path"]
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.sys_path_manipulations == 1
+
+    def test_sys_path_manipulation__ignores_sys_path_read(self) -> None:
+        """Reading sys.path (e.g. print(sys.path)) should NOT trigger the smell."""
+        code = """
+import sys
+print(sys.path)
+x = sys.path
+for p in sys.path:
+    print(p)
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.sys_path_manipulations == 0
+
+    def test_sys_path_manipulation__counts_multiple_mutations(self) -> None:
+        """Multiple sys.path mutations in one file are counted individually."""
+        code = """
+import sys
+sys.path.insert(0, "/first")
+sys.path.append("/second")
+sys.path += ["/third"]
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.sys_path_manipulations == 3

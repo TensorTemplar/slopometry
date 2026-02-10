@@ -1,8 +1,7 @@
-"""Quality-Per-Effort (QPE) calculator for principled code quality comparison.
+"""Quality (QPE) calculator for principled code quality comparison.
 
-Provides two metrics for different use cases:
-- qpe: Effort-normalized for GRPO rollout comparison (same spec)
-- qpe_absolute: Raw quality for cross-project/temporal comparison
+Single metric: adjusted quality = MI * (1 - smell_penalty) + bonuses.
+Used for temporal delta tracking, cross-project comparison, and GRPO advantage.
 
 Key properties:
 - Uses MI as sole quality signal (no double-counting with CC/Volume)
@@ -16,107 +15,91 @@ from pathlib import Path
 
 from slopometry.core.complexity_analyzer import ComplexityAnalyzer
 from slopometry.core.models import (
+    SMELL_REGISTRY,
     CrossProjectComparison,
     ExtendedComplexityMetrics,
     ProjectQPEResult,
     QPEScore,
+    SmellAdvantage,
 )
 from slopometry.core.settings import settings
 
 
-class QPECalculator:
-    """Quality-Per-Effort calculator for principled comparison."""
+def calculate_qpe(metrics: ExtendedComplexityMetrics) -> QPEScore:
+    """Calculate quality score.
 
-    def calculate_qpe(self, metrics: ExtendedComplexityMetrics) -> QPEScore:
-        """Calculate Quality-Per-Effort score.
+    Formula:
+        qpe = mi_normalized * (1 - smell_penalty) + bonuses
 
-        Formula:
-            qpe = adjusted_quality / effort_factor (for GRPO)
-            qpe_absolute = adjusted_quality (for cross-project/temporal)
+    Where:
+        mi_normalized = average_mi / 100.0
+        smell_penalty = 0.9 * (1 - exp(-smell_penalty_raw * steepness))
+        smell_penalty_raw = weighted_smell_sum / effective_files
+        bonuses = test_bonus + type_bonus + docstring_bonus
 
-        Where:
-            adjusted_quality = mi_normalized * (1 - smell_penalty) + bonuses
-            mi_normalized = average_mi / 100.0
-            smell_penalty = 0.9 * (1 - exp(-smell_penalty_raw * steepness))
-            smell_penalty_raw = weighted_smell_sum / effective_files
-            effort_factor = log(total_halstead_effort + 1)
-            bonuses = test_bonus + type_bonus + docstring_bonus
+    Smell penalty uses:
+        - Effective files (files with min LOC) to prevent gaming via tiny files
+        - No effort multiplier: all smells penalize equally
+        - Sigmoid saturation instead of hard cap
 
-        Smell penalty uses:
-            - Effective files (files with min LOC) to prevent gaming via tiny files
-            - No effort multiplier: all smells penalize equally
-            - Sigmoid saturation instead of hard cap
+    Bonuses (positive signals):
+        - Test coverage bonus when >= threshold
+        - Type hint coverage bonus when >= threshold
+        - Docstring coverage bonus when >= threshold
 
-        Bonuses (positive signals):
-            - Test coverage bonus when >= threshold
-            - Type hint coverage bonus when >= threshold
-            - Docstring coverage bonus when >= threshold
+    Args:
+        metrics: Extended complexity metrics for the codebase
 
-        Args:
-            metrics: Extended complexity metrics for the codebase
+    Returns:
+        QPEScore with component breakdown
+    """
+    mi_normalized = metrics.average_mi / 100.0
 
-        Returns:
-            QPEScore with component breakdown
-        """
-        mi_normalized = metrics.average_mi / 100.0
+    smell_counts = metrics.get_smell_counts()
+    weighted_smell_sum = 0.0
 
-        smell_counts: dict[str, int] = {}
-        weighted_smell_sum = 0.0
+    for smell in metrics.get_smells():
+        weighted_smell_sum += smell.count * smell.weight
 
-        for smell in metrics.get_smells():
-            smell_counts[smell.name] = smell.count
-            weighted_smell_sum += smell.count * smell.weight
+    # Use files_by_loc for anti-gaming file filtering, fallback to total_files
+    if metrics.files_by_loc:
+        effective_files = sum(1 for loc in metrics.files_by_loc.values() if loc >= settings.qpe_min_loc_per_file)
+    else:
+        effective_files = metrics.total_files_analyzed
 
-        # Use files_by_loc for anti-gaming file filtering, fallback to total_files
-        if metrics.files_by_loc:
-            effective_files = sum(1 for loc in metrics.files_by_loc.values() if loc >= settings.qpe_min_loc_per_file)
-        else:
-            effective_files = metrics.total_files_analyzed
+    total_files = max(effective_files, 1)
+    smell_penalty_raw = weighted_smell_sum / total_files
 
-        total_files = max(effective_files, 1)
-        smell_penalty_raw = weighted_smell_sum / total_files
+    # Sigmoid saturation with configurable steepness (approaches 0.9 asymptotically)
+    smell_penalty = 0.9 * (1 - math.exp(-smell_penalty_raw * settings.qpe_sigmoid_steepness))
 
-        # Sigmoid saturation with configurable steepness (approaches 0.9 asymptotically)
-        smell_penalty = 0.9 * (1 - math.exp(-smell_penalty_raw * settings.qpe_sigmoid_steepness))
+    # Positive bonuses (configurable thresholds and amounts)
+    test_bonus = (
+        settings.qpe_test_coverage_bonus
+        if (metrics.test_coverage_percent or 0) >= settings.qpe_test_coverage_threshold
+        else 0.0
+    )
+    type_bonus = (
+        settings.qpe_type_coverage_bonus
+        if metrics.type_hint_coverage >= settings.qpe_type_coverage_threshold
+        else 0.0
+    )
+    docstring_bonus = (
+        settings.qpe_docstring_coverage_bonus
+        if metrics.docstring_coverage >= settings.qpe_docstring_coverage_threshold
+        else 0.0
+    )
+    total_bonus = test_bonus + type_bonus + docstring_bonus
 
-        # Positive bonuses (configurable thresholds and amounts)
-        test_bonus = (
-            settings.qpe_test_coverage_bonus
-            if (metrics.test_coverage_percent or 0) >= settings.qpe_test_coverage_threshold
-            else 0.0
-        )
-        type_bonus = (
-            settings.qpe_type_coverage_bonus
-            if metrics.type_hint_coverage >= settings.qpe_type_coverage_threshold
-            else 0.0
-        )
-        docstring_bonus = (
-            settings.qpe_docstring_coverage_bonus
-            if metrics.docstring_coverage >= settings.qpe_docstring_coverage_threshold
-            else 0.0
-        )
-        total_bonus = test_bonus + type_bonus + docstring_bonus
+    adjusted_quality = mi_normalized * (1 - smell_penalty) + total_bonus
 
-        adjusted_quality = mi_normalized * (1 - smell_penalty) + total_bonus
-
-        # Effort normalization using log for diminishing returns
-        effort_factor = math.log(metrics.total_effort + 1)
-
-        # qpe: effort-normalized for GRPO rollouts
-        qpe = adjusted_quality / effort_factor if effort_factor > 0 else 0.0
-
-        # qpe_absolute: raw quality for cross-project/temporal comparison
-        qpe_absolute = adjusted_quality
-
-        return QPEScore(
-            qpe=qpe,
-            qpe_absolute=qpe_absolute,
-            mi_normalized=mi_normalized,
-            smell_penalty=smell_penalty,
-            adjusted_quality=adjusted_quality,
-            effort_factor=effort_factor,
-            smell_counts=smell_counts,
-        )
+    return QPEScore(
+        qpe=adjusted_quality,
+        mi_normalized=mi_normalized,
+        smell_penalty=smell_penalty,
+        adjusted_quality=adjusted_quality,
+        smell_counts=smell_counts,
+    )
 
 
 def grpo_advantage(baseline: QPEScore, candidate: QPEScore) -> float:
@@ -148,78 +131,107 @@ def grpo_advantage(baseline: QPEScore, candidate: QPEScore) -> float:
     return math.tanh(relative_improvement)
 
 
-class CrossProjectComparator:
-    """Compare multiple projects using QPE."""
+def smell_advantage(baseline: QPEScore, candidate: QPEScore) -> list[SmellAdvantage]:
+    """Decompose the aggregate GRPO advantage into per-smell contributions.
 
-    def __init__(self) -> None:
-        self.qpe_calculator = QPECalculator()
+    Uses smell weights from SMELL_REGISTRY to compute weighted deltas for each
+    smell type. Iterates all registered smells since SmellCounts always has all
+    fields (defaulting to 0), so there are no asymmetric key sets.
 
-    def compare(
-        self,
-        project_paths: list[Path],
-    ) -> CrossProjectComparison:
-        """Compare projects by QPE, ranked from highest to lowest.
+    The primary signal remains aggregate grpo_advantage(); this decomposition
+    is auxiliary for interpretability and optional per-smell reward shaping.
 
-        Args:
-            project_paths: List of paths to project directories
+    Args:
+        baseline: QPE score of the baseline/reference implementation
+        candidate: QPE score of the candidate implementation
 
-        Returns:
-            CrossProjectComparison with flat rankings
-        """
-        results: list[ProjectQPEResult] = []
+    Returns:
+        List of SmellAdvantage sorted by absolute weighted_delta (highest impact first)
+    """
+    advantages = []
+    for name, defn in SMELL_REGISTRY.items():
+        baseline_count = getattr(baseline.smell_counts, name)
+        candidate_count = getattr(candidate.smell_counts, name)
+        weighted_delta = (candidate_count - baseline_count) * defn.weight
 
-        for project_path in project_paths:
-            analyzer = ComplexityAnalyzer(working_directory=project_path)
-            metrics = analyzer.analyze_extended_complexity()
-            qpe_score = self.qpe_calculator.calculate_qpe(metrics)
-
-            results.append(
-                ProjectQPEResult(
-                    project_path=str(project_path),
-                    project_name=project_path.name,
-                    qpe_score=qpe_score,
-                    metrics=metrics,
-                )
+        advantages.append(
+            SmellAdvantage(
+                smell_name=name,
+                baseline_count=baseline_count,
+                candidate_count=candidate_count,
+                weight=defn.weight,
+                weighted_delta=weighted_delta,
             )
-
-        rankings = sorted(results, key=lambda x: x.qpe_score.qpe, reverse=True)
-
-        return CrossProjectComparison(
-            total_projects=len(results),
-            rankings=rankings,
         )
 
-    def compare_metrics(
-        self,
-        metrics_list: list[tuple[str, ExtendedComplexityMetrics]],
-    ) -> CrossProjectComparison:
-        """Compare pre-computed metrics by QPE.
+    return sorted(advantages, key=lambda a: abs(a.weighted_delta), reverse=True)
 
-        Useful when metrics are already available (e.g., from database).
 
-        Args:
-            metrics_list: List of (project_name, metrics) tuples
+def compare_projects(
+    project_paths: list[Path],
+) -> CrossProjectComparison:
+    """Compare projects by QPE, ranked from highest to lowest.
 
-        Returns:
-            CrossProjectComparison with flat rankings
-        """
-        results: list[ProjectQPEResult] = []
+    Args:
+        project_paths: List of paths to project directories
 
-        for project_name, metrics in metrics_list:
-            qpe_score = self.qpe_calculator.calculate_qpe(metrics)
+    Returns:
+        CrossProjectComparison with flat rankings
+    """
+    results: list[ProjectQPEResult] = []
 
-            results.append(
-                ProjectQPEResult(
-                    project_path="",
-                    project_name=project_name,
-                    qpe_score=qpe_score,
-                    metrics=metrics,
-                )
+    for project_path in project_paths:
+        analyzer = ComplexityAnalyzer(working_directory=project_path)
+        metrics = analyzer.analyze_extended_complexity()
+        qpe_score = calculate_qpe(metrics)
+
+        results.append(
+            ProjectQPEResult(
+                project_path=str(project_path),
+                project_name=project_path.name,
+                qpe_score=qpe_score,
+                metrics=metrics,
             )
-
-        rankings = sorted(results, key=lambda x: x.qpe_score.qpe, reverse=True)
-
-        return CrossProjectComparison(
-            total_projects=len(results),
-            rankings=rankings,
         )
+
+    rankings = sorted(results, key=lambda x: x.qpe_score.qpe, reverse=True)
+
+    return CrossProjectComparison(
+        total_projects=len(results),
+        rankings=rankings,
+    )
+
+
+def compare_project_metrics(
+    metrics_list: list[tuple[str, ExtendedComplexityMetrics]],
+) -> CrossProjectComparison:
+    """Compare pre-computed metrics by QPE.
+
+    Useful when metrics are already available (e.g., from database).
+
+    Args:
+        metrics_list: List of (project_name, metrics) tuples
+
+    Returns:
+        CrossProjectComparison with flat rankings
+    """
+    results: list[ProjectQPEResult] = []
+
+    for project_name, metrics in metrics_list:
+        qpe_score = calculate_qpe(metrics)
+
+        results.append(
+            ProjectQPEResult(
+                project_path="",
+                project_name=project_name,
+                qpe_score=qpe_score,
+                metrics=metrics,
+            )
+        )
+
+    rankings = sorted(results, key=lambda x: x.qpe_score.qpe, reverse=True)
+
+    return CrossProjectComparison(
+        total_projects=len(results),
+        rankings=rankings,
+    )

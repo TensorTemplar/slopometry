@@ -13,6 +13,66 @@ from slopometry.core.plan_analyzer import PlanAnalyzer
 logger = logging.getLogger(__name__)
 
 
+class TranscriptMetadata(BaseModel):
+    """Lightweight metadata extracted from the first few lines of a transcript."""
+
+    agent_version: str | None = None
+    model: str | None = None
+    git_branch: str | None = None
+
+
+def extract_transcript_metadata(transcript_path: Path) -> TranscriptMetadata:
+    """Extract version, model, and git branch from a transcript file.
+
+    Makes a single pass through the transcript, stopping early once all
+    fields are found. Extracts:
+    - version from first event that has it (Claude Code version)
+    - message.model from first assistant event (LLM model)
+    - gitBranch from first event that has it
+
+    Args:
+        transcript_path: Path to the JSONL transcript file
+
+    Returns:
+        TranscriptMetadata with extracted values (None for missing fields)
+    """
+    agent_version: str | None = None
+    model: str | None = None
+    git_branch: str | None = None
+    skipped_lines = 0
+
+    try:
+        with open(transcript_path, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    logger.debug("Skipping unparseable line in metadata extraction")
+                    skipped_lines += 1
+                    continue
+
+                if agent_version is None and isinstance(event.get("version"), str):
+                    agent_version = event["version"]
+
+                if git_branch is None and isinstance(event.get("gitBranch"), str):
+                    git_branch = event["gitBranch"]
+
+                if model is None and event.get("type") == "assistant":
+                    msg = event.get("message")
+                    if isinstance(msg, dict) and isinstance(msg.get("model"), str):
+                        model = msg["model"]
+
+                if agent_version is not None and model is not None and git_branch is not None:
+                    break
+    except OSError as e:
+        logger.warning(f"Failed to read transcript for metadata: {e}")
+
+    if skipped_lines:
+        logger.warning(f"Skipped {skipped_lines} unparseable line(s) in metadata extraction from {transcript_path}")
+
+    return TranscriptMetadata(agent_version=agent_version, model=model, git_branch=git_branch)
+
+
 class MessageUsage(BaseModel):
     """Token usage from an assistant message."""
 
@@ -62,6 +122,7 @@ class TranscriptTokenAnalyzer:
             TokenUsage with tokens categorized by exploration vs implementation
         """
         usage = TokenUsage()
+        skipped_lines = 0
 
         try:
             with open(transcript_path, encoding="utf-8") as f:
@@ -69,13 +130,18 @@ class TranscriptTokenAnalyzer:
                     try:
                         raw_event = json.loads(line)
                         event = TranscriptEvent.model_validate(raw_event)
-                    except (json.JSONDecodeError, Exception):
+                    except Exception:
+                        logger.debug("Skipping unparseable transcript event")
+                        skipped_lines += 1
                         continue
 
                     self._process_event(event, usage)
 
         except OSError as e:
             logger.warning(f"Failed to read transcript file {transcript_path}: {e}")
+
+        if skipped_lines:
+            logger.warning(f"Skipped {skipped_lines} unparseable line(s) in {transcript_path}")
 
         return usage
 
@@ -179,7 +245,7 @@ class TranscriptTokenAnalyzer:
             if tool_type in self.implementation_tools:
                 return "implementation"
         except ValueError:
-            pass
+            logger.debug(f"Unknown tool type '{tool_name}', defaulting to implementation")
 
         return "implementation"
 

@@ -15,7 +15,7 @@ class TestCoverageResult:
         """Test CoverageResult has sensible defaults."""
         result = CoverageResult()
 
-        assert result.total_coverage_percent == 0.0
+        assert result.total_coverage_percent is None, "Should be N/A until calculated"
         assert result.coverage_available is True
         assert result.error_message is None
         assert result.source_file is None

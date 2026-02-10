@@ -598,3 +598,27 @@ def save_transcript(session_id: str | None, output_dir: str, yes: bool) -> None:
         ]
         todos_file.write_text(json.dumps(todos_data, indent=2))
         console.print(f"[green]✓[/green] Saved {len(todos_data)} todos to: final_todos.json")
+
+    # Save structured session metadata
+    from slopometry.core.models import AgentTool, SessionMetadata
+    from slopometry.core.transcript_token_analyzer import extract_transcript_metadata
+
+    transcript_meta = extract_transcript_metadata(transcript_path)
+    token_usage = stats.plan_evolution.token_usage if stats.plan_evolution else None
+
+    metadata = SessionMetadata(
+        session_id=stats.session_id,
+        agent_tool=AgentTool.CLAUDE_CODE,
+        agent_version=transcript_meta.agent_version,
+        model=transcript_meta.model,
+        start_time=stats.start_time,
+        end_time=stats.end_time,
+        total_events=stats.total_events,
+        working_directory=stats.working_directory,
+        git_branch=transcript_meta.git_branch,
+        token_usage=token_usage,
+    )
+
+    metadata_file = session_dir / "session_metadata.json"
+    metadata_file.write_text(metadata.model_dump_json(indent=2))
+    console.print("[green]✓[/green] Saved session metadata to: session_metadata.json")

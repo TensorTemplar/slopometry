@@ -3,6 +3,7 @@
 from pathlib import Path
 from unittest.mock import patch
 
+from slopometry.core.models import TokenCountError
 from slopometry.core.tokenizer import count_file_tokens, count_tokens, get_encoder
 
 
@@ -56,20 +57,22 @@ class TestCountFileTokens:
         test_file.write_text("def foo(): pass")
 
         result = count_file_tokens(test_file)
-        assert result > 0
+        assert isinstance(result, int) and result > 0
 
-    def test_count_file_tokens__missing_file_returns_zero(self, tmp_path: Path) -> None:
-        """Should return 0 for missing file."""
+    def test_count_file_tokens__missing_file_returns_error(self, tmp_path: Path) -> None:
+        """Should return TokenCountError for missing file."""
         missing_file = tmp_path / "missing.py"
 
         result = count_file_tokens(missing_file)
-        assert result == 0
+        assert isinstance(result, TokenCountError)
+        assert str(missing_file) in result.path
 
-    def test_count_file_tokens__unreadable_file_returns_zero(self, tmp_path: Path) -> None:
-        """Should return 0 when file cannot be read."""
+    def test_count_file_tokens__unreadable_file_returns_error(self, tmp_path: Path) -> None:
+        """Should return TokenCountError when file cannot be read."""
         test_file = tmp_path / "test.py"
         test_file.write_text("content")
 
         with patch.object(Path, "read_text", side_effect=PermissionError("denied")):
             result = count_file_tokens(test_file)
-            assert result == 0
+            assert isinstance(result, TokenCountError)
+            assert "denied" in result.message

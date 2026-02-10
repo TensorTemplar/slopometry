@@ -6,7 +6,14 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+class AgentTool(str, Enum):
+    """Agent tool that produced the session."""
+
+    CLAUDE_CODE = "claude_code"
+    OPENCODE = "opencode"
 
 
 class SmellCategory(str, Enum):
@@ -14,7 +21,6 @@ class SmellCategory(str, Enum):
 
     GENERAL = "general"
     PYTHON = "python"
-    RUST = "rust"
 
 
 class SmellDefinition(BaseModel):
@@ -56,7 +62,7 @@ SMELL_REGISTRY: dict[str, SmellDefinition] = {
         label="Swallowed Exceptions",
         category=SmellCategory.GENERAL,
         weight=0.15,
-        guidance="BLOCKING: You MUST present a table with columns [Location | Purpose] for each and ask user to confirm silent failure is acceptable",
+        guidance="BLOCKING: You MUST present a table with columns [Location | Purpose | Justification ] for each and ask user to confirm silent failure is acceptable",
         count_field="swallowed_exception_count",
         files_field="swallowed_exception_files",
     ),
@@ -151,6 +157,15 @@ SMELL_REGISTRY: dict[str, SmellDefinition] = {
         count_field="passthrough_wrapper_count",
         files_field="passthrough_wrapper_files",
     ),
+    "sys_path_manipulation": SmellDefinition(
+        internal_name="sys_path_manipulation",
+        label="sys.path Manipulation",
+        category=SmellCategory.PYTHON,
+        weight=0.10,
+        guidance="sys.path mutations bypass the package system — restructure package boundaries and use absolute imports from installed packages instead",
+        count_field="sys_path_manipulation_count",
+        files_field="sys_path_manipulation_files",
+    ),
 }
 
 
@@ -193,6 +208,57 @@ def SmellField(
             "files_field": files_field,
         },
     )
+
+
+class BaselineStrategy(str, Enum):
+    """How to select commits for building the historic quality baseline.
+
+    MERGE_ANCHORED: Follows first-parent (trunk) history, so each delta represents
+    the net quality effect of one accepted merge/PR. Best for repos using merge
+    workflows where merges are quality checkpoints (code review happened).
+
+    TIME_SAMPLED: Samples commits at regular time intervals within a bounded
+    lookback window. Prevents the 'N commits = 2 days' problem in active repos.
+    Best for repos with linear history (squash merges, rebase workflows).
+
+    AUTO: Examines recent commit history to compute merge ratio. If merges are
+    frequent enough (above configurable threshold), uses MERGE_ANCHORED.
+    Otherwise falls back to TIME_SAMPLED.
+    """
+
+    MERGE_ANCHORED = "merge_anchored"
+    TIME_SAMPLED = "time_sampled"
+    AUTO = "auto"
+
+
+class ResolvedBaselineStrategy(BaseModel):
+    """Records which baseline strategy was actually used after AUTO resolution.
+
+    AUTO never appears as the resolved strategy -- it always resolves to one of
+    the concrete strategies. This model is stored with the cached baseline so
+    we can invalidate the cache when the user changes strategy settings.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    requested: BaselineStrategy = Field(description="Strategy requested via settings (may be AUTO)")
+    resolved: BaselineStrategy = Field(
+        description="Concrete strategy actually used (never AUTO). "
+        "MERGE_ANCHORED uses first-parent trunk history at merge points. "
+        "TIME_SAMPLED samples commits at regular time intervals within a bounded lookback window."
+    )
+    merge_ratio: float = Field(
+        description="Fraction of merge commits in the detection sample (0.0-1.0). "
+        "Used by AUTO to decide strategy: above threshold -> MERGE_ANCHORED, below -> TIME_SAMPLED."
+    )
+    total_commits_sampled: int = Field(description="Number of recent commits examined during strategy auto-detection")
+
+    @field_validator("resolved")
+    @classmethod
+    def resolved_must_be_concrete(cls, v: BaselineStrategy) -> BaselineStrategy:
+        if v == BaselineStrategy.AUTO:
+            raise ValueError("resolved strategy cannot be AUTO")
+        return v
 
 
 class ProjectLanguage(str, Enum):
@@ -308,6 +374,25 @@ class HookEvent(BaseModel):
     transcript_path: str | None = None
 
 
+class TokenCountError(BaseModel):
+    """Error that occurred during token counting."""
+
+    model_config = ConfigDict(frozen=True)
+
+    message: str
+    path: str
+
+
+class CacheUpdateError(BaseModel):
+    """Error that occurred during cache update operation."""
+
+    model_config = ConfigDict(frozen=True)
+
+    message: str
+    session_id: str
+    operation: str = "update_coverage"
+
+
 class FileAnalysisResult(BaseModel):
     """Result from analyzing a single Python file for complexity metrics."""
 
@@ -317,7 +402,7 @@ class FileAnalysisResult(BaseModel):
     difficulty: float
     effort: float
     mi: float
-    tokens: int
+    tokens: int | TokenCountError | None = None
     error: str | None = None
 
 
@@ -394,6 +479,7 @@ class ComplexityDelta(BaseModel):
     single_method_class_change: int = 0
     deep_inheritance_change: int = 0
     passthrough_wrapper_change: int = 0
+    sys_path_manipulation_change: int = 0
 
     def get_smell_changes(self) -> dict[str, int]:
         """Return smell name to change value mapping for direct access."""
@@ -411,6 +497,7 @@ class ComplexityDelta(BaseModel):
             "single_method_class": self.single_method_class_change,
             "deep_inheritance": self.deep_inheritance_change,
             "passthrough_wrapper": self.passthrough_wrapper_change,
+            "sys_path_manipulation": self.sys_path_manipulation_change,
         }
 
 
@@ -472,6 +559,21 @@ class TokenUsage(BaseModel):
         """Percentage of tokens used for exploration (0-100)."""
         total = self.exploration_tokens + self.implementation_tokens
         return (self.exploration_tokens / total * 100) if total > 0 else 0.0
+
+
+class SessionMetadata(BaseModel):
+    """Structured metadata for a saved session, agent-tool-agnostic."""
+
+    session_id: str
+    agent_tool: AgentTool
+    agent_version: str | None = None
+    model: str | None = None
+    start_time: datetime
+    end_time: datetime | None = None
+    total_events: int = 0
+    working_directory: str
+    git_branch: str | None = None
+    token_usage: TokenUsage | None = None
 
 
 class PlanEvolution(BaseModel):
@@ -678,6 +780,20 @@ class NextFeaturePrediction(BaseModel):
         return [story for story in self.user_stories if story.priority <= 2]
 
 
+class ScopedSmell(BaseModel):
+    """A smell classified for a specific session context."""
+
+    model_config = ConfigDict(frozen=True)
+
+    label: str
+    name: str
+    count: int
+    change: int
+    actionable_files: list[str]
+    guidance: str
+    is_blocking: bool
+
+
 class SmellData(BaseModel):
     """Structured smell data with direct field access (no getattr needed)."""
 
@@ -784,7 +900,7 @@ class ExtendedComplexityMetrics(ComplexityMetrics):
     swallowed_exception_count: int = SmellField(
         label="Swallowed Exceptions",
         files_field="swallowed_exception_files",
-        guidance="BLOCKING: You MUST present a table with columns [Location | Purpose] for each and ask user to confirm silent failure is acceptable",
+        guidance="BLOCKING: You MUST present a table with columns [Location | Purpose | Justification ] for each and ask user to confirm silent failure is acceptable",
     )
     type_ignore_count: int = SmellField(
         label="Type Ignores",
@@ -811,6 +927,11 @@ class ExtendedComplexityMetrics(ComplexityMetrics):
         files_field="passthrough_wrapper_files",
         guidance="Function that just delegates to another with same args; consider removing indirection",
     )
+    sys_path_manipulation_count: int = SmellField(
+        label="sys.path Manipulation",
+        files_field="sys_path_manipulation_files",
+        guidance="sys.path mutations bypass the package system — restructure package boundaries and use absolute imports from installed packages instead",
+    )
 
     # LOC metrics (for file filtering in QPE)
     total_loc: int = Field(default=0, description="Total lines of code across all files")
@@ -834,6 +955,7 @@ class ExtendedComplexityMetrics(ComplexityMetrics):
         default_factory=list, description="Files with deep inheritance (>2 bases)"
     )
     passthrough_wrapper_files: list[str] = Field(default_factory=list, description="Files with pass-through wrappers")
+    sys_path_manipulation_files: list[str] = Field(default_factory=list, description="Files with sys.path mutations")
 
     def get_smells(self) -> list["SmellData"]:
         """Return all smell data as structured objects with direct field access."""
@@ -903,15 +1025,20 @@ class ExtendedComplexityMetrics(ComplexityMetrics):
                 count=self.passthrough_wrapper_count,
                 files=self.passthrough_wrapper_files,
             ),
+            SmellData(
+                name="sys_path_manipulation",
+                count=self.sys_path_manipulation_count,
+                files=self.sys_path_manipulation_files,
+            ),
         ]
 
     def get_smell_files(self) -> dict[str, list[str]]:
         """Return smell name to files mapping for filtering."""
         return {smell.name: smell.files for smell in self.get_smells()}
 
-    def get_smell_counts(self) -> dict[str, int]:
-        """Return smell name to count mapping for display."""
-        return {smell.name: smell.count for smell in self.get_smells()}
+    def get_smell_counts(self) -> "SmellCounts":
+        """Return smell counts as a typed model for QPE and display."""
+        return SmellCounts(**{smell.name: smell.count for smell in self.get_smells()})
 
 
 class ExperimentRun(BaseModel):
@@ -919,14 +1046,16 @@ class ExperimentRun(BaseModel):
 
     id: str = Field(default_factory=lambda: str(uuid4()))
     repository_path: Path
-    start_commit: str  # SHA of starting commit (e.g., HEAD~1)
-    target_commit: str  # SHA of target commit (e.g., HEAD)
+    start_commit: str = Field(description="SHA of starting commit (e.g., HEAD~1)")
+    target_commit: str = Field(description="SHA of target commit (e.g., HEAD)")
     process_id: int
     worktree_path: Path | None = None
     start_time: datetime = Field(default_factory=datetime.now)
     end_time: datetime | None = None
     status: ExperimentStatus = ExperimentStatus.PENDING
-    nfp_objective: NextFeaturePrediction | None = None  # Feature objectives for this experiment
+    nfp_objective: NextFeaturePrediction | None = Field(
+        default=None, description="Feature objectives for this experiment"
+    )
 
 
 class ExperimentProgress(BaseModel):
@@ -935,7 +1064,7 @@ class ExperimentProgress(BaseModel):
     experiment_id: str
     timestamp: datetime = Field(default_factory=datetime.now)
     current_metrics: ExtendedComplexityMetrics
-    target_metrics: ExtendedComplexityMetrics  # From HEAD commit
+    target_metrics: ExtendedComplexityMetrics = Field(description="Metrics from HEAD commit")
 
     # Legacy CLI metrics (deprecated - use qpe_score instead)
     cli_score: float = Field(
@@ -958,15 +1087,15 @@ class CommitComplexitySnapshot(BaseModel):
     timestamp: datetime
     complexity_metrics: ExtendedComplexityMetrics
     parent_commit_sha: str | None = None
-    complexity_delta: ComplexityDelta | None = None  # Delta from parent
+    complexity_delta: ComplexityDelta | None = Field(default=None, description="Delta from parent commit")
 
 
 class CommitChain(BaseModel):
     """Represents a chain of commits with complexity evolution."""
 
     repository_path: Path
-    base_commit: str  # Starting point (e.g., HEAD~10)
-    head_commit: str  # End point (e.g., HEAD)
+    base_commit: str = Field(description="Starting point (e.g., HEAD~10)")
+    head_commit: str = Field(description="End point (e.g., HEAD)")
     commits: list[CommitComplexitySnapshot] = Field(default_factory=list)
     total_complexity_growth: int = 0
     average_complexity_per_commit: float = 0.0
@@ -976,8 +1105,8 @@ class ComplexityEvolution(BaseModel):
     """Tracks how complexity evolves across commits."""
 
     commit_sha: str
-    cumulative_complexity: int  # Total complexity up to this commit
-    incremental_complexity: int  # Complexity added in this commit
+    cumulative_complexity: int = Field(description="Total complexity up to this commit")
+    incremental_complexity: int = Field(description="Complexity added in this commit")
     files_modified: int
     functions_added: int
     functions_removed: int
@@ -1214,6 +1343,13 @@ class RepoBaseline(BaseModel):
     qpe_stats: HistoricalMetricStats | None = Field(default=None, description="QPE statistics from commit history")
     current_qpe: "QPEScore | None" = Field(default=None, description="QPE score at HEAD")
 
+    strategy: ResolvedBaselineStrategy | None = Field(
+        default=None,
+        description="Which baseline computation strategy produced this baseline. "
+        "None for legacy baselines computed before strategy support was added. "
+        "Used for cache invalidation: strategy mismatch with current settings triggers recomputation.",
+    )
+
 
 class ZScoreInterpretation(str, Enum):
     """Human-readable interpretation of Z-score values."""
@@ -1295,25 +1431,123 @@ class ImpactAssessment(BaseModel):
         return ZScoreInterpretation.from_z_score(self.qpe_z_score, verbose)
 
 
-class QPEScore(BaseModel):
-    """Quality-Per-Effort score for principled code quality comparison.
+class SmellCounts(BaseModel):
+    """Per-smell occurrence counts from complexity analysis.
 
-    Provides two metrics for different use cases:
-    - qpe: Effort-normalized score for GRPO rollout comparison (same spec)
-    - qpe_absolute: Raw quality without effort normalization (cross-project/temporal)
-
-    Uses MI as sole quality signal with sigmoid-saturated smell penalties.
+    Every field corresponds to a smell in SMELL_REGISTRY. Using explicit fields
+    instead of dict[str, int] so access is validated at construction time and
+    there is no need for .get() defaults or key existence checks.
     """
 
-    qpe: float = Field(description="Quality-per-effort score for GRPO (higher is better)")
-    qpe_absolute: float = Field(description="Quality without effort normalization (for cross-project/temporal)")
+    model_config = ConfigDict(frozen=True)
+
+    orphan_comment: int = 0
+    untracked_todo: int = 0
+    swallowed_exception: int = 0
+    test_skip: int = 0
+    type_ignore: int = 0
+    dynamic_execution: int = 0
+    inline_import: int = 0
+    dict_get_with_default: int = 0
+    hasattr_getattr: int = 0
+    nonempty_init: int = 0
+    single_method_class: int = 0
+    deep_inheritance: int = 0
+    passthrough_wrapper: int = 0
+    sys_path_manipulation: int = 0
+
+
+class QPEScore(BaseModel):
+    """Quality score for principled code quality comparison.
+
+    Single metric: adjusted quality = MI * (1 - smell_penalty) + bonuses.
+    Used for temporal tracking (delta between commits), cross-project comparison,
+    and GRPO rollout advantage computation.
+    """
+
+    qpe: float = Field(description="Adjusted quality score (higher is better)")
     mi_normalized: float = Field(description="Maintainability Index normalized to 0-1")
     smell_penalty: float = Field(description="Penalty from code smells (sigmoid-saturated, 0-0.9 range)")
     adjusted_quality: float = Field(description="MI after smell penalty applied")
-    effort_factor: float = Field(description="log(total_halstead_effort + 1)")
 
-    smell_counts: dict[str, int] = Field(
-        default_factory=dict, description="Individual smell counts contributing to penalty"
+    smell_counts: SmellCounts = Field(
+        default_factory=SmellCounts, description="Individual smell counts contributing to penalty"
+    )
+
+
+class SmellAdvantage(BaseModel):
+    """Per-smell contribution to the GRPO advantage signal.
+
+    The aggregate grpo_advantage() collapses all quality into a single scalar.
+    SmellAdvantage decomposes that into individual smell contributions, enabling:
+    - Interpretability: which specific smells drove the advantage/disadvantage
+    - Per-smell reward shaping: downstream GRPO training can weight individual
+      smell improvements differently
+    - Debugging: understand why two implementations scored differently
+
+    The weighted_delta uses the same weights from SMELL_REGISTRY that feed into
+    QPE's smell_penalty calculation, ensuring consistency between the aggregate
+    and decomposed signals.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    smell_name: str = Field(
+        description="Internal name from SMELL_REGISTRY (e.g., 'swallowed_exception', 'hasattr_getattr')"
+    )
+    baseline_count: int = Field(description="Number of this smell in the baseline/reference implementation")
+    candidate_count: int = Field(description="Number of this smell in the candidate implementation being evaluated")
+    weight: float = Field(
+        description="Smell weight from SMELL_REGISTRY (0.02-0.15). "
+        "Higher weight means this smell has more impact on QPE penalty."
+    )
+    weighted_delta: float = Field(
+        description="(candidate_count - baseline_count) * weight. "
+        "Negative = candidate improved (fewer smells). "
+        "Positive = candidate regressed (more smells). "
+        "Zero = no change for this smell type."
+    )
+
+
+class ImplementationComparison(BaseModel):
+    """Result of comparing two parallel implementations via their subtree prefixes.
+
+    This is the primary output for GRPO-based quality comparison. Two code subtrees
+    (e.g., two implementations of the same feature living side-by-side in the repo)
+    are analyzed independently and compared using QPE + smell decomposition.
+
+    The aggregate_advantage is the main GRPO reward signal: positive means B is
+    better, negative means A is better, bounded to (-1, 1) via tanh.
+    """
+
+    prefix_a: str = Field(
+        description="Subtree path prefix for implementation A (e.g., 'vendor/lib-a'). "
+        "All Python files under this prefix are analyzed as a unit."
+    )
+    prefix_b: str = Field(
+        description="Subtree path prefix for implementation B (e.g., 'vendor/lib-b'). "
+        "Compared against prefix_a to determine which implementation is better."
+    )
+    ref: str = Field(
+        description="Git ref both subtrees were extracted from (e.g., 'HEAD', 'main', commit SHA). "
+        "Both prefixes are analyzed at this same point in history."
+    )
+    qpe_a: "QPEScore" = Field(
+        description="Full QPE score for implementation A including MI, smell penalty, and per-smell counts"
+    )
+    qpe_b: "QPEScore" = Field(
+        description="Full QPE score for implementation B including MI, smell penalty, and per-smell counts"
+    )
+    aggregate_advantage: float = Field(
+        description="GRPO advantage of B over A, bounded (-1, 1) via tanh. "
+        "Positive = B is better quality. Negative = A is better."
+    )
+    smell_advantages: list[SmellAdvantage] = Field(
+        default_factory=list, description="Per-smell advantage breakdown sorted by impact magnitude."
+    )
+    winner: str = Field(
+        description="Which prefix produced better code: prefix_a value, prefix_b value, or 'tie'. "
+        "Tie declared when |aggregate_advantage| < 0.01 (within deadband)."
     )
 
 
@@ -1341,8 +1575,7 @@ class CrossProjectComparison(BaseModel):
 class LeaderboardEntry(BaseModel):
     """A persistent record of a project's quality score at a specific commit.
 
-    Used for cross-project quality comparison. Stores absolute quality (qpe_absolute)
-    rather than effort-normalized QPE, since effort varies between projects.
+    Used for cross-project quality comparison and temporal tracking.
     """
 
     id: int | None = Field(default=None, description="Database ID")
@@ -1351,7 +1584,7 @@ class LeaderboardEntry(BaseModel):
     commit_sha_short: str = Field(description="7-character short git hash")
     commit_sha_full: str = Field(description="Full git hash for deduplication")
     measured_at: datetime = Field(default_factory=datetime.now, description="Date of the analyzed commit")
-    qpe_score: float = Field(description="Absolute quality score (qpe_absolute) for cross-project comparison")
+    qpe_score: float = Field(description="Quality score for cross-project comparison")
     mi_normalized: float = Field(description="Maintainability Index normalized to 0-1")
     smell_penalty: float = Field(description="Penalty from code smells")
     adjusted_quality: float = Field(description="MI × (1 - smell_penalty) + bonuses")
@@ -1414,6 +1647,12 @@ class CurrentChangesAnalysis(BaseModel):
 
     galen_metrics: GalenMetrics | None = Field(
         default=None, description="Developer productivity metrics based on token throughput"
+    )
+
+    smell_advantages: list["SmellAdvantage"] = Field(
+        default_factory=list,
+        description="Per-smell advantage breakdown between baseline and current QPE. "
+        "Shows which specific smells changed and their weighted impact.",
     )
 
 
@@ -1487,6 +1726,16 @@ class ContextCoverage(BaseModel):
     def total_blind_spots(self) -> int:
         """Total number of related files that were never read."""
         return len(self.blind_spots)
+
+    @property
+    def has_gaps(self) -> bool:
+        """Whether there are any coverage gaps requiring attention."""
+        return (
+            self.files_read_before_edit_ratio < 1.0
+            or self.overall_imports_coverage < 100
+            or self.overall_dependents_coverage < 100
+            or bool(self.blind_spots)
+        )
 
 
 class LanguageGuardResult(BaseModel):

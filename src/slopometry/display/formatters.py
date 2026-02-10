@@ -9,10 +9,13 @@ from rich.table import Table
 
 from slopometry.core.models import (
     SMELL_REGISTRY,
+    BaselineStrategy,
     CompactEvent,
     ExperimentDisplayData,
+    ImplementationComparison,
     NFPObjectiveDisplayData,
     ProgressDisplayData,
+    SmellAdvantage,
     SmellCategory,
     TokenUsage,
     ZScoreInterpretation,
@@ -410,7 +413,7 @@ def _display_complexity_metrics(
         category_label = "General" if category == SmellCategory.GENERAL else "Python"
         overview_table.add_row(f"  [dim]{category_label}[/dim]", "")
         for defn in get_smells_by_category(category):
-            count = smell_counts[defn.internal_name]
+            count = getattr(smell_counts, defn.internal_name)
             smell_color = "red" if count > 0 else "green"
             overview_table.add_row(f"    {defn.label}", f"[{smell_color}]{count}[/{smell_color}]")
 
@@ -1154,6 +1157,7 @@ def display_current_impact_analysis(
         baseline=analysis.baseline,
         assessment=analysis.assessment,
         title=impact_title,
+        smell_advantages=analysis.smell_advantages or None,
     )
 
     console.print("\n[bold]Token Impact:[/bold]")
@@ -1295,14 +1299,29 @@ def display_baseline_comparison(
     baseline: RepoBaseline,
     assessment: ImpactAssessment,
     title: str = "Impact Assessment",
+    smell_advantages: list["SmellAdvantage"] | None = None,
 ) -> None:
     """Display baseline comparison with impact assessment.
 
     This is a shared formatter used by current-impact, analyze-commits,
     solo latest, and stop hook feedback.
+
+    Args:
+        baseline: Repository baseline for context
+        assessment: Impact assessment with z-scores
+        title: Section title
+        smell_advantages: Optional per-smell advantage breakdown from QPE comparison
     """
 
-    console.print(f"\n[bold]Repository Baseline ({baseline.total_commits_analyzed} commits):[/bold]")
+    strategy_info = ""
+    if baseline.strategy:
+        strategy_label = baseline.strategy.resolved.value.replace("_", "-")
+        if baseline.strategy.requested == BaselineStrategy.AUTO:
+            strategy_info = f" | strategy: {strategy_label} (auto, merge ratio: {baseline.strategy.merge_ratio:.0%})"
+        else:
+            strategy_info = f" | strategy: {strategy_label}"
+
+    console.print(f"\n[bold]Repository Baseline ({baseline.total_commits_analyzed} commits{strategy_info}):[/bold]")
 
     baseline_table = Table(show_header=True, header_style="bold")
     baseline_table.add_column("Metric", style="cyan")
@@ -1320,6 +1339,12 @@ def display_baseline_comparison(
 
     console.print(baseline_table)
 
+    # Show current QPE absolute value for context
+    if baseline.current_qpe:
+        current_qpe_val = baseline.current_qpe.qpe
+        qpe_abs_color = "green" if current_qpe_val > 0.6 else "yellow" if current_qpe_val > 0.4 else "red"
+        console.print(f"  Current QPE: [{qpe_abs_color}]{current_qpe_val:.4f}[/{qpe_abs_color}]")
+
     console.print(f"\n[bold]{title}:[/bold]")
 
     impact_table = Table(show_header=True, header_style="bold")
@@ -1328,13 +1353,23 @@ def display_baseline_comparison(
     impact_table.add_column("Z-Score", justify="right")
     impact_table.add_column("Assessment", style="dim")
 
-    qpe_color = "green" if assessment.qpe_z_score > 0 else "red" if assessment.qpe_z_score < 0 else "yellow"
-    impact_table.add_row(
-        "QPE (GRPO)",
-        f"[{qpe_color}]{assessment.qpe_delta:+.4f}[/{qpe_color}]",
-        f"{assessment.qpe_z_score:+.2f}",
-        _interpret_z_score(assessment.qpe_z_score),
-    )
+    # Apply deadband: if QPE delta is negligible, don't show misleading z-score
+    qpe_delta_negligible = abs(assessment.qpe_delta) < 0.001
+    if qpe_delta_negligible:
+        impact_table.add_row(
+            "QPE (GRPO)",
+            "[dim]negligible[/dim]",
+            f"[dim]{assessment.qpe_z_score:+.2f}[/dim]",
+            "[dim]change too small to assess[/dim]",
+        )
+    else:
+        qpe_color = "green" if assessment.qpe_z_score > 0 else "red" if assessment.qpe_z_score < 0 else "yellow"
+        impact_table.add_row(
+            "QPE (GRPO)",
+            f"[{qpe_color}]{assessment.qpe_delta:+.4f}[/{qpe_color}]",
+            f"{assessment.qpe_z_score:+.2f}",
+            _interpret_z_score(assessment.qpe_z_score),
+        )
 
     console.print(impact_table)
 
@@ -1355,6 +1390,29 @@ def display_baseline_comparison(
     console.print(f"\n[bold]Overall Impact:[/bold] [{style}]{category_display}[/] ({assessment.impact_score:+.2f})")
     console.print(f"[dim]{message}[/dim]")
 
+    # Show per-smell advantage breakdown when available
+    if smell_advantages:
+        non_zero = [sa for sa in smell_advantages if sa.weighted_delta != 0.0]
+        if non_zero:
+            smell_table = Table(title="Smell Changes (baseline vs current)", show_header=True)
+            smell_table.add_column("Smell", style="cyan")
+            smell_table.add_column("Before", justify="right")
+            smell_table.add_column("After", justify="right")
+            smell_table.add_column("Weight", justify="right")
+            smell_table.add_column("Weighted Δ", justify="right")
+
+            for sa in non_zero:
+                delta_color = "green" if sa.weighted_delta < 0 else "red"
+                smell_table.add_row(
+                    get_smell_label(sa.smell_name),
+                    str(sa.baseline_count),
+                    str(sa.candidate_count),
+                    f"{sa.weight:.2f}",
+                    f"[{delta_color}]{sa.weighted_delta:+.3f}[/{delta_color}]",
+                )
+
+            console.print(smell_table)
+
 
 def display_baseline_comparison_compact(
     baseline: RepoBaseline,
@@ -1364,11 +1422,14 @@ def display_baseline_comparison_compact(
     lines = []
     lines.append(f"Repository Baseline ({baseline.total_commits_analyzed} commits):")
 
-    qpe_sign = "↑" if assessment.qpe_z_score > 0 else "↓" if assessment.qpe_z_score < 0 else "→"
-    qpe_quality = "good" if assessment.qpe_z_score > 0 else "below avg" if assessment.qpe_z_score < 0 else "avg"
-    lines.append(
-        f"  QPE (GRPO): {assessment.qpe_delta:+.4f} (Z: {assessment.qpe_z_score:+.2f} {qpe_sign} {qpe_quality})"
-    )
+    if abs(assessment.qpe_delta) < 0.001:
+        lines.append("  QPE (GRPO): negligible change")
+    else:
+        qpe_sign = "↑" if assessment.qpe_z_score > 0 else "↓" if assessment.qpe_z_score < 0 else "→"
+        qpe_quality = "good" if assessment.qpe_z_score > 0 else "below avg" if assessment.qpe_z_score < 0 else "avg"
+        lines.append(
+            f"  QPE (GRPO): {assessment.qpe_delta:+.4f} (Z: {assessment.qpe_z_score:+.2f} {qpe_sign} {qpe_quality})"
+        )
 
     category_display = assessment.impact_category.value.replace("_", " ").upper()
     lines.append(f"Session Impact: {category_display} ({assessment.impact_score:+.2f})")
@@ -1387,17 +1448,10 @@ def display_qpe_score(
         metrics: Extended complexity metrics for context
     """
 
-    console.print("\n[bold]Quality-Per-Effort Score[/bold]")
+    console.print("\n[bold]Quality Score[/bold]")
 
-    # Show both QPE metrics
-    qpe_color = "green" if qpe_score.qpe > 0.05 else "yellow" if qpe_score.qpe > 0.02 else "red"
-    qual_color = "green" if qpe_score.qpe_absolute > 0.6 else "yellow" if qpe_score.qpe_absolute > 0.4 else "red"
-    console.print(
-        f"  [bold]QPE (GRPO):[/bold] [{qpe_color}]{qpe_score.qpe:.4f}[/{qpe_color}]  [dim]effort-normalized for rollout comparison[/dim]"
-    )
-    console.print(
-        f"  [bold]Quality:[/bold]    [{qual_color}]{qpe_score.qpe_absolute:.4f}[/{qual_color}]  [dim]absolute for cross-project/temporal[/dim]"
-    )
+    qpe_color = "green" if qpe_score.qpe > 0.6 else "yellow" if qpe_score.qpe > 0.4 else "red"
+    console.print(f"  [bold]QPE:[/bold] [{qpe_color}]{qpe_score.qpe:.4f}[/{qpe_color}]")
 
     component_table = Table(title="QPE Components", show_header=True)
     component_table.add_column("Component", style="cyan")
@@ -1423,24 +1477,19 @@ def display_qpe_score(
         "MI × (1 - smell_penalty) + bonuses",
     )
 
-    component_table.add_row(
-        "Effort Factor",
-        f"{qpe_score.effort_factor:.2f}",
-        f"log(Halstead Effort + 1), raw: {metrics.total_effort:.0f}",
-    )
-
     console.print(component_table)
 
-    if any(count > 0 for count in qpe_score.smell_counts.values()):
+    smell_counts_dict = qpe_score.smell_counts.model_dump()
+    if any(count > 0 for count in smell_counts_dict.values()):
         smell_table = Table(title="Code Smell Breakdown", show_header=True)
         smell_table.add_column("Smell", style="cyan")
         smell_table.add_column("Count", justify="right")
 
         for category in [SmellCategory.GENERAL, SmellCategory.PYTHON]:
             category_smells = [
-                (name, qpe_score.smell_counts[name])
-                for name in qpe_score.smell_counts
-                if SMELL_REGISTRY.get(name) and SMELL_REGISTRY[name].category == category
+                (name, getattr(qpe_score.smell_counts, name))
+                for name, defn in SMELL_REGISTRY.items()
+                if defn.category == category
             ]
             category_smells = [(n, c) for n, c in category_smells if c > 0]
             if not category_smells:
@@ -1472,11 +1521,10 @@ def display_cross_project_comparison(comparison: "CrossProjectComparison") -> No
     table.add_column("QPE", justify="right")
     table.add_column("MI", justify="right")
     table.add_column("Smell Penalty", justify="right")
-    table.add_column("Effort", justify="right")
 
     for rank, result in enumerate(comparison.rankings, 1):
         rank_style = "green" if rank == 1 else "yellow" if rank == 2 else ""
-        qpe_color = "green" if result.qpe_score.qpe > 0.05 else "yellow" if result.qpe_score.qpe > 0.02 else "red"
+        qpe_color = "green" if result.qpe_score.qpe > 0.6 else "yellow" if result.qpe_score.qpe > 0.4 else "red"
         smell_color = (
             "green"
             if result.qpe_score.smell_penalty < 0.1
@@ -1491,11 +1539,10 @@ def display_cross_project_comparison(comparison: "CrossProjectComparison") -> No
             f"[{qpe_color}]{result.qpe_score.qpe:.4f}[/{qpe_color}]",
             f"{result.metrics.average_mi:.1f}",
             f"[{smell_color}]{result.qpe_score.smell_penalty:.3f}[/{smell_color}]",
-            f"{result.metrics.total_effort:.0f}",
         )
 
     console.print(table)
-    console.print("\n[dim]Higher QPE = better quality per effort | Higher Quality = better absolute quality[/dim]")
+    console.print("\n[dim]Higher QPE = better quality[/dim]")
 
 
 def display_leaderboard(entries: list) -> None:
@@ -1546,3 +1593,70 @@ def display_leaderboard(entries: list) -> None:
 
     console.print(table)
     console.print("\n[dim]Higher Quality = better absolute code quality. Use --append to add projects.[/dim]")
+
+
+def display_implementation_comparison(comparison: ImplementationComparison) -> None:
+    """Display implementation comparison with QPE breakdown and per-smell advantage.
+
+    Args:
+        comparison: ImplementationComparison result from compare_subtrees()
+    """
+    console.print(f"\n[bold]Implementation Comparison ({comparison.ref})[/bold]")
+    console.print(f"  A: {comparison.prefix_a}")
+    console.print(f"  B: {comparison.prefix_b}")
+
+    # QPE summary table
+    qpe_table = Table(title="QPE Comparison", show_header=True)
+    qpe_table.add_column("Metric", style="cyan")
+    qpe_table.add_column("A", justify="right")
+    qpe_table.add_column("B", justify="right")
+
+    qpe_a_color = "green" if comparison.qpe_a.qpe > 0.6 else "yellow" if comparison.qpe_a.qpe > 0.4 else "red"
+    qpe_b_color = "green" if comparison.qpe_b.qpe > 0.6 else "yellow" if comparison.qpe_b.qpe > 0.4 else "red"
+
+    qpe_table.add_row(
+        "QPE",
+        f"[{qpe_a_color}]{comparison.qpe_a.qpe:.4f}[/{qpe_a_color}]",
+        f"[{qpe_b_color}]{comparison.qpe_b.qpe:.4f}[/{qpe_b_color}]",
+    )
+    qpe_table.add_row(
+        "MI (normalized)",
+        f"{comparison.qpe_a.mi_normalized:.3f}",
+        f"{comparison.qpe_b.mi_normalized:.3f}",
+    )
+    qpe_table.add_row(
+        "Smell Penalty",
+        f"{comparison.qpe_a.smell_penalty:.3f}",
+        f"{comparison.qpe_b.smell_penalty:.3f}",
+    )
+    console.print(qpe_table)
+
+    # Advantage display
+    adv = comparison.aggregate_advantage
+    adv_color = "green" if adv > 0.01 else "red" if adv < -0.01 else "yellow"
+    console.print(f"\n  [bold]GRPO Advantage (B over A):[/bold] [{adv_color}]{adv:+.4f}[/{adv_color}]")
+
+    winner_color = "green" if comparison.winner != "tie" else "yellow"
+    console.print(f"  [bold]Winner:[/bold] [{winner_color}]{comparison.winner}[/{winner_color}]")
+
+    # Per-smell advantage breakdown (only show non-zero)
+    non_zero_smells = [sa for sa in comparison.smell_advantages if sa.weighted_delta != 0.0]
+    if non_zero_smells:
+        smell_table = Table(title="Per-Smell Advantage (B vs A)", show_header=True)
+        smell_table.add_column("Smell", style="cyan")
+        smell_table.add_column("A Count", justify="right")
+        smell_table.add_column("B Count", justify="right")
+        smell_table.add_column("Weight", justify="right")
+        smell_table.add_column("Weighted Δ", justify="right")
+
+        for sa in non_zero_smells:
+            delta_color = "green" if sa.weighted_delta < 0 else "red"
+            smell_table.add_row(
+                get_smell_label(sa.smell_name),
+                str(sa.baseline_count),
+                str(sa.candidate_count),
+                f"{sa.weight:.2f}",
+                f"[{delta_color}]{sa.weighted_delta:+.3f}[/{delta_color}]",
+            )
+
+        console.print(smell_table)

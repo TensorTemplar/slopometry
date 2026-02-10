@@ -98,7 +98,7 @@ class TestCodeAnalyzer:
         assert result.path == str(test_file)
         assert result.error is None
         assert isinstance(result.complexity, int)
-        assert isinstance(result.tokens, int)
+        assert result.tokens is not None and isinstance(result.tokens, int)
 
     def test_analyze_file__returns_error_for_missing_file(self, tmp_path: Path) -> None:
         """Should return result with error for missing file."""
@@ -109,6 +109,7 @@ class TestCodeAnalyzer:
 
         assert result.path == str(missing_file)
         assert result.error is not None
+        assert result.tokens is None
 
     def test_analyze_files__returns_results_for_multiple_files(self, tmp_path: Path) -> None:
         """Should return list of results for multiple files."""

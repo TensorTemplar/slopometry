@@ -16,7 +16,7 @@ from slopometry.core.models import (
 class TestSmellRegistry:
     """Tests for SMELL_REGISTRY completeness and consistency."""
 
-    def test_smell_registry__has_all_13_smells(self) -> None:
+    def test_smell_registry__has_all_14_smells(self) -> None:
         """Verify all expected smells are in the registry."""
         expected_smells = {
             "orphan_comment",
@@ -33,6 +33,7 @@ class TestSmellRegistry:
             "single_method_class",
             "deep_inheritance",
             "passthrough_wrapper",
+            "sys_path_manipulation",
         }
         assert set(SMELL_REGISTRY.keys()) == expected_smells
 
@@ -71,6 +72,7 @@ class TestSmellRegistry:
             "single_method_class",
             "deep_inheritance",
             "passthrough_wrapper",
+            "sys_path_manipulation",
         }
         for name in python_smells:
             assert SMELL_REGISTRY[name].category == SmellCategory.PYTHON
@@ -97,7 +99,7 @@ class TestSmellHelpers:
     def test_get_smells_by_category__returns_python_smells(self) -> None:
         """Verify get_smells_by_category returns all PYTHON smells."""
         python = get_smells_by_category(SmellCategory.PYTHON)
-        assert len(python) == 7  # 4 original + 3 abstraction smells
+        assert len(python) == 8  # 4 original + 3 abstraction smells + sys_path_manipulation
         assert all(d.category == SmellCategory.PYTHON for d in python)
 
     def test_get_smells_by_category__sorted_by_weight_descending(self) -> None:
@@ -172,7 +174,7 @@ class TestExtendedComplexityMetricsSmellMethods:
     def test_get_smells__returns_all_smell_data(self, metrics_with_smells: ExtendedComplexityMetrics) -> None:
         """Verify get_smells returns SmellData for all smells."""
         smells = metrics_with_smells.get_smells()
-        assert len(smells) == 13  # 10 original + 3 abstraction smells
+        assert len(smells) == 14  # 10 original + 3 abstraction smells + sys_path_manipulation
         assert all(isinstance(s, SmellData) for s in smells)
 
     def test_get_smells__includes_correct_counts(self, metrics_with_smells: ExtendedComplexityMetrics) -> None:
@@ -198,15 +200,17 @@ class TestExtendedComplexityMetricsSmellMethods:
         assert smell_files["swallowed_exception"] == ["error_handler.py"]
         assert smell_files["test_skip"] == []
 
-    def test_get_smell_counts__returns_name_to_count_mapping(
+    def test_get_smell_counts__returns_typed_smell_counts_model(
         self, metrics_with_smells: ExtendedComplexityMetrics
     ) -> None:
-        """Verify get_smell_counts returns dict mapping smell names to counts."""
+        """Verify get_smell_counts returns SmellCounts model with correct values."""
+        from slopometry.core.models import SmellCounts
+
         smell_counts = metrics_with_smells.get_smell_counts()
-        assert len(smell_counts) == 13  # 10 original + 3 abstraction smells
-        assert smell_counts["orphan_comment"] == 3
-        assert smell_counts["swallowed_exception"] == 1
-        assert smell_counts["test_skip"] == 0
+        assert isinstance(smell_counts, SmellCounts)
+        assert smell_counts.orphan_comment == 3
+        assert smell_counts.swallowed_exception == 1
+        assert smell_counts.test_skip == 0
 
 
 class TestComplexityDeltaSmellChanges:
@@ -220,7 +224,7 @@ class TestComplexityDeltaSmellChanges:
             test_skip_change=0,
         )
         changes = delta.get_smell_changes()
-        assert len(changes) == 13  # 10 original + 3 abstraction smells
+        assert len(changes) == 14  # 10 original + 3 abstraction smells + sys_path_manipulation
         assert changes["orphan_comment"] == 2
         assert changes["swallowed_exception"] == -1
         assert changes["test_skip"] == 0

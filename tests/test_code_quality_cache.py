@@ -5,7 +5,7 @@ import pytest
 from conftest import make_test_metrics
 
 from slopometry.core.code_quality_cache import CodeQualityCacheManager
-from slopometry.core.models import ExtendedComplexityMetrics
+from slopometry.core.models import CacheUpdateError, ExtendedComplexityMetrics
 
 
 class TestCodeQualityCacheManager:
@@ -136,8 +136,10 @@ class TestCodeQualityCacheManager:
         assert metrics.test_coverage_percent == 85.5
         assert metrics.test_coverage_source == "coverage.xml"
 
-    def test_update_cached_coverage__returns_false_for_missing_session(self, db_connection):
-        """Test that update_cached_coverage returns False if session doesn't exist."""
+    def test_update_cached_coverage__returns_error_for_missing_session(self, db_connection):
+        """Test that update_cached_coverage returns CacheUpdateError if session doesn't exist."""
         manager = CodeQualityCacheManager(db_connection)
-        success = manager.update_cached_coverage("nonexistent", 75.0, "coverage.xml")
-        assert success is False
+        result = manager.update_cached_coverage("nonexistent", 75.0, "coverage.xml")
+        assert isinstance(result, CacheUpdateError)
+        assert result.session_id == "nonexistent"
+        assert "No cached metrics found" in result.message

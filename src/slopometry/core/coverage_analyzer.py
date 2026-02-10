@@ -11,7 +11,9 @@ from pydantic import BaseModel, Field
 class CoverageResult(BaseModel):
     """Result of coverage analysis from existing files."""
 
-    total_coverage_percent: float = Field(default=0.0, description="Total test coverage percentage (0-100)")
+    total_coverage_percent: float | None = Field(
+        default=None, description="Total test coverage percentage (0-100), None if unavailable"
+    )
     num_statements: int = Field(default=0, description="Total number of statements")
     covered_statements: int = Field(default=0, description="Number of covered statements")
     missing_statements: int = Field(default=0, description="Number of missing statements")
@@ -128,7 +130,7 @@ class CoverageAnalyzer:
             try:
                 total_percent = cov.report(file=output, show_missing=False)
             except Exception:
-                total_percent = 0.0
+                total_percent = None  # N/A - report failed but file parsing may still work
 
             data = cov.get_data()
             measured_files = data.measured_files()

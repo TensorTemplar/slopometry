@@ -20,6 +20,7 @@ from slopometry.core.models import (
     NotificationInput,
     PostToolUseInput,
     PreToolUseInput,
+    ScopedSmell,
     StopInput,
     SubagentStopInput,
     ToolType,
@@ -378,21 +379,26 @@ def handle_stop_event(session_id: str, parsed_input: "StopInput | SubagentStopIn
     cache_stable_parts: list[str] = []  # Only code-based feedback (stable between tool calls)
 
     # Get edited files from git (more reliable than transcript-based context coverage)
-    edited_files = get_modified_python_files(stats.working_directory)
+    try:
+        edited_files = get_modified_python_files(stats.working_directory)
+    except (ValueError, RuntimeError) as e:
+        logger.debug(f"Failed to get modified Python files: {e}")
+        edited_files = set()
 
     # Code smells - ALWAYS check (independent of enable_complexity_feedback)
     # This is stable (based on code state, not session activity)
     if current_metrics:
-        smell_feedback, has_smells, _ = format_code_smell_feedback(
-            current_metrics, delta, edited_files, session_id, stats.working_directory, stats.context_coverage
+        scoped_smells = scope_smells_for_session(
+            current_metrics, delta, edited_files, stats.working_directory, stats.context_coverage
         )
+        smell_feedback, has_smells, _ = format_code_smell_feedback(scoped_smells, session_id, stats.working_directory)
         if has_smells:
             feedback_parts.append(smell_feedback)
             cache_stable_parts.append(smell_feedback)
 
     # Context coverage - informational but NOT stable (changes with every Read/Glob/Grep)
     # Excluded from cache hash to avoid invalidation on tool calls
-    if settings.enable_complexity_feedback and stats.context_coverage and stats.context_coverage.files_edited:
+    if settings.enable_complexity_feedback and stats.context_coverage and stats.context_coverage.has_gaps:
         context_feedback = format_context_coverage_feedback(stats.context_coverage)
         if context_feedback:
             feedback_parts.append(context_feedback)
@@ -510,14 +516,11 @@ def extract_dev_guidelines_from_claude_md(working_directory: str) -> str:
 
 
 def _get_related_files_via_imports(edited_files: set[str], working_directory: str) -> set[str]:
-    """Build set of files related to edited files via import graph.
+    """Build set of files related to edited files for blocking smell scoping.
 
-    Uses the ContextCoverageAnalyzer to find:
-    - Files that import the edited files (dependents) - these could break from our changes
-    - Test files for edited files
-
-    Note: We intentionally do NOT include files that edited files import, because
-    changes to the edited file don't affect its dependencies.
+    Only includes edited files and their test files. Does NOT include reverse
+    import graph dependents — those files weren't edited, so their pre-existing
+    smells are not actionable in the stop hook.
 
     Args:
         edited_files: Set of files edited in this session
@@ -537,9 +540,6 @@ def _get_related_files_via_imports(edited_files: set[str], working_directory: st
     analyzer._build_import_graph()
 
     for edited_file in edited_files:
-        dependents = analyzer._reverse_import_graph.get(edited_file, set())
-        related.update(dependents)
-
         test_files = analyzer._find_test_files(edited_file)
         related.update(test_files)
 
@@ -564,40 +564,37 @@ def _is_file_related_to_edits(smell_file: str, edited_files: set[str], related_f
     return smell_file in edited_files or smell_file in related_files
 
 
-def format_code_smell_feedback(
-    current_metrics: "ExtendedComplexityMetrics",
-    delta: "ComplexityDelta | None",
-    edited_files: set[str] | None = None,
-    session_id: str | None = None,
-    working_directory: str | None = None,
-    context_coverage: "ContextCoverage | None" = None,
-) -> tuple[str, bool, bool]:
-    """Format code smell feedback using get_smells() for direct field access.
+def scope_smells_for_session(
+    current_metrics: ExtendedComplexityMetrics,
+    delta: ComplexityDelta | None,
+    edited_files: set[str],
+    working_directory: str,
+    context_coverage: ContextCoverage | None = None,
+) -> list[ScopedSmell]:
+    """Classify smells for a specific session context.
+
+    Extracts the scoping/classification logic that determines which smells are
+    blocking vs informational and which files are actionable for this session.
 
     Args:
         current_metrics: Current complexity metrics with code smell counts
         delta: Optional complexity delta showing changes
-        edited_files: Set of files edited in this session (for blocking smell filtering)
-        session_id: Session ID for generating the smell-details command
+        edited_files: Set of files edited in this session
         working_directory: Path to working directory for import graph analysis
         context_coverage: Optional context coverage for detecting unread related tests
 
     Returns:
-        Tuple of (formatted feedback string, has_smells, has_blocking_smells)
-        - has_smells: whether any code smells were detected
-        - has_blocking_smells: whether any BLOCKING smells in edited files were detected
+        List of ScopedSmell instances classified for this session
     """
     blocking_smell_names = {"test_skip", "swallowed_exception"}
-    edited_files = edited_files or set()
 
     related_via_imports: set[str] = set()
     if edited_files:
-        if not working_directory:
-            raise ValueError("working_directory is required when edited_files is provided")
         related_via_imports = _get_related_files_via_imports(edited_files, working_directory)
 
-    blocking_smells: list[tuple[str, int, int, str, list[str]]] = []
+    result: list[ScopedSmell] = []
 
+    # Synthetic blocking smell: unread related tests
     if context_coverage:
         unread_tests: list[str] = []
         for file_cov in context_coverage.file_coverage:
@@ -605,10 +602,17 @@ def format_code_smell_feedback(
                 if test_file not in file_cov.test_files_read and test_file not in unread_tests:
                     unread_tests.append(test_file)
         if unread_tests:
-            guidance = "BLOCKING: You MUST review these tests to ensure changes are accounted for and necessary coverage is added for new functionality"
-            blocking_smells.append(("Unread Related Tests", len(unread_tests), 0, guidance, unread_tests))
-
-    other_smells: list[tuple[str, int, int, list[str], str]] = []
+            result.append(
+                ScopedSmell(
+                    label="Unread Related Tests",
+                    name="unread_related_tests",
+                    count=len(unread_tests),
+                    change=0,
+                    actionable_files=unread_tests,
+                    guidance="BLOCKING: You MUST review these tests to ensure changes are accounted for and necessary coverage is added for new functionality",
+                    is_blocking=True,
+                )
+            )
 
     smell_changes = delta.get_smell_changes() if delta else {}
 
@@ -624,12 +628,71 @@ def format_code_smell_feedback(
             unrelated_files = [f for f in smell.files if f not in related_files]
 
             if related_files:
-                blocking_smells.append((smell.label, len(related_files), change, guidance, related_files))
+                result.append(
+                    ScopedSmell(
+                        label=smell.label,
+                        name=smell.name,
+                        count=len(related_files),
+                        change=change,
+                        actionable_files=related_files,
+                        guidance=guidance,
+                        is_blocking=True,
+                    )
+                )
 
             if unrelated_files:
-                other_smells.append((smell.label, len(unrelated_files), 0, unrelated_files, guidance))
+                result.append(
+                    ScopedSmell(
+                        label=smell.label,
+                        name=smell.name,
+                        count=len(unrelated_files),
+                        change=0,
+                        actionable_files=unrelated_files,
+                        guidance=guidance,
+                        is_blocking=False,
+                    )
+                )
         else:
-            other_smells.append((smell.label, smell.count, change, list(smell.files), guidance))
+            if edited_files:
+                actionable_files = [
+                    f for f in smell.files if _is_file_related_to_edits(f, edited_files, related_via_imports)
+                ]
+            else:
+                actionable_files = list(smell.files)
+            result.append(
+                ScopedSmell(
+                    label=smell.label,
+                    name=smell.name,
+                    count=smell.count,
+                    change=change,
+                    actionable_files=actionable_files,
+                    guidance=guidance,
+                    is_blocking=False,
+                )
+            )
+
+    return result
+
+
+def format_code_smell_feedback(
+    scoped_smells: list[ScopedSmell],
+    session_id: str | None = None,
+    working_directory: str | None = None,
+) -> tuple[str, bool, bool]:
+    """Format pre-classified smell data into feedback output.
+
+    Args:
+        scoped_smells: Pre-classified smells from scope_smells_for_session
+        session_id: Session ID for generating the smell-details command
+        working_directory: Path to working directory (unused, kept for caller compatibility)
+
+    Returns:
+        Tuple of (formatted feedback string, has_smells, has_blocking_smells)
+        - has_smells: whether any code smells were detected
+        - has_blocking_smells: whether any BLOCKING smells in edited files were detected
+    """
+    blocking_smells = [s for s in scoped_smells if s.is_blocking]
+    other_smells = [s for s in scoped_smells if not s.is_blocking]
 
     lines: list[str] = []
     has_blocking = len(blocking_smells) > 0
@@ -638,20 +701,18 @@ def format_code_smell_feedback(
         lines.append("")
         lines.append("**ACTION REQUIRED** - The following issues are in files that are in scope for this PR:")
         lines.append("")
-        for label, file_count, change, guidance, related_files in blocking_smells:
-            change_str = f" (+{change})" if change > 0 else f" ({change})" if change < 0 else ""
-            lines.append(f"   • **{label}**: {file_count} file(s){change_str}")
-            for f in related_files[:5]:
+        for smell in blocking_smells:
+            change_str = f" (+{smell.change})" if smell.change > 0 else f" ({smell.change})" if smell.change < 0 else ""
+            lines.append(f"   • **{smell.label}**: {smell.count} file(s){change_str}")
+            for f in smell.actionable_files[:5]:
                 lines.append(f"     - {truncate_path(f, max_width=60)}")
-            if len(related_files) > 5:
-                lines.append(f"     ... and {len(related_files) - 5} more")
-            if guidance:
-                lines.append(f"     → {guidance}")
+            if len(smell.actionable_files) > 5:
+                lines.append(f"     ... and {len(smell.actionable_files) - 5} more")
+            if smell.guidance:
+                lines.append(f"     → {smell.guidance}")
         lines.append("")
 
-    other_smells_with_changes = [
-        (label, count, change, files, guidance) for label, count, change, files, guidance in other_smells if change != 0
-    ]
+    other_smells_with_changes = [s for s in other_smells if s.change != 0]
     if other_smells_with_changes:
         if not blocking_smells:
             lines.append("")
@@ -659,15 +720,15 @@ def format_code_smell_feedback(
             "**Code Smells** (Any increase requires review, irrespective of which session edited related files):"
         )
         lines.append("")
-        for label, count, change, files, guidance in other_smells_with_changes:
-            change_str = f" (+{change})" if change > 0 else f" ({change})"
-            lines.append(f"   • **{label}**: {count}{change_str}")
-            for f in files[:3]:
+        for smell in other_smells_with_changes:
+            change_str = f" (+{smell.change})" if smell.change > 0 else f" ({smell.change})"
+            lines.append(f"   • **{smell.label}**: {smell.count}{change_str}")
+            for f in smell.actionable_files[:3]:
                 lines.append(f"     - {truncate_path(f, max_width=60)}")
-            if len(files) > 3:
-                lines.append(f"     ... and {len(files) - 3} more")
-            if guidance:
-                lines.append(f"     → {guidance}")
+            if len(smell.actionable_files) > 3:
+                lines.append(f"     ... and {len(smell.actionable_files) - 3} more")
+            if smell.guidance:
+                lines.append(f"     → {smell.guidance}")
 
     has_smells = len(blocking_smells) > 0 or len(other_smells_with_changes) > 0
     if has_smells:
