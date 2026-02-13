@@ -7,10 +7,12 @@ from slopometry.core.models import (
     BaselineStrategy,
     ContextCoverage,
     ExtendedComplexityMetrics,
+    FeatureDisplayData,
     FileCoverageStatus,
     ImplementationComparison,
     QPEScore,
     ResolvedBaselineStrategy,
+    SessionDisplayData,
     SmellAdvantage,
     UserStoryDisplayData,
     UserStoryStatistics,
@@ -299,3 +301,100 @@ def test_implementation_comparison__round_trips_json() -> None:
     restored = ImplementationComparison.model_validate_json(json_str)
     assert restored.prefix_a == comparison.prefix_a
     assert len(restored.smell_advantages) == 1
+
+
+class TestSessionDisplayData:
+    """Test the session display data model."""
+
+    def test_model_creation__creates_display_data_when_values_provided(self) -> None:
+        """Test creating display data model when values provided."""
+        display_data = SessionDisplayData(
+            session_id="abc12345",
+            start_time="2025-07-18 13:06",
+            total_events=50,
+            tools_used=12,
+            project_name="my-project",
+            project_source="git",
+        )
+
+        assert display_data.session_id == "abc12345"
+        assert display_data.start_time == "2025-07-18 13:06"
+        assert display_data.total_events == 50
+        assert display_data.tools_used == 12
+        assert display_data.project_name == "my-project"
+        assert display_data.project_source == "git"
+
+    def test_model_creation__handles_none_project(self) -> None:
+        """Test that project_name and project_source can be None."""
+        display_data = SessionDisplayData(
+            session_id="abc12345",
+            start_time="2025-07-18 13:06",
+            total_events=10,
+            tools_used=5,
+            project_name=None,
+            project_source=None,
+        )
+
+        assert display_data.project_name is None
+        assert display_data.project_source is None
+
+    def test_model_round_trip__serializes_and_deserializes(self) -> None:
+        """Test JSON serialization round-trip."""
+        display_data = SessionDisplayData(
+            session_id="session-xyz",
+            start_time="2025-01-01 12:00",
+            total_events=25,
+            tools_used=8,
+            project_name="test-project",
+            project_source="pyproject",
+        )
+
+        json_str = display_data.model_dump_json()
+        restored = SessionDisplayData.model_validate_json(json_str)
+        assert restored == display_data
+
+
+class TestFeatureDisplayData:
+    """Test the feature display data model."""
+
+    def test_model_creation__creates_display_data_when_values_provided(self) -> None:
+        """Test creating display data model when values provided."""
+        display_data = FeatureDisplayData(
+            feature_id="feat-001",
+            feature_message="Add user authentication",
+            commits_display="abc123 → def456",
+            best_entry_id="entry-789",
+            merge_message="feat: implement login system",
+        )
+
+        assert display_data.feature_id == "feat-001"
+        assert display_data.feature_message == "Add user authentication"
+        assert display_data.commits_display == "abc123 → def456"
+        assert display_data.best_entry_id == "entry-789"
+        assert display_data.merge_message == "feat: implement login system"
+
+    def test_model_creation__handles_na_best_entry(self) -> None:
+        """Test that best_entry_id can be 'N/A' when no user story exists."""
+        display_data = FeatureDisplayData(
+            feature_id="feat-002",
+            feature_message="Refactor core module",
+            commits_display="xyz123 → abc456",
+            best_entry_id="N/A",
+            merge_message="refactor: clean up codebase",
+        )
+
+        assert display_data.best_entry_id == "N/A"
+
+    def test_model_round_trip__serializes_and_deserializes(self) -> None:
+        """Test JSON serialization round-trip."""
+        display_data = FeatureDisplayData(
+            feature_id="feat-003",
+            feature_message="New feature implementation",
+            commits_display="000111 → 222333",
+            best_entry_id="entry-555",
+            merge_message="feat: implement something great",
+        )
+
+        json_str = display_data.model_dump_json()
+        restored = FeatureDisplayData.model_validate_json(json_str)
+        assert restored == display_data

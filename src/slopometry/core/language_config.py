@@ -8,14 +8,14 @@ This module provides a registry of language configurations that define:
 The design allows easy extension to new languages while keeping type safety.
 """
 
-from dataclasses import dataclass, field
 from pathlib import Path
+
+from pydantic import BaseModel, Field
 
 from slopometry.core.models import ProjectLanguage
 
 
-@dataclass(frozen=True)
-class LanguageConfig:
+class LanguageConfig(BaseModel):
     """Configuration for a programming language's file patterns.
 
     Attributes:
@@ -26,11 +26,13 @@ class LanguageConfig:
         test_patterns: Glob patterns for test files
     """
 
-    language: ProjectLanguage
+    model_config = {"frozen": True}
+
+    language: "ProjectLanguage"
     extensions: tuple[str, ...]
     git_patterns: tuple[str, ...]
-    ignore_dirs: tuple[str, ...] = field(default_factory=tuple)
-    test_patterns: tuple[str, ...] = field(default_factory=tuple)
+    ignore_dirs: tuple[str, ...] = Field(default_factory=tuple)
+    test_patterns: tuple[str, ...] = Field(default_factory=tuple)
 
     def matches_extension(self, file_path: Path | str) -> bool:
         """Check if a file path matches this language's extensions."""

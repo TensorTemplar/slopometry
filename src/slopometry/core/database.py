@@ -31,6 +31,7 @@ from slopometry.core.models import (
     QPEScore,
     RepoBaseline,
     ResolvedBaselineStrategy,
+    SessionDisplayData,
     SessionStatistics,
     ToolType,
     UserStory,
@@ -824,18 +825,18 @@ class EventDatabase:
             rows = conn.execute(query, params).fetchall()
             return [row[0] for row in rows]
 
-    def get_sessions_summary(self, limit: int | None = None) -> list[dict]:
+    def get_sessions_summary(self, limit: int | None = None) -> list[SessionDisplayData]:
         """Get lightweight session summaries for list display."""
         with self._get_db_connection() as conn:
             query = """
-                SELECT 
+                SELECT
                     session_id,
                     MIN(timestamp) as start_time,
                     COUNT(*) as total_events,
                     COUNT(DISTINCT tool_type) as tools_used,
                     project_name,
                     project_source
-                FROM hook_events 
+                FROM hook_events
                 WHERE session_id IS NOT NULL
                 GROUP BY session_id, project_name, project_source
                 ORDER BY MIN(timestamp) DESC
@@ -848,14 +849,14 @@ class EventDatabase:
             summaries = []
             for row in rows:
                 summaries.append(
-                    {
-                        "session_id": row[0],
-                        "start_time": row[1],
-                        "total_events": row[2],
-                        "tools_used": row[3] if row[3] is not None else 0,
-                        "project_name": row[4],
-                        "project_source": row[5],
-                    }
+                    SessionDisplayData(
+                        session_id=row[0],
+                        start_time=str(row[1]),
+                        total_events=row[2],
+                        tools_used=row[3] if row[3] is not None else 0,
+                        project_name=row[4],
+                        project_source=row[5],
+                    )
                 )
 
             return summaries

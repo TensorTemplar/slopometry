@@ -4,6 +4,9 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+from pydantic import ValidationError
+
 from conftest import make_test_metrics
 
 from slopometry.core.models import (
@@ -16,11 +19,54 @@ from slopometry.core.models import (
 )
 from slopometry.summoner.services.baseline_service import (
     BaselineService,
+    CommitDelta,
     CommitInfo,
     _compute_single_delta_task,
     _parse_commit_log,
 )
 from slopometry.summoner.services.qpe_calculator import QPE_WEIGHT_VERSION
+
+
+class TestCommitInfo:
+    """Tests for CommitInfo model."""
+
+    def test_commit_info__creation_with_required_fields(self) -> None:
+        """Test creating CommitInfo with required fields."""
+        commit = CommitInfo(sha="abc123", timestamp=datetime.now())
+        assert commit.sha == "abc123"
+        assert isinstance(commit.timestamp, datetime)
+
+    def test_commit_info__round_trips_json(self) -> None:
+        """Test JSON serialization round-trip."""
+        ts = datetime(2025, 1, 15, 12, 30, 0)
+        commit = CommitInfo(sha="test-sha", timestamp=ts)
+        json_str = commit.model_dump_json()
+        restored = CommitInfo.model_validate_json(json_str)
+        assert restored == commit
+
+
+class TestCommitDelta:
+    """Tests for CommitDelta model."""
+
+    def test_commit_delta__creation_with_all_fields(self) -> None:
+        """Test creating CommitDelta with all fields."""
+        delta = CommitDelta(
+            cc_delta=5.0,
+            effort_delta=100.0,
+            mi_delta=-2.5,
+            qpe_delta=0.01,
+        )
+        assert delta.cc_delta == 5.0
+        assert delta.effort_delta == 100.0
+        assert delta.mi_delta == -2.5
+        assert delta.qpe_delta == 0.01
+
+    def test_commit_delta__round_trips_json(self) -> None:
+        """Test JSON serialization round-trip."""
+        delta = CommitDelta(cc_delta=1.0, effort_delta=50.0, mi_delta=-1.0, qpe_delta=0.005)
+        json_str = delta.model_dump_json()
+        restored = CommitDelta.model_validate_json(json_str)
+        assert restored == delta
 
 
 class TestComputeStats:

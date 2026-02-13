@@ -4,10 +4,11 @@ import logging
 import shutil
 import subprocess
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from statistics import mean, median, stdev
+
+from pydantic import BaseModel, Field
 
 from slopometry.core.complexity_analyzer import ComplexityAnalyzer
 from slopometry.core.database import EventDatabase
@@ -24,16 +25,14 @@ from slopometry.summoner.services.qpe_calculator import QPE_WEIGHT_VERSION, calc
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class CommitInfo:
+class CommitInfo(BaseModel):
     """Commit SHA and timestamp."""
 
     sha: str
     timestamp: datetime
 
 
-@dataclass
-class CommitDelta:
+class CommitDelta(BaseModel):
     """Metrics delta between two consecutive commits."""
 
     cc_delta: float

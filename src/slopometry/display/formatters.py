@@ -12,9 +12,11 @@ from slopometry.core.models import (
     BaselineStrategy,
     CompactEvent,
     ExperimentDisplayData,
+    FeatureDisplayData,
     ImplementationComparison,
     NFPObjectiveDisplayData,
     ProgressDisplayData,
+    SessionDisplayData,
     SmellAdvantage,
     SmellCategory,
     TokenUsage,
@@ -820,7 +822,7 @@ def _format_coverage_ratio(read: int, total: int) -> str:
     return f"[{color}]{read}/{total}[/{color}]"
 
 
-def create_sessions_table(sessions_data: list[dict]) -> Table:
+def create_sessions_table(sessions_data: list[SessionDisplayData]) -> Table:
     """Create a Rich table for displaying session list."""
     table = Table(title="Recent Sessions")
     table.add_column("Session ID", style="cyan")
@@ -831,16 +833,16 @@ def create_sessions_table(sessions_data: list[dict]) -> Table:
 
     for session_data in sessions_data:
         project_display = (
-            f"{session_data['project_name']} ({session_data['project_source']})"
-            if session_data["project_name"]
+            f"{session_data.project_name} ({session_data.project_source})"
+            if session_data.project_name
             else "N/A"
         )
         table.add_row(
-            session_data["session_id"],
+            session_data.session_id,
             project_display,
-            session_data["start_time"],
-            str(session_data["total_events"]),
-            str(session_data["tools_used"]),
+            session_data.start_time,
+            str(session_data.total_events),
+            str(session_data.tools_used),
         )
 
     return table
@@ -917,7 +919,7 @@ def create_nfp_objectives_table(objectives_data: list[NFPObjectiveDisplayData]) 
     return table
 
 
-def create_features_table(features_data: list[dict]) -> Table:
+def create_features_table(features_data: list[FeatureDisplayData]) -> Table:
     """Create a Rich table for displaying detected features."""
     table = Table(title="Detected Features", show_lines=True)
     table.add_column("Feature ID", style="blue", no_wrap=True, width=10)
@@ -928,11 +930,11 @@ def create_features_table(features_data: list[dict]) -> Table:
 
     for feature_data in features_data:
         table.add_row(
-            feature_data["feature_id"],
-            feature_data["feature_message"],
-            feature_data["commits_display"],
-            feature_data["best_entry_id"],
-            feature_data["merge_message"],
+            feature_data.feature_id,
+            feature_data.feature_message,
+            feature_data.commits_display,
+            feature_data.best_entry_id,
+            feature_data.merge_message,
         )
 
     return table

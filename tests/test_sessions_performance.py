@@ -52,22 +52,22 @@ class TestSessionsPerformance:
 
             assert len(sessions_data) == 2
 
-            assert sessions_data[0]["session_id"] == "session-002"  # Started later
-            assert sessions_data[1]["session_id"] == "session-001"  # Started earlier
+            assert sessions_data[0].session_id == "session-002"  # Started later
+            assert sessions_data[1].session_id == "session-001"  # Started earlier
 
             session1 = sessions_data[1]
-            assert session1["session_id"] == "session-001"
-            assert session1["project_name"] == "project-a"
-            assert session1["project_source"] == "git"
-            assert session1["total_events"] == 5
-            assert session1["tools_used"] == 3  # bash, read, write
+            assert session1.session_id == "session-001"
+            assert session1.project_name == "project-a"
+            assert session1.project_source == "git"
+            assert session1.total_events == 5
+            assert session1.tools_used == 3  # bash, read, write
 
             session2 = sessions_data[0]
-            assert session2["session_id"] == "session-002"
-            assert session2["project_name"] == "project-b"
-            assert session2["project_source"] == "pyproject"
-            assert session2["total_events"] == 3
-            assert session2["tools_used"] == 2  # grep, ls
+            assert session2.session_id == "session-002"
+            assert session2.project_name == "project-b"
+            assert session2.project_source == "pyproject"
+            assert session2.total_events == 3
+            assert session2.tools_used == 2  # grep, ls
 
     def test_get_sessions_for_display__respects_limit(self):
         """Test that limit parameter works correctly."""
@@ -97,7 +97,7 @@ class TestSessionsPerformance:
             assert len(limited_sessions) == 3
 
             expected_sessions = ["session-004", "session-003", "session-002"]
-            actual_sessions = [s["session_id"] for s in limited_sessions]
+            actual_sessions = [s.session_id for s in limited_sessions]
             assert actual_sessions == expected_sessions
 
     def test_get_sessions_for_display__handles_empty_database(self):
@@ -133,4 +133,4 @@ class TestSessionsPerformance:
             sessions_data = service.get_sessions_for_display()
 
             assert len(sessions_data) == 1
-            assert sessions_data[0]["tools_used"] == 0
+            assert sessions_data[0].tools_used == 0
