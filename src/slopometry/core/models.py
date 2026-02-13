@@ -43,7 +43,7 @@ SMELL_REGISTRY: dict[str, SmellDefinition] = {
         internal_name="orphan_comment",
         label="Orphan Comments",
         category=SmellCategory.GENERAL,
-        weight=0.02,
+        weight=0.01,
         guidance="Make sure inline code comments add meaningful information about non-obvious design tradeoffs or explain tech debt or performance implications. Consider if these could be docstrings or field descriptors instead",
         count_field="orphan_comment_count",
         files_field="orphan_comment_files",
@@ -97,7 +97,7 @@ SMELL_REGISTRY: dict[str, SmellDefinition] = {
         internal_name="inline_import",
         label="Inline Imports",
         category=SmellCategory.PYTHON,
-        weight=0.02,
+        weight=0.01,
         guidance="Verify if these can be moved to the top of the file (except TYPE_CHECKING guards)",
         count_field="inline_import_count",
         files_field="inline_import_files",
@@ -1350,6 +1350,11 @@ class RepoBaseline(BaseModel):
         "Used for cache invalidation: strategy mismatch with current settings triggers recomputation.",
     )
 
+    qpe_weight_version: str | None = Field(
+        default=None,
+        description="QPE_WEIGHT_VERSION at time of computation. None = pre-versioning entry.",
+    )
+
 
 class ZScoreInterpretation(str, Enum):
     """Human-readable interpretation of Z-score values."""
@@ -1591,6 +1596,10 @@ class LeaderboardEntry(BaseModel):
     effort_factor: float = Field(description="log(total_halstead_effort + 1)")
     total_effort: float = Field(description="Total Halstead Effort")
     metrics_json: str = Field(description="Full ExtendedComplexityMetrics as JSON")
+    qpe_weight_version: str | None = Field(
+        default=None,
+        description="QPE_WEIGHT_VERSION at time of computation. None = pre-versioning entry.",
+    )
 
 
 class StagedChangesAnalysis(BaseModel):
@@ -1654,6 +1663,51 @@ class CurrentChangesAnalysis(BaseModel):
         description="Per-smell advantage breakdown between baseline and current QPE. "
         "Shows which specific smells changed and their weighted impact.",
     )
+
+
+class CurrentImpactSummary(BaseModel):
+    """Compact JSON output of current-impact analysis for CI consumption.
+
+    Extracts the essential fields from CurrentChangesAnalysis, omitting
+    the large nested baseline and full metrics objects.
+    """
+
+    source: AnalysisSource = Field(description="Whether analyzing uncommitted changes or previous commit")
+    analyzed_commit_sha: str | None = Field(
+        default=None, description="SHA of the analyzed commit (when source is previous_commit)"
+    )
+    base_commit_sha: str | None = Field(
+        default=None, description="SHA of the base commit (when source is previous_commit)"
+    )
+    impact_score: float = Field(description="Weighted composite impact score")
+    impact_category: ImpactCategory = Field(description="Human-readable impact category")
+    qpe_delta: float = Field(description="Change in QPE score")
+    cc_delta: float = Field(description="Change in cyclomatic complexity")
+    effort_delta: float = Field(description="Change in Halstead effort")
+    mi_delta: float = Field(description="Change in maintainability index")
+    changed_files_count: int = Field(description="Number of changed code files")
+    blind_spots_count: int = Field(description="Number of dependent files not in changed set")
+    smell_advantages: list["SmellAdvantage"] = Field(
+        default_factory=list, description="Per-smell advantage breakdown"
+    )
+
+    @staticmethod
+    def from_analysis(analysis: "CurrentChangesAnalysis") -> "CurrentImpactSummary":
+        """Create compact summary from full analysis."""
+        return CurrentImpactSummary(
+            source=analysis.source,
+            analyzed_commit_sha=analysis.analyzed_commit_sha,
+            base_commit_sha=analysis.base_commit_sha,
+            impact_score=analysis.assessment.impact_score,
+            impact_category=analysis.assessment.impact_category,
+            qpe_delta=analysis.assessment.qpe_delta,
+            cc_delta=analysis.assessment.cc_delta,
+            effort_delta=analysis.assessment.effort_delta,
+            mi_delta=analysis.assessment.mi_delta,
+            changed_files_count=len(analysis.changed_files),
+            blind_spots_count=len(analysis.blind_spots),
+            smell_advantages=analysis.smell_advantages,
+        )
 
 
 class FileCoverageStatus(BaseModel):

@@ -145,6 +145,50 @@ def test_leaderboard_upsert__updates_existing_project_on_new_commit() -> None:
         assert leaderboard[0].measured_at == datetime(2024, 6, 1)
 
 
+def test_leaderboard_save__round_trips_qpe_weight_version() -> None:
+    """Test that qpe_weight_version is persisted and retrieved from the leaderboard."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db = EventDatabase(db_path=Path(tmp_dir) / "test.db")
+
+        entry_with_version = LeaderboardEntry(
+            project_name="versioned-project",
+            project_path="/test/versioned",
+            commit_sha_short="aaa1111",
+            commit_sha_full="aaa1111222233334444",
+            measured_at=datetime(2024, 1, 1),
+            qpe_score=0.6,
+            mi_normalized=0.7,
+            smell_penalty=0.05,
+            adjusted_quality=0.65,
+            effort_factor=1.0,
+            total_effort=500.0,
+            metrics_json="{}",
+            qpe_weight_version="2",
+        )
+        entry_without_version = LeaderboardEntry(
+            project_name="legacy-project",
+            project_path="/test/legacy",
+            commit_sha_short="bbb2222",
+            commit_sha_full="bbb2222333344445555",
+            measured_at=datetime(2024, 1, 1),
+            qpe_score=0.5,
+            mi_normalized=0.6,
+            smell_penalty=0.1,
+            adjusted_quality=0.54,
+            effort_factor=1.0,
+            total_effort=600.0,
+            metrics_json="{}",
+        )
+        db.save_leaderboard_entry(entry_with_version)
+        db.save_leaderboard_entry(entry_without_version)
+
+        leaderboard = db.get_leaderboard()
+        by_name = {e.project_name: e for e in leaderboard}
+
+        assert by_name["versioned-project"].qpe_weight_version == "2"
+        assert by_name["legacy-project"].qpe_weight_version is None
+
+
 def test_clear_leaderboard__removes_all_entries() -> None:
     """Test that clear_leaderboard removes all entries and returns count."""
     with tempfile.TemporaryDirectory() as tmp_dir:

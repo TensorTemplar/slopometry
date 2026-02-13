@@ -385,6 +385,62 @@ class Migration010AddBaselineQPEColumns(Migration):
                     raise
 
 
+class Migration011AddQPEWeightVersionColumn(Migration):
+    """Add qpe_weight_version column to qpe_leaderboard and repo_baselines.
+
+    Tracks which QPE_WEIGHT_VERSION was used to compute cached scores.
+    Entries with NULL or mismatched versions trigger a warning and recomputation.
+    """
+
+    @property
+    def version(self) -> str:
+        return "011"
+
+    @property
+    def description(self) -> str:
+        return "Add qpe_weight_version column to qpe_leaderboard and repo_baselines"
+
+    def up(self, conn: sqlite3.Connection) -> None:
+        for table in ("qpe_leaderboard", "repo_baselines"):
+            cursor = conn.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{table}'")
+            if not cursor.fetchone():
+                continue
+            try:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN qpe_weight_version TEXT")
+            except sqlite3.OperationalError as e:
+                if "duplicate column name" not in str(e).lower():
+                    raise
+
+
+class Migration012AddNFPObjectiveToExperimentRuns(Migration):
+    """Add nfp_objective_id column to experiment_runs.
+
+    Previously added via a try/except ALTER TABLE in _ensure_tables.
+    Moved to a proper migration for consistency.
+    """
+
+    @property
+    def version(self) -> str:
+        return "012"
+
+    @property
+    def description(self) -> str:
+        return "Add nfp_objective_id column to experiment_runs"
+
+    def up(self, conn: sqlite3.Connection) -> None:
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='experiment_runs'")
+        if not cursor.fetchone():
+            return
+        try:
+            conn.execute("""
+                ALTER TABLE experiment_runs
+                ADD COLUMN nfp_objective_id TEXT REFERENCES nfp_objectives(id)
+            """)
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" not in str(e).lower():
+                raise
+
+
 class MigrationRunner:
     """Manages database migrations."""
 
@@ -401,6 +457,8 @@ class MigrationRunner:
             Migration008FixLeaderboardUniqueConstraint(),
             Migration009AddBaselineStrategyColumn(),
             Migration010AddBaselineQPEColumns(),
+            Migration011AddQPEWeightVersionColumn(),
+            Migration012AddNFPObjectiveToExperimentRuns(),
         ]
 
     @contextmanager
