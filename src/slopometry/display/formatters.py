@@ -835,9 +835,7 @@ def create_sessions_table(sessions_data: list[SessionDisplayData]) -> Table:
 
     for session_data in sessions_data:
         project_display = (
-            f"{session_data.project_name} ({session_data.project_source})"
-            if session_data.project_name
-            else "N/A"
+            f"{session_data.project_name} ({session_data.project_source})" if session_data.project_name else "N/A"
         )
         table.add_row(
             session_data.session_id,

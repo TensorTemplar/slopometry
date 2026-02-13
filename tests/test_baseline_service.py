@@ -4,9 +4,6 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
-from pydantic import ValidationError
-
 from conftest import make_test_metrics
 
 from slopometry.core.models import (
@@ -269,28 +266,51 @@ class TestGetOrComputeBaseline:
             total_commits_analyzed=10,
             cc_delta_stats=HistoricalMetricStats(
                 metric_name="cc_delta",
-                mean=5.0, std_dev=2.0, median=5.0,
-                min_value=0.0, max_value=10.0, sample_count=10, trend_coefficient=0.1,
+                mean=5.0,
+                std_dev=2.0,
+                median=5.0,
+                min_value=0.0,
+                max_value=10.0,
+                sample_count=10,
+                trend_coefficient=0.1,
             ),
             effort_delta_stats=HistoricalMetricStats(
                 metric_name="effort_delta",
-                mean=100.0, std_dev=50.0, median=100.0,
-                min_value=0.0, max_value=200.0, sample_count=10, trend_coefficient=0.2,
+                mean=100.0,
+                std_dev=50.0,
+                median=100.0,
+                min_value=0.0,
+                max_value=200.0,
+                sample_count=10,
+                trend_coefficient=0.2,
             ),
             mi_delta_stats=HistoricalMetricStats(
                 metric_name="mi_delta",
-                mean=-0.5, std_dev=0.25, median=-0.5,
-                min_value=-1.0, max_value=0.0, sample_count=10, trend_coefficient=-0.05,
+                mean=-0.5,
+                std_dev=0.25,
+                median=-0.5,
+                min_value=-1.0,
+                max_value=0.0,
+                sample_count=10,
+                trend_coefficient=-0.05,
             ),
             current_metrics=ExtendedComplexityMetrics(**make_test_metrics(total_complexity=100)),
             qpe_stats=HistoricalMetricStats(
                 metric_name="qpe_delta",
-                mean=0.001, std_dev=0.005, median=0.001,
-                min_value=-0.01, max_value=0.02, sample_count=10, trend_coefficient=0.0,
+                mean=0.001,
+                std_dev=0.005,
+                median=0.001,
+                min_value=-0.01,
+                max_value=0.02,
+                sample_count=10,
+                trend_coefficient=0.0,
             ),
             current_qpe=QPEScore(
-                qpe=0.45, mi_normalized=0.5, smell_penalty=0.1,
-                adjusted_quality=0.45, smell_counts={},
+                qpe=0.45,
+                mi_normalized=0.5,
+                smell_penalty=0.1,
+                adjusted_quality=0.45,
+                smell_counts={},
             ),
             strategy=ResolvedBaselineStrategy(
                 requested=BaselineStrategy.AUTO,

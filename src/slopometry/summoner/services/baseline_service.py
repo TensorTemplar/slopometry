@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from statistics import mean, median, stdev
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from slopometry.core.complexity_analyzer import ComplexityAnalyzer
 from slopometry.core.database import EventDatabase

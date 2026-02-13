@@ -338,17 +338,27 @@ class TestCurrentImpactSummary:
     @staticmethod
     def _make_metrics() -> ExtendedComplexityMetrics:
         return ExtendedComplexityMetrics(
-            total_volume=0.0, total_effort=0.0, total_difficulty=0.0,
-            average_volume=0.0, average_effort=0.0, average_difficulty=0.0,
-            total_mi=0.0, average_mi=0.0,
+            total_volume=0.0,
+            total_effort=0.0,
+            total_difficulty=0.0,
+            average_volume=0.0,
+            average_effort=0.0,
+            average_difficulty=0.0,
+            total_mi=0.0,
+            average_mi=0.0,
         )
 
     def test_from_analysis__maps_all_fields(self):
         """Test that from_analysis correctly maps fields from full analysis."""
         metrics = self._make_metrics()
         dummy_stats = HistoricalMetricStats(
-            metric_name="test", mean=0.0, std_dev=1.0, median=0.0,
-            min_value=-1.0, max_value=1.0, sample_count=10,
+            metric_name="test",
+            mean=0.0,
+            std_dev=1.0,
+            median=0.0,
+            min_value=-1.0,
+            max_value=1.0,
+            sample_count=10,
         )
         baseline = RepoBaseline(
             repository_path="/tmp/repo",
@@ -362,14 +372,23 @@ class TestCurrentImpactSummary:
             mi_delta_stats=dummy_stats,
         )
         assessment = ImpactAssessment(
-            cc_z_score=0.5, effort_z_score=-0.3, mi_z_score=0.8,
-            impact_score=0.65, impact_category=ImpactCategory.MINOR_IMPROVEMENT,
-            cc_delta=-2.0, effort_delta=-100.0, mi_delta=3.5, qpe_delta=0.02,
+            cc_z_score=0.5,
+            effort_z_score=-0.3,
+            mi_z_score=0.8,
+            impact_score=0.65,
+            impact_category=ImpactCategory.MINOR_IMPROVEMENT,
+            cc_delta=-2.0,
+            effort_delta=-100.0,
+            mi_delta=3.5,
+            qpe_delta=0.02,
             qpe_z_score=0.4,
         )
         smell_adv = SmellAdvantage(
-            smell_name="orphan_comment", baseline_count=10, candidate_count=8,
-            weight=0.01, weighted_delta=-0.02,
+            smell_name="orphan_comment",
+            baseline_count=10,
+            candidate_count=8,
+            weight=0.01,
+            weighted_delta=-0.02,
         )
         analysis = CurrentChangesAnalysis(
             repository_path="/tmp/repo",
@@ -405,8 +424,13 @@ class TestCurrentImpactSummary:
         """Test that summary serializes to valid JSON with expected keys."""
         metrics = self._make_metrics()
         dummy_stats = HistoricalMetricStats(
-            metric_name="test", mean=0.0, std_dev=1.0, median=0.0,
-            min_value=-1.0, max_value=1.0, sample_count=10,
+            metric_name="test",
+            mean=0.0,
+            std_dev=1.0,
+            median=0.0,
+            min_value=-1.0,
+            max_value=1.0,
+            sample_count=10,
         )
         baseline = RepoBaseline(
             repository_path="/tmp/repo",
@@ -420,9 +444,15 @@ class TestCurrentImpactSummary:
             mi_delta_stats=dummy_stats,
         )
         assessment = ImpactAssessment(
-            cc_z_score=0.0, effort_z_score=0.0, mi_z_score=0.0,
-            impact_score=0.0, impact_category=ImpactCategory.NEUTRAL,
-            cc_delta=0.0, effort_delta=0.0, mi_delta=0.0, qpe_delta=0.0,
+            cc_z_score=0.0,
+            effort_z_score=0.0,
+            mi_z_score=0.0,
+            impact_score=0.0,
+            impact_category=ImpactCategory.NEUTRAL,
+            cc_delta=0.0,
+            effort_delta=0.0,
+            mi_delta=0.0,
+            qpe_delta=0.0,
             qpe_z_score=0.0,
         )
         analysis = CurrentChangesAnalysis(
@@ -439,10 +469,18 @@ class TestCurrentImpactSummary:
         parsed = json.loads(json_str)
 
         expected_keys = {
-            "source", "analyzed_commit_sha", "base_commit_sha",
-            "impact_score", "impact_category", "qpe_delta",
-            "cc_delta", "effort_delta", "mi_delta",
-            "changed_files_count", "blind_spots_count", "smell_advantages",
+            "source",
+            "analyzed_commit_sha",
+            "base_commit_sha",
+            "impact_score",
+            "impact_category",
+            "qpe_delta",
+            "cc_delta",
+            "effort_delta",
+            "mi_delta",
+            "changed_files_count",
+            "blind_spots_count",
+            "smell_advantages",
         }
         assert set(parsed.keys()) == expected_keys
         assert parsed["source"] == "uncommitted_changes"

@@ -422,7 +422,8 @@ def current_impact(
         return
 
     from slopometry.core.language_guard import check_language_support
-    from slopometry.core.models import CurrentImpactSummary, ProjectLanguage
+    from slopometry.core.language_models import ProjectLanguage
+    from slopometry.core.models import CurrentImpactSummary
     from slopometry.core.working_tree_extractor import WorkingTreeExtractor
     from slopometry.display.formatters import display_current_impact_analysis
     from slopometry.summoner.services.baseline_service import BaselineService
@@ -485,7 +486,9 @@ def current_impact(
 
             if not analysis:
                 if output_json:
-                    print('{"error": "Failed to analyze previous commit. Ensure at least 2 commits with code changes."}')
+                    print(
+                        '{"error": "Failed to analyze previous commit. Ensure at least 2 commits with code changes."}'
+                    )
                 else:
                     console.print("[red]Failed to analyze previous commit.[/red]")
                     console.print("[dim]Ensure the repository has at least 2 commits with Python changes.[/dim]")

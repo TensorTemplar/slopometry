@@ -107,7 +107,6 @@ class TestCalculateQPE:
     def test_calculate_qpe__spreading_smells_does_not_reduce_penalty(self):
         """Test that spreading smells across files doesn't reduce penalty (anti-gaming fix)."""
 
-
         # Same smells, 1 file
         metrics_concentrated = ExtendedComplexityMetrics(
             **make_test_metrics(
@@ -553,7 +552,6 @@ class TestQPEIntegration:
         analyzer = ComplexityAnalyzer(working_directory=repo_path)
         metrics = analyzer.analyze_extended_complexity()
 
-
         qpe_score = calculate_qpe(metrics)
 
         # QPE should be positive for a working codebase
@@ -585,7 +583,6 @@ class TestQPEIntegration:
 
         analyzer = ComplexityAnalyzer(working_directory=repo_path)
         metrics = analyzer.analyze_extended_complexity()
-
 
         qpe_score = calculate_qpe(metrics)
 
@@ -624,7 +621,6 @@ class TestQPEIntegration:
         analyzer = ComplexityAnalyzer(working_directory=tmp_path)
         metrics = analyzer.analyze_extended_complexity()
 
-
         qpe_score = calculate_qpe(metrics)
 
         # Should handle gracefully (might return 0 but shouldn't crash)
@@ -640,7 +636,6 @@ class TestQPEIntegration:
 
         analyzer = ComplexityAnalyzer(working_directory=repo_path)
         metrics = analyzer.analyze_extended_complexity()
-
 
         qpe_score = calculate_qpe(metrics)
 

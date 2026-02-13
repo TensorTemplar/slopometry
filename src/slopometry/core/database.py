@@ -11,6 +11,7 @@ from pathlib import Path
 from slopometry.core.migrations import MigrationRunner
 
 logger = logging.getLogger(__name__)
+from slopometry.core.display_models import SessionDisplayData
 from slopometry.core.models import (
     ComplexityDelta,
     ContextCoverage,
@@ -36,7 +37,6 @@ from slopometry.core.models import (
     UserStory,
     UserStoryEntry,
 )
-from slopometry.core.display_models import SessionDisplayData
 from slopometry.core.plan_analyzer import PlanAnalyzer
 from slopometry.core.settings import settings
 

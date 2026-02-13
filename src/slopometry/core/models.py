@@ -1637,9 +1637,7 @@ class CurrentImpactSummary(BaseModel):
     mi_delta: float = Field(description="Change in maintainability index")
     changed_files_count: int = Field(description="Number of changed code files")
     blind_spots_count: int = Field(description="Number of dependent files not in changed set")
-    smell_advantages: list["SmellAdvantage"] = Field(
-        default_factory=list, description="Per-smell advantage breakdown"
-    )
+    smell_advantages: list["SmellAdvantage"] = Field(default_factory=list, description="Per-smell advantage breakdown")
 
     @staticmethod
     def from_analysis(analysis: "CurrentChangesAnalysis") -> "CurrentImpactSummary":
