@@ -4,7 +4,7 @@ import logging
 import subprocess
 from pathlib import Path
 
-from slopometry.core.models import ProjectLanguage
+from slopometry.core.language_models import ProjectLanguage
 
 logger = logging.getLogger(__name__)
 

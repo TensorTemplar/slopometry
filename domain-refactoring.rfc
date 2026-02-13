@@ -1,0 +1,326 @@
+# RFC: Domain Modeling Audit & Restructuring
+
+**Status**: Audit complete, implementation pending
+**Date**: 2026-02-10
+**Scope**: `src/slopometry/` — all domain models, data access, and display layers
+
+## Context
+
+The codebase grew iteratively, resulting in tangled file hierarchy, oversized files (`database.py` at 1841 lines, `formatters.py` at 1663 lines), and domain objects scattered across files without consistent locality. This audit identifies:
+1. Informal data objects that should be Pydantic BaseModels
+2. All existing BaseModels and their locations
+3. Locality issues (models far from their consumers)
+4. Duplicated/overlapping logic stemming from this confusion
+
+---
+
+## 1. Existing Pydantic BaseModels — Inventory
+
+### `src/slopometry/core/models.py` (1758 lines, 48+ models)
+
+This single file contains ALL core domain models. Models below grouped by domain concern:
+
+| Model | Lines | Domain Concern |
+|-------|-------|---------------|
+| `SmellDefinition` | 26-37 | Code quality / smells |
+| `ResolvedBaselineStrategy` | 234-261 | Baseline computation |
+| `Project` | 278-282 | Session tracking |
+| `GitState` | 347-354 | Session tracking |
+| `HookEvent` | 357-374 | Hook event ingestion |
+| `TokenCountError` | 377-383 | Error handling |
+| `CacheUpdateError` | 386-393 | Error handling |
+| `FileAnalysisResult` | 396-406 | Complexity analysis |
+| `ComplexityMetrics` | 409-431 | Complexity analysis |
+| `ComplexityDelta` | 434-501 | Complexity analysis |
+| `TodoItem` | 504-509 | Plan tracking |
+| `PlanStep` | 512-528 | Plan tracking |
+| `TokenUsage` | 531-561 | Token analysis |
+| `SessionMetadata` | 564-576 | Session tracking |
+| `PlanEvolution` | 579-597 | Plan tracking |
+| `CompactEvent` | 600-613 | Transcript analysis |
+| `SavedCompact` | 617-628 | Transcript analysis |
+| `SessionStatistics` | 631-655 | Session tracking |
+| `PreToolUseInput` | 658-666 | Hook input parsing |
+| `PostToolUseInput` | 669-681 | Hook input parsing |
+| `NotificationInput` | 684-692 | Hook input parsing |
+| `StopInput` | 695-702 | Hook input parsing |
+| `SubagentStopInput` | 705-712 | Hook input parsing |
+| `HookOutput` | 718-727 | Hook output |
+| `UserStory` | 739-748 | Experiment/NFP |
+| `NextFeaturePrediction` | 751-780 | Experiment/NFP |
+| `ScopedSmell` | 783-794 | Code quality / smells |
+| `SmellData` | 797-824 | Code quality / smells |
+| `ExtendedComplexityMetrics` | 827-1041 | Complexity analysis |
+| `SmellCounts` | 1434-1457 | Code quality / smells |
+| `ExperimentRun` | 1044-1058 | Experiments |
+| `ExperimentProgress` | 1061-1079 | Experiments |
+| `CommitComplexitySnapshot` | 1082-1090 | Complexity evolution |
+| `CommitChain` | 1093-1101 | Complexity evolution |
+| `ComplexityEvolution` | 1104-1113 | Complexity evolution |
+| `MergeCommit` | 1116-1122 | Git / features |
+| `FeatureBoundary` | 1125-1139 | Git / features |
+| `UserStoryEntry` | 1142-1165 | Dataset / user stories |
+| `UserStoryStatistics` | 1168-1175 | Dataset / user stories |
+| `UserStoryDisplayData` | 1178-1186 | Display DTOs |
+| `ExperimentDisplayData` | 1189-1197 | Display DTOs |
+| `ProgressDisplayData` | 1200-1207 | Display DTOs |
+| `NFPObjectiveDisplayData` | 1210-1218 | Display DTOs |
+| `CodeQualityCache` | 1221-1235 | Caching |
+| `ImpactAssessment` | 1398-1431 | Impact analysis |
+| `HistoricalMetricStats` | 1248-1260 | Baseline statistics |
+| `GalenMetrics` | 1267-1311 | Productivity metrics |
+| `RepoBaseline` | 1314-1351 | Baseline |
+| `QPEScore` | 1460-1475 | QPE scoring |
+| `SmellAdvantage` | 1478-1509 | GRPO comparison |
+| `ImplementationComparison` | 1512-1551 | GRPO comparison |
+| `ProjectQPEResult` | 1554-1560 | Cross-project |
+| `CrossProjectComparison` | 1563-1572 | Cross-project |
+| `LeaderboardEntry` | 1575-1593 | Leaderboard |
+| `StagedChangesAnalysis` | 1596-1610 | Impact analysis (deprecated) |
+| `CurrentChangesAnalysis` | 1613-1657 | Impact analysis |
+| `FileCoverageStatus` | 1659-1690 | Context coverage |
+| `ContextCoverage` | 1693-1738 | Context coverage |
+| `LanguageGuardResult` | 1741-1757 | Language detection |
+
+### Models in other files (scattered)
+
+| Model | File | Lines | Domain Concern |
+|-------|------|-------|---------------|
+| `CompactBoundary` | `core/compact_analyzer.py` | 19-28 | Transcript parsing |
+| `CompactSummary` | `core/compact_analyzer.py` | 32-38 | Transcript parsing |
+| `TranscriptMetadata` | `core/transcript_token_analyzer.py` | 16-20 | Transcript parsing |
+| `MessageUsage` | `core/transcript_token_analyzer.py` | 76-79 | Token analysis |
+| `AssistantMessage` | `core/transcript_token_analyzer.py` | 83+ | Token analysis |
+| `SlopometrySettings` | `core/settings.py` | ~50-279 | Configuration |
+
+---
+
+## 2. Domain Modeling Gaps — Informal Data Objects
+
+### A. Raw `dict` used where models should exist
+
+| Location | Pattern | What it represents | Severity |
+|----------|---------|-------------------|----------|
+| `compact_analyzer.py:27` | `compactMetadata: dict \| None` | Compact boundary metadata (trigger, preTokens) | Medium — known keys accessed via `.get()` at lines 102-103 |
+| `compact_analyzer.py:38` | `message: dict \| None` | Compact summary message with `content` field | Medium — accessed via `.get("content")` at line 107 |
+| `context_coverage_analyzer.py:203-231` | Raw `dict` event parsing | Transcript JSONL events (tool_name, tool_input, message.content) | High — heavy `.get()` and `isinstance` soup |
+| `transcript_token_analyzer.py:48-63` | Raw `dict` event parsing | Transcript events (version, gitBranch, type, message.model) | High — same pattern of `.get()` / `isinstance` chains |
+| `plan_analyzer.py:76,106` | `tool_input.get("todos")`, `tool_input.get("file_path")` | Tool input structures for TodoWrite and Write | Medium — known shapes |
+| `hook_handler.py:177-179` | `parsed_input.tool_response.get("duration_ms")` etc. | Post-tool response fields (duration, exit_code, error) | Medium — `PostToolUseInput.tool_response` is typed as `dict[str, Any]` |
+| `database.py:712` | `metadata.get("tool_input", {})` | Stored event metadata blob | Medium — the metadata column is a JSON dump of varying shapes |
+| `coverage_analyzer.py:77-86` | `root.get("line-rate")`, `class_elem.get("filename")` | XML coverage data parsed to dicts | Low — external format, dict is reasonable |
+
+### B. `getattr` used on typed models (modeling gap)
+
+| Location | Expression | Why it's a gap |
+|----------|-----------|---------------|
+| `formatters.py:416` | `getattr(smell_counts, defn.internal_name)` | Iterating `SMELL_REGISTRY` and using string key to access `SmellCounts` fields — `SmellCounts` should expose an iteration method |
+| `formatters.py:1490` | `getattr(qpe_score.smell_counts, name)` | Same pattern in QPE detail display |
+| `qpe_calculator.py:157-158` | `getattr(baseline.smell_counts, name)` / `getattr(candidate.smell_counts, name)` | Same — iterating registry and reflecting into SmellCounts |
+
+**Root cause**: `SmellCounts` has 14 explicit fields but no `__getitem__` or iteration method, forcing callers to use `getattr` when iterating by smell name.
+
+### C. Tuple returns instead of named models
+
+| Location | Return type | What it represents |
+|----------|------------|-------------------|
+| `database.py:428` | `tuple[datetime, int] \| None` | Session basic info (start_time, total_events) |
+| `database.py:632` | `tuple[ExtendedComplexityMetrics \| None, ComplexityDelta \| None]` | Session complexity result pair |
+| `database.py:755-757` | Same tuple return | `calculate_extended_complexity_metrics` |
+
+### D. `.get()` with defaults on external data (justified)
+
+These are at system boundaries parsing external formats (transcript JSONL, XML coverage) and are **not** modeling gaps — they're dealing with genuinely untyped external data. However, the transcript JSONL events appear frequently enough that a `TranscriptEvent` model would help.
+
+---
+
+## 3. Locality Analysis — Models vs. Consumers
+
+### Problem: `models.py` is a 1758-line "God Module"
+
+All 48+ models live in one file regardless of which subsystem consumes them. This creates:
+- **No locality**: Display DTOs (`UserStoryDisplayData`, `ExperimentDisplayData`, etc.) are defined 1000+ lines away from `formatters.py`
+- **Circular coupling risk**: Everything imports from `models.py`, and `models.py` must forward-reference types
+- **Cognitive load**: Finding a model requires scanning 1758 lines
+
+### Proposed Model Grouping by Domain
+
+| Domain Module | Models to include | Primary consumers |
+|--------------|-------------------|-------------------|
+| `models/hook_events.py` | `HookEvent`, `HookEventType`, `ToolType`, `PreToolUseInput`, `PostToolUseInput`, `NotificationInput`, `StopInput`, `SubagentStopInput`, `HookInputUnion`, `HookOutput` | `hook_handler.py`, `database.py` |
+| `models/session.py` | `SessionStatistics`, `SessionMetadata`, `GitState`, `Project`, `ProjectSource`, `AgentTool` | `database.py`, `session_service.py`, `formatters.py` |
+| `models/complexity.py` | `FileAnalysisResult`, `ComplexityMetrics`, `ExtendedComplexityMetrics`, `ComplexityDelta`, `ComplexityEvolution`, `CommitComplexitySnapshot`, `CommitChain` | `complexity_analyzer.py`, `database.py`, `qpe_calculator.py` |
+| `models/smells.py` | `SmellDefinition`, `SmellCategory`, `SmellCounts`, `SmellData`, `ScopedSmell`, `SMELL_REGISTRY`, `SmellField`, `get_smell_label`, `get_smells_by_category` | `python_feature_analyzer.py`, `formatters.py`, `qpe_calculator.py`, `hook_handler.py` |
+| `models/quality.py` | `QPEScore`, `SmellAdvantage`, `ImpactAssessment`, `ImpactCategory`, `ZScoreInterpretation`, `HistoricalMetricStats`, `GalenMetrics`, `RepoBaseline`, `ResolvedBaselineStrategy`, `BaselineStrategy` | `qpe_calculator.py`, `impact_calculator.py`, `baseline_service.py`, `formatters.py` |
+| `models/experiments.py` | `ExperimentRun`, `ExperimentProgress`, `ExperimentStatus`, `FeatureBoundary`, `MergeCommit`, `NextFeaturePrediction`, `UserStory` | `experiment_orchestrator.py`, `nfp_service.py` |
+| `models/dataset.py` | `UserStoryEntry`, `UserStoryStatistics` | `user_story_service.py`, `database.py` |
+| `models/analysis.py` | `StagedChangesAnalysis`, `CurrentChangesAnalysis`, `ImplementationComparison`, `ProjectQPEResult`, `CrossProjectComparison`, `LeaderboardEntry` | `current_impact_service.py`, `implementation_comparator.py`, `formatters.py` |
+| `models/coverage.py` | `FileCoverageStatus`, `ContextCoverage`, `PlanEvolution`, `PlanStep`, `TodoItem`, `TokenUsage`, `CompactEvent`, `SavedCompact` | `context_coverage_analyzer.py`, `plan_analyzer.py`, `compact_analyzer.py` |
+| `models/display.py` | `UserStoryDisplayData`, `ExperimentDisplayData`, `ProgressDisplayData`, `NFPObjectiveDisplayData` | `formatters.py` only |
+| `models/common.py` | `TokenCountError`, `CacheUpdateError`, `CodeQualityCache`, `ProjectLanguage`, `LanguageGuardResult` | Various |
+
+With a `models/__init__.py` that re-exports everything for backward compatibility during transition.
+
+---
+
+## 4. Duplicated / Overlapping Logic
+
+### A. `getattr` iteration on SmellCounts (3 locations)
+
+**Files**: `formatters.py:416`, `formatters.py:1490`, `qpe_calculator.py:157-158`
+
+**Fix**: Add `SmellCounts.iter_counts() -> Iterator[tuple[str, int]]` method:
+```python
+def iter_counts(self) -> Iterator[tuple[str, int]]:
+    """Yield (smell_name, count) for each smell."""
+    for name in SMELL_REGISTRY:
+        yield name, getattr(self, name)  # centralized, single getattr location
+```
+
+### B. Galen metrics calculation in formatters.py
+
+**`formatters.py:94-119`** — `_calculate_galen_metrics_from_baseline()` does business logic (token arithmetic) that belongs in the `GalenMetrics` model.
+
+**`models.py:1286-1311`** — `GalenMetrics.calculate()` exists but takes `(tokens_changed, period_days)` — different parameters.
+
+**Fix**: Add `GalenMetrics.from_baseline(baseline, current_tokens)` classmethod to `GalenMetrics` and delete the formatters function.
+
+### C. Plan evolution wiring in database.py
+
+**`database.py:685-725`** — `_calculate_plan_evolution()` queries events, then feeds them into `PlanAnalyzer`. The database is doing orchestration that belongs in a service layer.
+
+**`database.py:727-753`** — `_calculate_context_coverage()` wraps `ContextCoverageAnalyzer` — pure passthrough.
+
+These methods make `database.py` a God Object mixing persistence with analysis orchestration.
+
+### D. Complexity metric calculation in database.py
+
+**`database.py:755-789`** — `calculate_extended_complexity_metrics()` instantiates `ComplexityAnalyzer` and `GitTracker` to do analysis. This is analysis orchestration, not data access.
+
+---
+
+## 5. Recommended Action Plan
+
+### Phase 1: Fix modeling gaps (no file moves)
+
+1. **Add `SmellCounts.iter_counts()`** — eliminate all 3 `getattr` call sites
+   - `src/slopometry/core/models.py`
+   - `src/slopometry/display/formatters.py` (2 sites)
+   - `src/slopometry/summoner/services/qpe_calculator.py` (1 site)
+
+2. **Add `GalenMetrics.from_baseline()` classmethod** — move business logic out of formatters
+   - `src/slopometry/core/models.py`
+   - `src/slopometry/display/formatters.py` (delete `_calculate_galen_metrics_from_baseline`)
+
+3. **Create `CompactMetadata` model** to replace `dict` in `CompactBoundary.compactMetadata`
+   - `src/slopometry/core/compact_analyzer.py`
+
+4. **Create `ToolResponse` model** to replace the `dict[str, Any]` response extraction pattern
+   - `src/slopometry/core/models.py` (add model)
+   - `src/slopometry/core/hook_handler.py` (use instead of `.get()` on dict)
+
+5. **Create `SessionBasicInfo` named model** to replace `tuple[datetime, int]`
+   - `src/slopometry/core/database.py:428`
+
+### Phase 2: Extract analysis orchestration from database.py
+
+6. **Delete `database._calculate_plan_evolution()`** — move to a session enrichment service
+7. **Delete `database._calculate_context_coverage()`** — same
+8. **Move `database.calculate_extended_complexity_metrics()`** — same
+
+This reduces `database.py` to pure persistence + caching.
+
+### Phase 3: Split models.py into domain modules
+
+9. Create `src/slopometry/core/models/` package with submodules per domain concern (see table in section 3)
+10. Keep `models/__init__.py` re-exporting everything for backward compatibility
+11. Move display DTOs to `models/display.py`
+
+### Phase 4: Split formatters.py by display concern
+
+12. Split into `display/session_display.py`, `display/impact_display.py`, `display/experiment_display.py`, etc.
+
+---
+
+## 6. Methodology — Subagent Dispatch for Domain Modeling Audits
+
+This section documents the reproducible approach used to produce this audit.
+
+### Step 1: Parallel Exploration (3 concurrent Explore agents)
+
+Three `Task(subagent_type=Explore)` agents launched in a **single message** (parallel execution):
+
+**Agent 1 — "Find all Pydantic BaseModels"**
+```
+Prompt: Find ALL Pydantic BaseModel subclasses in the repo. For each, report:
+1. Class name, file path, line number
+2. Fields (names and types)
+3. Whether it's domain model, settings/config, or DTO
+Also look for TypedDict, NamedTuple, dataclass, or plain dict patterns
+acting as quasi-models but NOT using BaseModel.
+Search thoroughly in all .py files under src/ and tests/.
+```
+
+**Agent 2 — "Find informal data objects"**
+```
+Prompt: Find all places where data is passed using informal structures
+instead of proper domain models:
+1. Raw dicts constructed and passed between functions (especially dict literals with known keys)
+2. Tuples returned from functions and unpacked by callers
+3. Uses of hasattr, getattr, .get() with defaults on objects (indicating missing model definitions)
+4. isinstance checks suggesting polymorphic domain objects need proper modeling
+5. SQL query results used as raw tuples/dicts instead of mapped to models
+6. Any TypedDict, NamedTuple, or dataclass usage
+For each finding, note file path, line number, and what kind of data is being represented.
+Focus on src/slopometry/. Check database.py, formatters.py, and all service files carefully.
+```
+
+**Agent 3 — "Map file responsibilities and deps"**
+```
+Prompt: Map responsibility and dependency structure. For each .py file in src/slopometry/:
+1. What the file is responsible for (brief summary)
+2. What imports it makes from other files in the project
+3. What other files import from it
+4. Identify files that are "too large" (too many responsibilities)
+Pay special attention to:
+- database.py — what different concerns does it handle?
+- formatters.py — what different concerns does it handle?
+- Any service files mixing data access with business logic
+Also identify duplicated logic patterns across files.
+```
+
+### Step 2: Targeted File Reads (verify agent findings)
+
+After agents returned, read critical files directly to verify and detail findings:
+- `models.py` (full read — 1758 lines) — verified all BaseModel definitions
+- `database.py` (sections: lines 1-100, 240-440, 540-790) — verified dict patterns, tuple returns, orchestration methods
+- `formatters.py` (sections: lines 1-100, 94-154, 410-430, 1040-1070, 1480-1500) — verified getattr patterns, business logic in display code
+- `qpe_calculator.py:140-180` — verified getattr on SmellCounts
+- `compact_analyzer.py:1-132` — verified dict-typed fields
+- `transcript_token_analyzer.py:1-85` — verified raw dict parsing
+- `context_coverage_analyzer.py:200-240` — verified .get() chains
+
+### Step 3: Grep for pattern inventory
+
+Single `Grep` call across entire `src/slopometry/`:
+```
+pattern: \.get\(|getattr\(|hasattr\(|isinstance\(
+glob: *.py
+output_mode: content
+```
+This produced the exhaustive list of all informal access patterns, cross-referenced against agent findings to ensure nothing was missed.
+
+### Step 4: Glob for file inventory
+
+```
+pattern: src/slopometry/**/*.py
+```
+Established the complete file list (54 .py files) to verify agents covered all relevant files.
+
+### Key Design Decisions in the Methodology
+
+1. **3 agents with orthogonal focus areas** — avoids duplicate work while covering: (a) what models exist, (b) what's missing, (c) how files relate
+2. **Agents first, then targeted reads** — agents surface which files matter most; targeted reads verify specific line-level details
+3. **Single grep for pattern inventory** — comprehensive sweep that agents can miss due to context window limits
+4. **Domain grouping table** — derived by mapping each model to its primary consumer files (from Agent 3's dependency map), then clustering by shared consumers
+5. **Severity classification** — `.get()` on external data (transcript JSONL, XML) classified as justified; `.get()`/`getattr` on internal typed models classified as modeling gaps

@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from slopometry.core.language_config import (
     LANGUAGE_CONFIGS,
@@ -14,7 +15,7 @@ from slopometry.core.language_config import (
     get_language_config,
     should_ignore_path,
 )
-from slopometry.core.models import ProjectLanguage
+from slopometry.core.language_models import ProjectLanguage
 
 
 class TestLanguageConfig:
@@ -149,7 +150,7 @@ class TestLanguageConfigFrozen:
 
     def test_language_config__is_frozen(self):
         """Verify LanguageConfig is immutable."""
-        with pytest.raises(AttributeError):
+        with pytest.raises(ValidationError):
             PYTHON_CONFIG.language = ProjectLanguage.PYTHON  # type: ignore
 
     def test_language_config__custom_creation(self):

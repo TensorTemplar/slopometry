@@ -4,10 +4,11 @@ import logging
 import shutil
 import subprocess
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from statistics import mean, median, stdev
+
+from pydantic import BaseModel
 
 from slopometry.core.complexity_analyzer import ComplexityAnalyzer
 from slopometry.core.database import EventDatabase
@@ -19,21 +20,19 @@ from slopometry.core.models import (
     ResolvedBaselineStrategy,
 )
 from slopometry.core.settings import settings
-from slopometry.summoner.services.qpe_calculator import calculate_qpe
+from slopometry.summoner.services.qpe_calculator import QPE_WEIGHT_VERSION, calculate_qpe
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class CommitInfo:
+class CommitInfo(BaseModel):
     """Commit SHA and timestamp."""
 
     sha: str
     timestamp: datetime
 
 
-@dataclass
-class CommitDelta:
+class CommitDelta(BaseModel):
     """Metrics delta between two consecutive commits."""
 
     cc_delta: float
@@ -138,7 +137,14 @@ class BaselineService:
         if not recompute:
             cached = self.db.get_cached_baseline(str(repo_path), head_sha)
             if cached and cached.qpe_stats is not None:
-                if self._is_cache_strategy_compatible(cached):
+                if cached.qpe_weight_version != QPE_WEIGHT_VERSION:
+                    logger.warning(
+                        "Cached baseline was computed with QPE weight version %s (current: %s). "
+                        "Recomputing with updated weights.",
+                        cached.qpe_weight_version or "unknown",
+                        QPE_WEIGHT_VERSION,
+                    )
+                elif self._is_cache_strategy_compatible(cached):
                     return cached
 
         baseline = self.compute_full_baseline(repo_path, max_workers=max_workers)
@@ -231,6 +237,7 @@ class BaselineService:
             qpe_stats=self._compute_stats("qpe_delta", qpe_deltas),
             current_qpe=current_qpe,
             strategy=strategy,
+            qpe_weight_version=QPE_WEIGHT_VERSION,
         )
 
     def _resolve_strategy(self, repo_path: Path) -> ResolvedBaselineStrategy:

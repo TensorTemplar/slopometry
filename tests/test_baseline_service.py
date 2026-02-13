@@ -16,10 +16,54 @@ from slopometry.core.models import (
 )
 from slopometry.summoner.services.baseline_service import (
     BaselineService,
+    CommitDelta,
     CommitInfo,
     _compute_single_delta_task,
     _parse_commit_log,
 )
+from slopometry.summoner.services.qpe_calculator import QPE_WEIGHT_VERSION
+
+
+class TestCommitInfo:
+    """Tests for CommitInfo model."""
+
+    def test_commit_info__creation_with_required_fields(self) -> None:
+        """Test creating CommitInfo with required fields."""
+        commit = CommitInfo(sha="abc123", timestamp=datetime.now())
+        assert commit.sha == "abc123"
+        assert isinstance(commit.timestamp, datetime)
+
+    def test_commit_info__round_trips_json(self) -> None:
+        """Test JSON serialization round-trip."""
+        ts = datetime(2025, 1, 15, 12, 30, 0)
+        commit = CommitInfo(sha="test-sha", timestamp=ts)
+        json_str = commit.model_dump_json()
+        restored = CommitInfo.model_validate_json(json_str)
+        assert restored == commit
+
+
+class TestCommitDelta:
+    """Tests for CommitDelta model."""
+
+    def test_commit_delta__creation_with_all_fields(self) -> None:
+        """Test creating CommitDelta with all fields."""
+        delta = CommitDelta(
+            cc_delta=5.0,
+            effort_delta=100.0,
+            mi_delta=-2.5,
+            qpe_delta=0.01,
+        )
+        assert delta.cc_delta == 5.0
+        assert delta.effort_delta == 100.0
+        assert delta.mi_delta == -2.5
+        assert delta.qpe_delta == 0.01
+
+    def test_commit_delta__round_trips_json(self) -> None:
+        """Test JSON serialization round-trip."""
+        delta = CommitDelta(cc_delta=1.0, effort_delta=50.0, mi_delta=-1.0, qpe_delta=0.005)
+        json_str = delta.model_dump_json()
+        restored = CommitDelta.model_validate_json(json_str)
+        assert restored == delta
 
 
 class TestComputeStats:
@@ -134,7 +178,7 @@ class TestComputeTrend:
 class TestGetOrComputeBaseline:
     """Tests for BaselineService.get_or_compute_baseline."""
 
-    def test_get_or_compute_baseline__returns_cached_when_head_unchanged(self, tmp_path: Path):
+    def test_get_or_compute_baseline__returns_cached_when_head_unchanged(self, tmp_path: Path) -> None:
         """Test that cached baseline is returned when HEAD hasn't changed."""
         mock_db = MagicMock()
         cached_baseline = RepoBaseline(
@@ -198,6 +242,7 @@ class TestGetOrComputeBaseline:
                 merge_ratio=0.25,
                 total_commits_sampled=200,
             ),
+            qpe_weight_version=QPE_WEIGHT_VERSION,
         )
         mock_db.get_cached_baseline.return_value = cached_baseline
 
@@ -211,6 +256,85 @@ class TestGetOrComputeBaseline:
 
         assert result == cached_baseline
         mock_db.get_cached_baseline.assert_called_once_with(str(tmp_path.resolve()), "abc123")
+
+    def test_get_or_compute_baseline__recomputes_when_weight_version_stale(self, tmp_path: Path) -> None:
+        """Test that baseline is recomputed when cached QPE weight version differs."""
+        mock_db = MagicMock()
+        cached_baseline = RepoBaseline(
+            repository_path=str(tmp_path),
+            head_commit_sha="abc123",
+            total_commits_analyzed=10,
+            cc_delta_stats=HistoricalMetricStats(
+                metric_name="cc_delta",
+                mean=5.0,
+                std_dev=2.0,
+                median=5.0,
+                min_value=0.0,
+                max_value=10.0,
+                sample_count=10,
+                trend_coefficient=0.1,
+            ),
+            effort_delta_stats=HistoricalMetricStats(
+                metric_name="effort_delta",
+                mean=100.0,
+                std_dev=50.0,
+                median=100.0,
+                min_value=0.0,
+                max_value=200.0,
+                sample_count=10,
+                trend_coefficient=0.2,
+            ),
+            mi_delta_stats=HistoricalMetricStats(
+                metric_name="mi_delta",
+                mean=-0.5,
+                std_dev=0.25,
+                median=-0.5,
+                min_value=-1.0,
+                max_value=0.0,
+                sample_count=10,
+                trend_coefficient=-0.05,
+            ),
+            current_metrics=ExtendedComplexityMetrics(**make_test_metrics(total_complexity=100)),
+            qpe_stats=HistoricalMetricStats(
+                metric_name="qpe_delta",
+                mean=0.001,
+                std_dev=0.005,
+                median=0.001,
+                min_value=-0.01,
+                max_value=0.02,
+                sample_count=10,
+                trend_coefficient=0.0,
+            ),
+            current_qpe=QPEScore(
+                qpe=0.45,
+                mi_normalized=0.5,
+                smell_penalty=0.1,
+                adjusted_quality=0.45,
+                smell_counts={},
+            ),
+            strategy=ResolvedBaselineStrategy(
+                requested=BaselineStrategy.AUTO,
+                resolved=BaselineStrategy.MERGE_ANCHORED,
+                merge_ratio=0.25,
+                total_commits_sampled=200,
+            ),
+            qpe_weight_version="1",  # Old version
+        )
+        mock_db.get_cached_baseline.return_value = cached_baseline
+
+        service = BaselineService(db=mock_db)
+
+        with (
+            patch("slopometry.summoner.services.baseline_service.GitTracker") as MockGitTracker,
+            patch.object(service, "compute_full_baseline") as mock_compute,
+        ):
+            mock_git = MockGitTracker.return_value
+            mock_git._get_current_commit_sha.return_value = "abc123"
+            mock_compute.return_value = None
+
+            service.get_or_compute_baseline(tmp_path)
+
+        mock_compute.assert_called_once()
 
     def test_get_or_compute_baseline__recomputes_when_flag_set(self, tmp_path: Path):
         """Test that baseline is recomputed when recompute=True."""

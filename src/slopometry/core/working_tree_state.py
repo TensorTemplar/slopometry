@@ -9,7 +9,7 @@ from slopometry.core.language_config import (
     get_combined_git_patterns,
     should_ignore_path,
 )
-from slopometry.core.models import ProjectLanguage
+from slopometry.core.language_models import ProjectLanguage
 
 
 class WorkingTreeStateCalculator:

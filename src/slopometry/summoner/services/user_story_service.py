@@ -6,7 +6,8 @@ from pathlib import Path
 import click
 
 from slopometry.core.database import EventDatabase
-from slopometry.core.models import UserStoryDisplayData, UserStoryEntry, UserStoryStatistics
+from slopometry.core.display_models import UserStoryDisplayData
+from slopometry.core.models import UserStoryEntry, UserStoryStatistics
 from slopometry.core.settings import settings
 from slopometry.display.console import console
 

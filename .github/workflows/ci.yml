@@ -38,6 +38,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for baseline computation and current-impact
 
       - name: Set up uv
         uses: astral-sh/setup-uv@v4
@@ -90,6 +92,84 @@ jobs:
             });
 
             const existing = comments.find(c => c.body.includes('Slopometry QPE Report'));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body
+              });
+            }
+
+      - name: Run current-impact check
+        id: impact
+        run: |
+          echo "json=$(slopometry summoner current-impact --json --no-pager | jq -c)" >> $GITHUB_OUTPUT
+
+      - name: Comment impact on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const impact = ${{ steps.impact.outputs.json }};
+
+            if (impact.error) {
+              core.warning(`Current-impact skipped: ${impact.error}`);
+              return;
+            }
+
+            const category = impact.impact_category.replace(/_/g, ' ');
+            const smells = impact.smell_advantages
+              .filter(s => s.weighted_delta !== 0)
+              .sort((a, b) => Math.abs(b.weighted_delta) - Math.abs(a.weighted_delta))
+              .map(s => `| ${s.smell_name.replace(/_/g, ' ')} | ${s.baseline_count} | ${s.candidate_count} | ${s.weighted_delta > 0 ? '+' : ''}${s.weighted_delta.toFixed(4)} |`)
+              .join('\n');
+
+            const source = impact.source === 'previous_commit'
+              ? `Previous commit (${impact.analyzed_commit_sha} vs ${impact.base_commit_sha})`
+              : 'Uncommitted changes';
+
+            const body = `## 📈 Slopometry Impact Report
+
+            **Impact: ${category.toUpperCase()}** (score: ${impact.impact_score.toFixed(3)})
+
+            | Metric | Delta | Description |
+            |--------|-------|-------------|
+            | QPE | ${impact.qpe_delta >= 0 ? '+' : ''}${impact.qpe_delta.toFixed(4)} | Quality-Per-Effort change |
+            | MI | ${impact.mi_delta >= 0 ? '+' : ''}${impact.mi_delta.toFixed(3)} | Maintainability Index change |
+            | CC | ${impact.cc_delta >= 0 ? '+' : ''}${impact.cc_delta.toFixed(3)} | Cyclomatic Complexity change |
+            | Effort | ${impact.effort_delta >= 0 ? '+' : ''}${impact.effort_delta.toFixed(1)} | Halstead Effort change |
+
+            | | Count |
+            |---|---|
+            | Changed files | ${impact.changed_files_count} |
+            | Blind spots | ${impact.blind_spots_count} |
+
+            <details>
+            <summary>Smell Advantage Breakdown</summary>
+
+            | Smell | Baseline | Current | Weighted Delta |
+            |-------|----------|---------|----------------|
+            ${smells || '| (no smell changes) | | | |'}
+
+            </details>
+
+            > Source: ${source}`;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const existing = comments.find(c => c.body.includes('Slopometry Impact Report'));
 
             if (existing) {
               await github.rest.issues.updateComment({

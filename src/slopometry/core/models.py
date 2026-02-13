@@ -43,7 +43,7 @@ SMELL_REGISTRY: dict[str, SmellDefinition] = {
         internal_name="orphan_comment",
         label="Orphan Comments",
         category=SmellCategory.GENERAL,
-        weight=0.02,
+        weight=0.01,
         guidance="Make sure inline code comments add meaningful information about non-obvious design tradeoffs or explain tech debt or performance implications. Consider if these could be docstrings or field descriptors instead",
         count_field="orphan_comment_count",
         files_field="orphan_comment_files",
@@ -97,7 +97,7 @@ SMELL_REGISTRY: dict[str, SmellDefinition] = {
         internal_name="inline_import",
         label="Inline Imports",
         category=SmellCategory.PYTHON,
-        weight=0.02,
+        weight=0.01,
         guidance="Verify if these can be moved to the top of the file (except TYPE_CHECKING guards)",
         count_field="inline_import_count",
         files_field="inline_import_files",
@@ -259,13 +259,6 @@ class ResolvedBaselineStrategy(BaseModel):
         if v == BaselineStrategy.AUTO:
             raise ValueError("resolved strategy cannot be AUTO")
         return v
-
-
-class ProjectLanguage(str, Enum):
-    """Supported languages for complexity analysis."""
-
-    PYTHON = "python"
-    RUST = "rust"
 
 
 class ProjectSource(str, Enum):
@@ -1175,49 +1168,6 @@ class UserStoryStatistics(BaseModel):
     rating_distribution: dict[str, int] = Field(description="Distribution of ratings")
 
 
-class UserStoryDisplayData(BaseModel):
-    """Display data for user story entries in tables."""
-
-    entry_id: str = Field(description="Short ID of the entry")
-    date: str = Field(description="Formatted creation date")
-    commits: str = Field(description="Short commit range display")
-    rating: str = Field(description="Formatted rating display")
-    model: str = Field(description="Model used for generation")
-    repository: str = Field(description="Repository name")
-
-
-class ExperimentDisplayData(BaseModel):
-    """Display data for experiment runs in tables."""
-
-    id: str = Field(description="Experiment ID")
-    repository_name: str = Field(description="Name of the repository")
-    commits_display: str = Field(description="Formatted commit range (e.g., 'abc123 → def456')")
-    start_time: str = Field(description="Formatted start time")
-    duration: str = Field(description="Formatted duration or 'Running...'")
-    status: str = Field(description="Current status (running, completed, failed)")
-
-
-class ProgressDisplayData(BaseModel):
-    """Display data for experiment progress rows."""
-
-    timestamp: str = Field(description="Formatted timestamp (HH:MM:SS)")
-    cli_score: str = Field(description="Formatted CLI score")
-    complexity_score: str = Field(description="Formatted complexity score")
-    halstead_score: str = Field(description="Formatted Halstead score")
-    maintainability_score: str = Field(description="Formatted maintainability score")
-
-
-class NFPObjectiveDisplayData(BaseModel):
-    """Display data for NFP objectives in tables."""
-
-    id: str = Field(description="Objective ID")
-    title: str = Field(description="Objective title")
-    commits: str = Field(description="Formatted commit range")
-    story_count: int = Field(description="Number of associated user stories")
-    complexity: int = Field(description="Complexity metric")
-    created_date: str = Field(description="Formatted creation date")
-
-
 class CodeQualityCache(BaseModel):
     """Cached code quality metrics for a specific session/repository/commit combination."""
 
@@ -1348,6 +1298,11 @@ class RepoBaseline(BaseModel):
         description="Which baseline computation strategy produced this baseline. "
         "None for legacy baselines computed before strategy support was added. "
         "Used for cache invalidation: strategy mismatch with current settings triggers recomputation.",
+    )
+
+    qpe_weight_version: str | None = Field(
+        default=None,
+        description="QPE_WEIGHT_VERSION at time of computation. None = pre-versioning entry.",
     )
 
 
@@ -1591,6 +1546,10 @@ class LeaderboardEntry(BaseModel):
     effort_factor: float = Field(description="log(total_halstead_effort + 1)")
     total_effort: float = Field(description="Total Halstead Effort")
     metrics_json: str = Field(description="Full ExtendedComplexityMetrics as JSON")
+    qpe_weight_version: str | None = Field(
+        default=None,
+        description="QPE_WEIGHT_VERSION at time of computation. None = pre-versioning entry.",
+    )
 
 
 class StagedChangesAnalysis(BaseModel):
@@ -1654,6 +1613,49 @@ class CurrentChangesAnalysis(BaseModel):
         description="Per-smell advantage breakdown between baseline and current QPE. "
         "Shows which specific smells changed and their weighted impact.",
     )
+
+
+class CurrentImpactSummary(BaseModel):
+    """Compact JSON output of current-impact analysis for CI consumption.
+
+    Extracts the essential fields from CurrentChangesAnalysis, omitting
+    the large nested baseline and full metrics objects.
+    """
+
+    source: AnalysisSource = Field(description="Whether analyzing uncommitted changes or previous commit")
+    analyzed_commit_sha: str | None = Field(
+        default=None, description="SHA of the analyzed commit (when source is previous_commit)"
+    )
+    base_commit_sha: str | None = Field(
+        default=None, description="SHA of the base commit (when source is previous_commit)"
+    )
+    impact_score: float = Field(description="Weighted composite impact score")
+    impact_category: ImpactCategory = Field(description="Human-readable impact category")
+    qpe_delta: float = Field(description="Change in QPE score")
+    cc_delta: float = Field(description="Change in cyclomatic complexity")
+    effort_delta: float = Field(description="Change in Halstead effort")
+    mi_delta: float = Field(description="Change in maintainability index")
+    changed_files_count: int = Field(description="Number of changed code files")
+    blind_spots_count: int = Field(description="Number of dependent files not in changed set")
+    smell_advantages: list["SmellAdvantage"] = Field(default_factory=list, description="Per-smell advantage breakdown")
+
+    @staticmethod
+    def from_analysis(analysis: "CurrentChangesAnalysis") -> "CurrentImpactSummary":
+        """Create compact summary from full analysis."""
+        return CurrentImpactSummary(
+            source=analysis.source,
+            analyzed_commit_sha=analysis.analyzed_commit_sha,
+            base_commit_sha=analysis.base_commit_sha,
+            impact_score=analysis.assessment.impact_score,
+            impact_category=analysis.assessment.impact_category,
+            qpe_delta=analysis.assessment.qpe_delta,
+            cc_delta=analysis.assessment.cc_delta,
+            effort_delta=analysis.assessment.effort_delta,
+            mi_delta=analysis.assessment.mi_delta,
+            changed_files_count=len(analysis.changed_files),
+            blind_spots_count=len(analysis.blind_spots),
+            smell_advantages=analysis.smell_advantages,
+        )
 
 
 class FileCoverageStatus(BaseModel):
@@ -1736,22 +1738,3 @@ class ContextCoverage(BaseModel):
             or self.overall_dependents_coverage < 100
             or bool(self.blind_spots)
         )
-
-
-class LanguageGuardResult(BaseModel):
-    """Result of language guard check for complexity analysis features."""
-
-    allowed: bool = Field(description="Whether the required language is available for analysis")
-    required_language: ProjectLanguage = Field(description="The language required by the feature")
-    detected_supported: set[ProjectLanguage] = Field(
-        default_factory=set, description="Languages detected in repo that are supported"
-    )
-    detected_unsupported: set[str] = Field(
-        default_factory=set, description="Language names detected but not supported (e.g., 'Rust', 'Go')"
-    )
-
-    def format_warning(self) -> str | None:
-        """Return warning message if unsupported languages found, else None."""
-        if not self.detected_unsupported:
-            return None
-        return f"Found {', '.join(sorted(self.detected_unsupported))} files but analysis not yet supported"

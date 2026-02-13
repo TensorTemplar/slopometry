@@ -14,6 +14,11 @@ import math
 from pathlib import Path
 
 from slopometry.core.complexity_analyzer import ComplexityAnalyzer
+
+# Bump this when SMELL_REGISTRY weights or QPE formula parameters change.
+# Used to detect stale cached QPE scores computed with old weights.
+QPE_WEIGHT_VERSION = "2"
+
 from slopometry.core.models import (
     SMELL_REGISTRY,
     CrossProjectComparison,
@@ -80,9 +85,7 @@ def calculate_qpe(metrics: ExtendedComplexityMetrics) -> QPEScore:
         else 0.0
     )
     type_bonus = (
-        settings.qpe_type_coverage_bonus
-        if metrics.type_hint_coverage >= settings.qpe_type_coverage_threshold
-        else 0.0
+        settings.qpe_type_coverage_bonus if metrics.type_hint_coverage >= settings.qpe_type_coverage_threshold else 0.0
     )
     docstring_bonus = (
         settings.qpe_docstring_coverage_bonus
