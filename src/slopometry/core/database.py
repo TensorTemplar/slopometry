@@ -31,12 +31,12 @@ from slopometry.core.models import (
     QPEScore,
     RepoBaseline,
     ResolvedBaselineStrategy,
-    SessionDisplayData,
     SessionStatistics,
     ToolType,
     UserStory,
     UserStoryEntry,
 )
+from slopometry.core.display_models import SessionDisplayData
 from slopometry.core.plan_analyzer import PlanAnalyzer
 from slopometry.core.settings import settings
 

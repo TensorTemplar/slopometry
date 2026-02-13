@@ -7,16 +7,18 @@ from pathlib import Path
 
 from rich.table import Table
 
+from slopometry.core.display_models import (
+    ExperimentDisplayData,
+    FeatureDisplayData,
+    NFPObjectiveDisplayData,
+    ProgressDisplayData,
+    SessionDisplayData,
+)
 from slopometry.core.models import (
     SMELL_REGISTRY,
     BaselineStrategy,
     CompactEvent,
-    ExperimentDisplayData,
-    FeatureDisplayData,
     ImplementationComparison,
-    NFPObjectiveDisplayData,
-    ProgressDisplayData,
-    SessionDisplayData,
     SmellAdvantage,
     SmellCategory,
     TokenUsage,

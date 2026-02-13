@@ -3,18 +3,20 @@
 import pytest
 from pydantic import ValidationError
 
+from slopometry.core.display_models import (
+    FeatureDisplayData,
+    SessionDisplayData,
+    UserStoryDisplayData,
+)
 from slopometry.core.models import (
     BaselineStrategy,
     ContextCoverage,
     ExtendedComplexityMetrics,
-    FeatureDisplayData,
     FileCoverageStatus,
     ImplementationComparison,
     QPEScore,
     ResolvedBaselineStrategy,
-    SessionDisplayData,
     SmellAdvantage,
-    UserStoryDisplayData,
     UserStoryStatistics,
 )
 

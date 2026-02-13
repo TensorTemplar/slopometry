@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 from slopometry.core.database import EventDatabase
-from slopometry.core.models import ExperimentDisplayData, ProgressDisplayData
+from slopometry.core.display_models import ExperimentDisplayData, ProgressDisplayData
 
 
 class ExperimentService:

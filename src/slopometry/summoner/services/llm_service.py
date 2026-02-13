@@ -94,7 +94,7 @@ class LLMService:
 
     def prepare_features_data_for_display(self, features: list) -> list[FeatureDisplayData]:
         """Prepare feature boundaries data for display formatting."""
-        from slopometry.core.models import FeatureDisplayData
+        from slopometry.core.display_models import FeatureDisplayData
 
         features_data = []
         for feature in features:
