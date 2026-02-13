@@ -132,7 +132,7 @@ def compare_subtrees(prefix_a: str, prefix_b: str, ref: str, repo_path: Path | N
         repo_path = Path.cwd()
 
     from slopometry.core.language_guard import check_language_support
-    from slopometry.core.models import ProjectLanguage
+    from slopometry.core.language_models import ProjectLanguage
     from slopometry.summoner.services.implementation_comparator import (
         SubtreeExtractionError,
         compare_subtrees,
@@ -194,7 +194,7 @@ def compare_subtrees(prefix_a: str, prefix_b: str, ref: str, repo_path: Path | N
 def run_experiments(commits: int, max_workers: int, repo_path: Path | None) -> None:
     """Run parallel experiments across git commits to track and analyze code complexity evolution patterns."""
     from slopometry.core.language_guard import check_language_support
-    from slopometry.core.models import ProjectLanguage
+    from slopometry.core.language_models import ProjectLanguage
     from slopometry.summoner.services.experiment_service import ExperimentService
 
     if repo_path is None:
@@ -240,7 +240,7 @@ def run_experiments(commits: int, max_workers: int, repo_path: Path | None) -> N
 def analyze_commits(start: str | None, end: str | None, repo_path: Path | None) -> None:
     """Analyze complexity evolution across a chain of commits."""
     from slopometry.core.language_guard import check_language_support
-    from slopometry.core.models import ProjectLanguage
+    from slopometry.core.language_models import ProjectLanguage
     from slopometry.summoner.services.experiment_service import ExperimentService
 
     if repo_path is None:
@@ -1120,7 +1120,7 @@ def qpe(repo_path: Path | None, output_json: bool) -> None:
         return
 
     from slopometry.core.language_guard import check_language_support
-    from slopometry.core.models import ProjectLanguage
+    from slopometry.core.language_models import ProjectLanguage
 
     guard = check_language_support(repo_path, ProjectLanguage.PYTHON)
     if warning := guard.format_warning():

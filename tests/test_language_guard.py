@@ -9,7 +9,7 @@ from slopometry.core.language_detector import (
     LanguageDetector,
 )
 from slopometry.core.language_guard import check_language_support
-from slopometry.core.models import LanguageGuardResult, ProjectLanguage
+from slopometry.core.language_models import LanguageGuardResult, ProjectLanguage
 
 
 class TestLanguageDetector:

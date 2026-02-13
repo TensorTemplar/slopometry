@@ -12,7 +12,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from slopometry.core.models import ProjectLanguage
+from slopometry.core.language_models import ProjectLanguage
 
 
 class LanguageConfig(BaseModel):

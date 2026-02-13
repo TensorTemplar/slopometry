@@ -15,7 +15,7 @@ from slopometry.core.language_config import (
     get_language_config,
     should_ignore_path,
 )
-from slopometry.core.models import ProjectLanguage
+from slopometry.core.language_models import ProjectLanguage
 
 
 class TestLanguageConfig:
