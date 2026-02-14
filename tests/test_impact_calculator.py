@@ -217,3 +217,98 @@ def test_calculate_impact__preserves_raw_deltas_in_assessment(calculator, repo_b
     assert assessment.cc_delta == 7
     assert assessment.effort_delta == 75.0
     assert assessment.mi_delta == -0.8
+
+
+def test_calculate_impact__computes_token_delta_when_baseline_has_token_stats(calculator, baseline_metrics):
+    """When baseline has token_delta_stats, should compute token z-score and preserve token_delta."""
+    repo_baseline = RepoBaseline(
+        repository_path="/test/repo",
+        computed_at=datetime.now(),
+        head_commit_sha="abc123",
+        total_commits_analyzed=50,
+        cc_delta_stats=HistoricalMetricStats(
+            metric_name="cc_delta",
+            mean=2.0,
+            std_dev=3.0,
+            median=1.0,
+            min_value=-5.0,
+            max_value=15.0,
+            sample_count=50,
+            trend_coefficient=0.01,
+        ),
+        effort_delta_stats=HistoricalMetricStats(
+            metric_name="effort_delta",
+            mean=50.0,
+            std_dev=25.0,
+            median=40.0,
+            min_value=-10.0,
+            max_value=150.0,
+            sample_count=50,
+            trend_coefficient=-0.5,
+        ),
+        mi_delta_stats=HistoricalMetricStats(
+            metric_name="mi_delta",
+            mean=-0.5,
+            std_dev=1.0,
+            median=-0.3,
+            min_value=-3.0,
+            max_value=2.0,
+            sample_count=50,
+            trend_coefficient=-0.01,
+        ),
+        token_delta_stats=HistoricalMetricStats(
+            metric_name="token_delta",
+            mean=1000.0,
+            std_dev=500.0,
+            median=800.0,
+            min_value=-200.0,
+            max_value=3000.0,
+            sample_count=50,
+            trend_coefficient=50.0,
+        ),
+        current_metrics=baseline_metrics,
+    )
+    delta = ComplexityDelta(
+        total_complexity_change=2,
+        avg_complexity_change=0.1,
+        total_volume_change=100.0,
+        avg_volume_change=5.0,
+        avg_difficulty_change=0.5,
+        total_effort_change=50.0,
+        avg_effort_change=2.5,
+        total_mi_change=-0.5,
+        avg_mi_change=-0.025,
+        net_files_change=0,
+        total_tokens_change=2000,  # 2 std devs above mean (1000 + 2*500)
+    )
+
+    assessment = calculator.calculate_impact(delta, repo_baseline)
+
+    # Token z-score should be +2.0 (2000 is 2 std devs above mean of 1000)
+    assert assessment.token_z_score == pytest.approx(2.0)
+    # Token delta should be preserved
+    assert assessment.token_delta == 2000
+
+
+def test_calculate_impact__token_z_score_zero_when_no_baseline_token_stats(calculator, repo_baseline):
+    """When baseline has no token_delta_stats, token_z_score should default to 0."""
+    delta = ComplexityDelta(
+        total_complexity_change=2,
+        avg_complexity_change=0.1,
+        total_volume_change=100.0,
+        avg_volume_change=5.0,
+        avg_difficulty_change=0.5,
+        total_effort_change=50.0,
+        avg_effort_change=2.5,
+        total_mi_change=-0.5,
+        avg_mi_change=-0.025,
+        net_files_change=0,
+        total_tokens_change=5000,
+    )
+
+    assessment = calculator.calculate_impact(delta, repo_baseline)
+
+    # token_delta should still be preserved from the delta
+    assert assessment.token_delta == 5000
+    # But z-score should be 0 when no baseline stats
+    assert assessment.token_z_score == 0.0

@@ -478,6 +478,7 @@ class TestCurrentImpactSummary:
             "cc_delta",
             "effort_delta",
             "mi_delta",
+            "token_delta",
             "changed_files_count",
             "blind_spots_count",
             "smell_advantages",

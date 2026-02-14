@@ -158,6 +158,9 @@ class RepoBaseline(BaseModel):
 
     qpe_stats: HistoricalMetricStats | None = Field(default=None, description="QPE statistics from commit history")
     current_qpe: "QPEScore | None" = Field(default=None, description="QPE score at HEAD")
+    token_delta_stats: HistoricalMetricStats | None = Field(
+        default=None, description="Token delta statistics from commit history"
+    )
 
     strategy: ResolvedBaselineStrategy | None = Field(
         default=None,
@@ -237,6 +240,9 @@ class ImpactAssessment(BaseModel):
     qpe_delta: float = Field(default=0.0, description="QPE change between baseline and current")
     qpe_z_score: float = Field(default=0.0, description="Z-score for QPE change (positive = above avg improvement)")
 
+    token_delta: int = Field(default=0, description="Token change between baseline and current")
+    token_z_score: float = Field(default=0.0, description="Z-score for token change (positive = larger than avg)")
+
     def interpret_cc(self, verbose: bool = False) -> ZScoreInterpretation:
         """Interpret CC z-score (lower CC is better, so invert)."""
         return ZScoreInterpretation.from_z_score(-self.cc_z_score, verbose)
@@ -252,6 +258,10 @@ class ImpactAssessment(BaseModel):
     def interpret_qpe(self, verbose: bool = False) -> ZScoreInterpretation:
         """Interpret QPE z-score (higher QPE is better, no inversion)."""
         return ZScoreInterpretation.from_z_score(self.qpe_z_score, verbose)
+
+    def interpret_tokens(self, verbose: bool = False) -> ZScoreInterpretation:
+        """Interpret token z-score - neutral interpretation since size isn't inherently good/bad."""
+        return ZScoreInterpretation.from_z_score(self.token_z_score, verbose)
 
 
 class CodeQualityCache(BaseModel):
@@ -350,6 +360,7 @@ class CurrentImpactSummary(BaseModel):
     cc_delta: float = Field(description="Change in cyclomatic complexity")
     effort_delta: float = Field(description="Change in Halstead effort")
     mi_delta: float = Field(description="Change in maintainability index")
+    token_delta: int = Field(default=0, description="Change in tokens")
     changed_files_count: int = Field(description="Number of changed code files")
     blind_spots_count: int = Field(description="Number of dependent files not in changed set")
     smell_advantages: list["SmellAdvantage"] = Field(default_factory=list, description="Per-smell advantage breakdown")
@@ -367,6 +378,7 @@ class CurrentImpactSummary(BaseModel):
             cc_delta=analysis.assessment.cc_delta,
             effort_delta=analysis.assessment.effort_delta,
             mi_delta=analysis.assessment.mi_delta,
+            token_delta=analysis.assessment.token_delta,
             changed_files_count=len(analysis.changed_files),
             blind_spots_count=len(analysis.blind_spots),
             smell_advantages=analysis.smell_advantages,

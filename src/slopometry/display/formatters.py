@@ -2,9 +2,9 @@
 
 import logging
 from collections import Counter
-from typing import Any
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 from rich.table import Table
 
@@ -16,10 +16,10 @@ from slopometry.core.models.baseline import (
 )
 from slopometry.core.models.display import ExperimentDisplayData, LeaderboardEntry, NFPObjectiveDisplayData
 from slopometry.core.models.experiment import ProgressDisplayData
-from slopometry.core.models.user_story import UserStoryDisplayData
-from slopometry.core.models.session import CompactEvent, TokenUsage
 from slopometry.core.models.hook import HookEventType, ToolType
+from slopometry.core.models.session import CompactEvent, TokenUsage
 from slopometry.core.models.smell import SMELL_REGISTRY, SmellCategory, get_smell_label, get_smells_by_category
+from slopometry.core.models.user_story import UserStoryDisplayData
 from slopometry.core.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -1435,6 +1435,14 @@ def display_baseline_comparison(
             _format_trend(baseline.qpe_stats.trend_coefficient, lower_is_better=False),
         )
 
+    if baseline.token_delta_stats:
+        baseline_table.add_row(
+            "Tokens",
+            _format_token_count(int(baseline.token_delta_stats.mean)),
+            f"±{_format_token_count(int(baseline.token_delta_stats.std_dev))}",
+            _format_trend(baseline.token_delta_stats.trend_coefficient, lower_is_better=False),
+        )
+
     console.print(baseline_table)
 
     # Show current QPE absolute value for context
@@ -1468,6 +1476,15 @@ def display_baseline_comparison(
             f"{assessment.qpe_z_score:+.2f}",
             _interpret_z_score(assessment.qpe_z_score),
         )
+
+    # Tokens row - neutral interpretation (size isn't inherently good/bad)
+    token_color = "green" if assessment.token_z_score > 0 else "red" if assessment.token_z_score < 0 else "yellow"
+    impact_table.add_row(
+        "Tokens",
+        f"[{token_color}]{_format_token_count(assessment.token_delta)}[/{token_color}]",
+        f"[{token_color}]{assessment.token_z_score:+.2f}[/{token_color}]",
+        _interpret_z_score(assessment.token_z_score),
+    )
 
     console.print(impact_table)
 
