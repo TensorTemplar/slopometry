@@ -711,23 +711,39 @@ def format_code_smell_feedback(
                 lines.append(f"     → {smell.guidance}")
         lines.append("")
 
-    other_smells_with_changes = [s for s in other_smells if s.change != 0]
+    # Separate increases (require review) from decreases (improvements - no review needed)
+    smells_increased = [s for s in other_smells if s.change > 0]
+    smells_decreased = [s for s in other_smells if s.change < 0]
+    other_smells_with_changes = smells_increased + smells_decreased
+
     if other_smells_with_changes:
         if not blocking_smells:
             lines.append("")
-        lines.append(
-            "**Code Smells** (Any increase requires review, irrespective of which session edited related files):"
-        )
-        lines.append("")
-        for smell in other_smells_with_changes:
-            change_str = f" (+{smell.change})" if smell.change > 0 else f" ({smell.change})"
-            lines.append(f"   • **{smell.label}**: {smell.count}{change_str}")
-            for f in smell.actionable_files[:3]:
-                lines.append(f"     - {truncate_path(f, max_width=60)}")
-            if len(smell.actionable_files) > 3:
-                lines.append(f"     ... and {len(smell.actionable_files) - 3} more")
-            if smell.guidance:
-                lines.append(f"     → {smell.guidance}")
+
+        # Show improvements first (decreases) - these don't require review
+        if smells_decreased:
+            lines.append("**Code Smell Improvements** (decreases - great work!):")
+            lines.append("")
+            for smell in smells_decreased:
+                change_str = f" ({smell.change})"
+                lines.append(f"   • **{smell.label}**: {smell.count}{change_str}")
+            lines.append("")
+
+        # Show increases - these require review
+        if smells_increased:
+            lines.append(
+                "**Code Smells** (increases require review, irrespective of which session edited related files):"
+            )
+            lines.append("")
+            for smell in smells_increased:
+                change_str = f" (+{smell.change})"
+                lines.append(f"   • **{smell.label}**: {smell.count}{change_str}")
+                for f in smell.actionable_files[:3]:
+                    lines.append(f"     - {truncate_path(f, max_width=60)}")
+                if len(smell.actionable_files) > 3:
+                    lines.append(f"     ... and {len(smell.actionable_files) - 3} more")
+                if smell.guidance:
+                    lines.append(f"     → {smell.guidance}")
 
     has_smells = len(blocking_smells) > 0 or len(other_smells_with_changes) > 0
     if has_smells:
