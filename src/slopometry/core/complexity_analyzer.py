@@ -7,7 +7,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 from slopometry.core.code_analyzer import CodeAnalyzer, _analyze_single_file
-from slopometry.core.models import (
+from slopometry.core.models.complexity import (
     ComplexityDelta,
     ComplexityMetrics,
     ExtendedComplexityMetrics,

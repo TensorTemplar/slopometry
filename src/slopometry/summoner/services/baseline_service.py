@@ -12,7 +12,7 @@ from statistics import mean, median, stdev
 from slopometry.core.complexity_analyzer import ComplexityAnalyzer
 from slopometry.core.database import EventDatabase
 from slopometry.core.git_tracker import GitOperationError, GitTracker
-from slopometry.core.models import (
+from slopometry.core.models.baseline import (
     BaselineStrategy,
     HistoricalMetricStats,
     RepoBaseline,

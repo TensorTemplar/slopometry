@@ -11,7 +11,7 @@ The design allows easy extension to new languages while keeping type safety.
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from slopometry.core.models import ProjectLanguage
+from slopometry.core.models.hook import ProjectLanguage
 
 
 @dataclass(frozen=True)

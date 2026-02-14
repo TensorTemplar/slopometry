@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
 
-from slopometry.core.models import CompactEvent
+from slopometry.core.models.session import CompactEvent
 
 if TYPE_CHECKING:
     from slopometry.core.database import EventDatabase

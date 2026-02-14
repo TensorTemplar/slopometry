@@ -7,7 +7,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from slopometry.core.models import TokenUsage, ToolType
+from slopometry.core.models.hook import ToolType
+from slopometry.core.models.session import TokenUsage
 from slopometry.core.plan_analyzer import PlanAnalyzer
 
 logger = logging.getLogger(__name__)
@@ -84,13 +85,14 @@ class AssistantMessage(BaseModel):
     """Assistant message with usage and content."""
 
     usage: MessageUsage = Field(default_factory=MessageUsage)
-    content: list[dict[str, Any]] = Field(default_factory=list)
+    # content can be a list (Claude) or a string (some other models like MiniMax)
+    content: list[dict[str, Any]] | str = Field(default="")
 
 
 class ToolUseResult(BaseModel):
     """Result from a tool use (subagent tokens)."""
 
-    totalTokens: int = 0  # camelCase matches transcript format
+    totalTokens: int = 0
 
 
 class TranscriptEvent(BaseModel, extra="allow"):
@@ -101,7 +103,8 @@ class TranscriptEvent(BaseModel, extra="allow"):
 
     type: str | None = None
     message: AssistantMessage | None = None
-    toolUseResult: ToolUseResult | None = None  # camelCase matches transcript
+    # toolUseResult can be a dict, ToolUseResult, or string (error messages from some models)
+    toolUseResult: ToolUseResult | dict[str, Any] | str | None = None
 
 
 class TranscriptTokenAnalyzer:
@@ -178,6 +181,13 @@ class TranscriptTokenAnalyzer:
         usage.total_output_tokens += output_tokens
 
         content = event.message.content
+        # Skip tool categorization if content is a string (non-standard format)
+        if isinstance(content, str):
+            # Fall back to implementation-only tokens for string content
+            usage.implementation_input_tokens += input_tokens
+            usage.implementation_output_tokens += output_tokens
+            return
+
         tool_categories = self._get_tool_categories(content)
 
         if not tool_categories:
@@ -196,11 +206,11 @@ class TranscriptTokenAnalyzer:
             usage.implementation_input_tokens += input_tokens
             usage.implementation_output_tokens += output_tokens
 
-    def _get_tool_categories(self, content: list) -> list[str]:
+    def _get_tool_categories(self, content: list[dict[str, Any]]) -> list[str]:
         """Extract tool categories from message content.
 
         Args:
-            content: Message content list
+            content: Message content list (not string - caller handles that case)
 
         Returns:
             List of categories ("exploration" or "implementation") for each tool
@@ -260,8 +270,15 @@ class TranscriptTokenAnalyzer:
             event: User message event (containing tool_result)
             usage: TokenUsage to update
         """
-        if event.toolUseResult and event.toolUseResult.totalTokens:
-            usage.subagent_tokens += event.toolUseResult.totalTokens
+        # Handle different toolUseResult types: ToolUseResult, dict, or string
+        tool_result = event.toolUseResult
+        if isinstance(tool_result, ToolUseResult):
+            if tool_result.totalTokens:
+                usage.subagent_tokens += tool_result.totalTokens
+        elif isinstance(tool_result, dict):
+            if tool_result.get("totalTokens"):
+                usage.subagent_tokens += tool_result["totalTokens"]
+        # String toolUseResult (error messages) - ignore
 
 
 def analyze_transcript_tokens(transcript_path: Path) -> TokenUsage:

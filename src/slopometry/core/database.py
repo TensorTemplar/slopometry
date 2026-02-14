@@ -11,31 +11,13 @@ from pathlib import Path
 from slopometry.core.migrations import MigrationRunner
 
 logger = logging.getLogger(__name__)
-from slopometry.core.models import (
-    ComplexityDelta,
-    ContextCoverage,
-    ExperimentProgress,
-    ExperimentRun,
-    ExperimentStatus,
-    ExtendedComplexityMetrics,
-    FeatureBoundary,
-    GitState,
-    HistoricalMetricStats,
-    HookEvent,
-    HookEventType,
-    LeaderboardEntry,
-    NextFeaturePrediction,
-    PlanEvolution,
-    Project,
-    ProjectSource,
-    QPEScore,
-    RepoBaseline,
-    ResolvedBaselineStrategy,
-    SessionStatistics,
-    ToolType,
-    UserStory,
-    UserStoryEntry,
-)
+from slopometry.core.models.baseline import HistoricalMetricStats, QPEScore, RepoBaseline, ResolvedBaselineStrategy
+from slopometry.core.models.complexity import ComplexityDelta, ExtendedComplexityMetrics
+from slopometry.core.models.display import LeaderboardEntry
+from slopometry.core.models.experiment import ExperimentProgress, ExperimentRun, ExperimentStatus, FeatureBoundary
+from slopometry.core.models.hook import GitState, HookEvent, HookEventType, Project, ProjectSource, ToolType
+from slopometry.core.models.session import ContextCoverage, PlanEvolution, SessionStatistics
+from slopometry.core.models.user_story import NextFeaturePrediction, UserStory, UserStoryEntry
 from slopometry.core.plan_analyzer import PlanAnalyzer
 from slopometry.core.settings import settings
 
@@ -107,15 +89,15 @@ class EventDatabase:
                 )
             """)
             conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_hook_events_session_id 
+                CREATE INDEX IF NOT EXISTS idx_hook_events_session_id
                 ON hook_events(session_id)
             """)
             conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_hook_events_timestamp 
+                CREATE INDEX IF NOT EXISTS idx_hook_events_timestamp
                 ON hook_events(timestamp)
             """)
             conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_hook_events_session_timestamp 
+                CREATE INDEX IF NOT EXISTS idx_hook_events_session_timestamp
                 ON hook_events(session_id, timestamp)
             """)
 
@@ -828,14 +810,14 @@ class EventDatabase:
         """Get lightweight session summaries for list display."""
         with self._get_db_connection() as conn:
             query = """
-                SELECT 
+                SELECT
                     session_id,
                     MIN(timestamp) as start_time,
                     COUNT(*) as total_events,
                     COUNT(DISTINCT tool_type) as tools_used,
                     project_name,
                     project_source
-                FROM hook_events 
+                FROM hook_events
                 WHERE session_id IS NOT NULL
                 GROUP BY session_id, project_name, project_source
                 ORDER BY MIN(timestamp) DESC
@@ -943,7 +925,7 @@ class EventDatabase:
         with self._get_db_connection() as conn:
             conn.execute(
                 """
-                UPDATE experiment_runs 
+                UPDATE experiment_runs
                 SET status = ?, end_time = ?, worktree_path = ?
                 WHERE id = ?
             """,
@@ -1055,7 +1037,7 @@ class EventDatabase:
             if existing:
                 conn.execute(
                     """
-                    UPDATE commit_complexity_chains 
+                    UPDATE commit_complexity_chains
                     SET commit_count = ?, computed_at = ?
                     WHERE id = ?
                 """,
@@ -1199,7 +1181,7 @@ class EventDatabase:
         with self._get_db_connection() as conn:
             nfp_row = conn.execute(
                 """
-                SELECT id FROM nfp_objectives 
+                SELECT id FROM nfp_objectives
                 WHERE repository_path = ? AND base_commit = ? AND target_commit = ?
             """,
                 (repository_path, base_commit, target_commit),
@@ -1215,7 +1197,7 @@ class EventDatabase:
             if repository_path:
                 rows = conn.execute(
                     """
-                    SELECT id FROM nfp_objectives 
+                    SELECT id FROM nfp_objectives
                     WHERE repository_path = ?
                     ORDER BY created_at DESC
                 """,
@@ -1246,7 +1228,7 @@ class EventDatabase:
         with self._get_db_connection() as conn:
             conn.execute(
                 """
-                INSERT INTO diff_user_story_dataset 
+                INSERT INTO diff_user_story_dataset
                 (id, created_at, base_commit, head_commit, diff_content, user_stories,
                  rating, guidelines_for_improving, model_used, prompt_template, repository_path)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -1302,7 +1284,7 @@ class EventDatabase:
         with self._get_db_connection() as conn:
             stats = conn.execute(
                 """
-                SELECT 
+                SELECT
                     COUNT(*) as total_entries,
                     AVG(rating) as avg_rating,
                     COUNT(DISTINCT model_used) as unique_models,

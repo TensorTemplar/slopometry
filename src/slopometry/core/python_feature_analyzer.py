@@ -12,7 +12,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from slopometry.core.models import SmellField
+from slopometry.core.models.smell import SmellField
 from slopometry.core.settings import settings
 
 logger = logging.getLogger(__name__)

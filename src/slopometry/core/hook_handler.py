@@ -10,21 +10,20 @@ from pathlib import Path
 from slopometry.core.database import EventDatabase, SessionManager
 from slopometry.core.git_tracker import GitTracker
 from slopometry.core.lock import SlopometryLock
-from slopometry.core.models import (
-    ComplexityDelta,
-    ContextCoverage,
-    ExtendedComplexityMetrics,
+from slopometry.core.models.complexity import ComplexityDelta, ExtendedComplexityMetrics
+from slopometry.core.models.hook import (
     HookEvent,
     HookEventType,
     HookInputUnion,
     NotificationInput,
     PostToolUseInput,
     PreToolUseInput,
-    ScopedSmell,
     StopInput,
     SubagentStopInput,
     ToolType,
 )
+from slopometry.core.models.session import ContextCoverage
+from slopometry.core.models.smell import ScopedSmell
 from slopometry.core.project_tracker import ProjectTracker
 from slopometry.core.settings import settings
 from slopometry.core.working_tree_state import WorkingTreeStateCalculator

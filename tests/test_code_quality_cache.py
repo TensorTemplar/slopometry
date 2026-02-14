@@ -5,7 +5,7 @@ import pytest
 from conftest import make_test_metrics
 
 from slopometry.core.code_quality_cache import CodeQualityCacheManager
-from slopometry.core.models import CacheUpdateError, ExtendedComplexityMetrics
+from slopometry.core.models.complexity import CacheUpdateError, ExtendedComplexityMetrics
 
 
 class TestCodeQualityCacheManager:
@@ -64,7 +64,7 @@ class TestCodeQualityCacheManager:
         # Insert a stale record (simulate old migration state or different version)
         db_connection.execute(
             """
-            INSERT INTO code_quality_cache 
+            INSERT INTO code_quality_cache
             (session_id, repository_path, commit_sha, calculated_at, complexity_metrics_json, complexity_delta_json, working_tree_hash, calculator_version)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
@@ -80,7 +80,7 @@ class TestCodeQualityCacheManager:
         # Insert a NULL version record
         db_connection.execute(
             """
-            INSERT INTO code_quality_cache 
+            INSERT INTO code_quality_cache
             (session_id, repository_path, commit_sha, calculated_at, complexity_metrics_json, complexity_delta_json, working_tree_hash, calculator_version)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,

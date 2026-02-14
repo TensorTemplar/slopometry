@@ -13,7 +13,8 @@ from slopometry.core.complexity_analyzer import ComplexityAnalyzer
 from slopometry.core.coverage_analyzer import CoverageAnalyzer
 from slopometry.core.database import EventDatabase
 from slopometry.core.git_tracker import GitOperationError, GitTracker
-from slopometry.core.models import ExperimentProgress, ExperimentRun, ExperimentStatus, ExtendedComplexityMetrics
+from slopometry.core.models.complexity import ExtendedComplexityMetrics
+from slopometry.core.models.experiment import ExperimentProgress, ExperimentRun, ExperimentStatus
 from slopometry.display.console import console
 from slopometry.summoner.services.cli_calculator import CLICalculator
 from slopometry.summoner.services.worktree_manager import WorktreeManager

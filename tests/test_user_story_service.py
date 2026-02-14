@@ -5,7 +5,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from slopometry.core.models import UserStoryDisplayData, UserStoryEntry, UserStoryStatistics
+from slopometry.core.models.user_story import UserStoryDisplayData, UserStoryEntry, UserStoryStatistics
 from slopometry.summoner.services.user_story_service import UserStoryService
 
 

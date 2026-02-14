@@ -10,7 +10,7 @@ from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel, Ope
 from pydantic_ai.providers.anthropic import AnthropicProvider
 from pydantic_ai.providers.openai import OpenAIProvider
 
-from slopometry.core.models import FeatureBoundary, MergeCommit
+from slopometry.core.models.experiment import FeatureBoundary, MergeCommit
 from slopometry.core.settings import settings
 
 
@@ -99,13 +99,13 @@ def get_user_story_prompt(diff: str) -> str:
 <instructions>
 You are in the role of a principal software engineer.
 Your task is to look at a git diff that will be provided in separate xml tags, between the current state and
- some past state of the codebase and create detailed user stories from what was implemented, according to this diff, 
+ some past state of the codebase and create detailed user stories from what was implemented, according to this diff,
  for re-implementation from scratch.
 
-Your target audience is mid-level SWE so chose a balanced level of detail when creating the user stories, 
+Your target audience is mid-level SWE so chose a balanced level of detail when creating the user stories,
 without biasing the implementation too much in any direction nor requesting specific implementation approaches.
 
-When creating user stories, focus on functional parts of the diff and ignore non-functional parts, 
+When creating user stories, focus on functional parts of the diff and ignore non-functional parts,
 like changes in lock files, project requirements, readme files and so on.
 
 Your output should be formatted markdown.

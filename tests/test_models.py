@@ -3,18 +3,16 @@
 import pytest
 from pydantic import ValidationError
 
-from slopometry.core.models import (
+from slopometry.core.models.baseline import (
     BaselineStrategy,
-    ContextCoverage,
-    ExtendedComplexityMetrics,
-    FileCoverageStatus,
     ImplementationComparison,
     QPEScore,
     ResolvedBaselineStrategy,
     SmellAdvantage,
-    UserStoryDisplayData,
-    UserStoryStatistics,
 )
+from slopometry.core.models.complexity import ExtendedComplexityMetrics
+from slopometry.core.models.session import ContextCoverage, FileCoverageStatus
+from slopometry.core.models.user_story import UserStoryDisplayData, UserStoryStatistics
 
 
 class TestExtendedComplexityMetrics:

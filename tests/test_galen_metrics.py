@@ -2,7 +2,7 @@
 
 import pytest
 
-from slopometry.core.models import GALEN_TOKENS_PER_DAY, GALEN_TOKENS_PER_MONTH, GalenMetrics
+from slopometry.core.models.baseline import GALEN_TOKENS_PER_DAY, GALEN_TOKENS_PER_MONTH, GalenMetrics
 
 
 class TestGalenMetricsCalculations:

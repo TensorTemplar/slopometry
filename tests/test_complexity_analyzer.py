@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from slopometry.core.complexity_analyzer import ComplexityAnalyzer
-from slopometry.core.models import FileAnalysisResult
+from slopometry.core.models.complexity import FileAnalysisResult
 
 
 @pytest.fixture

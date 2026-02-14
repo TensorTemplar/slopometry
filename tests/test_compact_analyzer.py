@@ -8,7 +8,7 @@ from slopometry.core.compact_analyzer import (
     analyze_transcript_compacts,
     find_compact_instructions,
 )
-from slopometry.core.models import CompactEvent
+from slopometry.core.models.session import CompactEvent
 
 
 class TestCompactEventAnalyzer:

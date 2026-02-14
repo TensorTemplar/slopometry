@@ -4,7 +4,8 @@ from datetime import datetime
 from pathlib import Path
 
 from slopometry.core.database import EventDatabase
-from slopometry.core.models import ExperimentDisplayData, ProgressDisplayData
+from slopometry.core.models.display import ExperimentDisplayData
+from slopometry.core.models.experiment import ProgressDisplayData
 
 
 class ExperimentService:
@@ -85,7 +86,7 @@ class ExperimentService:
                 progress_rows = conn.execute(
                     """
                     SELECT timestamp, cli_score, complexity_score, halstead_score, maintainability_score
-                    FROM experiment_progress 
+                    FROM experiment_progress
                     WHERE experiment_id = ?
                     ORDER BY timestamp
                 """,

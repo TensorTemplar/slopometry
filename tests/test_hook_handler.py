@@ -13,22 +13,18 @@ from slopometry.core.hook_handler import (
     parse_hook_input,
     scope_smells_for_session,
 )
-from slopometry.core.models import (
-    ComplexityDelta,
-    ContextCoverage,
-    ExtendedComplexityMetrics,
-    FileCoverageStatus,
+from slopometry.core.models.baseline import ImpactAssessment, ImpactCategory, ZScoreInterpretation
+from slopometry.core.models.complexity import ComplexityDelta, ExtendedComplexityMetrics
+from slopometry.core.models.hook import (
     HookEventType,
-    ImpactAssessment,
-    ImpactCategory,
     NotificationInput,
     PostToolUseInput,
     PreToolUseInput,
-    SmellField,
     StopInput,
     SubagentStopInput,
-    ZScoreInterpretation,
 )
+from slopometry.core.models.session import ContextCoverage, FileCoverageStatus
+from slopometry.core.models.smell import SmellField
 
 
 class TestEventTypeDetection:
@@ -977,7 +973,7 @@ class TestHookHandlerSmokeTests:
         from unittest.mock import patch
 
         from slopometry.core.hook_handler import handle_hook
-        from slopometry.core.models import HookEventType
+        from slopometry.core.models.hook import HookEventType
 
         input_data = {
             "session_id": "smoke-test-session",
@@ -998,7 +994,7 @@ class TestHookHandlerSmokeTests:
         from unittest.mock import patch
 
         from slopometry.core.hook_handler import handle_hook
-        from slopometry.core.models import HookEventType
+        from slopometry.core.models.hook import HookEventType
 
         input_data = {
             "session_id": "smoke-test-session",
@@ -1020,7 +1016,7 @@ class TestHookHandlerSmokeTests:
         from unittest.mock import patch
 
         from slopometry.core.hook_handler import handle_hook
-        from slopometry.core.models import HookEventType
+        from slopometry.core.models.hook import HookEventType
 
         input_data = {
             "session_id": "smoke-test-session",
@@ -1040,7 +1036,7 @@ class TestHookHandlerSmokeTests:
         from unittest.mock import patch
 
         from slopometry.core.hook_handler import handle_hook
-        from slopometry.core.models import HookEventType
+        from slopometry.core.models.hook import HookEventType
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmppath = Path(tmpdir)
@@ -1071,7 +1067,7 @@ class TestHookHandlerSmokeTests:
         from unittest.mock import patch
 
         from slopometry.core.hook_handler import handle_hook
-        from slopometry.core.models import HookEventType
+        from slopometry.core.models.hook import HookEventType
 
         input_data = {
             "session_id": "smoke-test-subagent",

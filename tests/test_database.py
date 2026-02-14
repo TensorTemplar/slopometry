@@ -5,7 +5,9 @@ from datetime import datetime
 from pathlib import Path
 
 from slopometry.core.database import EventDatabase
-from slopometry.core.models import HookEvent, HookEventType, LeaderboardEntry, ToolType, UserStoryEntry
+from slopometry.core.models.display import LeaderboardEntry
+from slopometry.core.models.hook import HookEvent, HookEventType, ToolType
+from slopometry.core.models.user_story import UserStoryEntry
 
 
 def test_user_story_export_functionality() -> None:

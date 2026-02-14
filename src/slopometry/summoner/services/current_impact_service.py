@@ -7,16 +7,9 @@ from pathlib import Path
 
 from slopometry.core.complexity_analyzer import ComplexityAnalyzer
 from slopometry.core.database import EventDatabase
-from slopometry.core.models import (
-    AnalysisSource,
-    ComplexityDelta,
-    CurrentChangesAnalysis,
-    ExtendedComplexityMetrics,
-    GalenMetrics,
-    QPEScore,
-    RepoBaseline,
-    SmellAdvantage,
-)
+from slopometry.core.models.baseline import CurrentChangesAnalysis, GalenMetrics, QPEScore, RepoBaseline, SmellAdvantage
+from slopometry.core.models.complexity import ComplexityDelta, ExtendedComplexityMetrics
+from slopometry.core.models.hook import AnalysisSource
 from slopometry.core.working_tree_extractor import WorkingTreeExtractor
 from slopometry.core.working_tree_state import WorkingTreeStateCalculator
 from slopometry.summoner.services.impact_calculator import ImpactCalculator

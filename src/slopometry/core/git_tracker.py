@@ -9,7 +9,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from slopometry.core.models import GitState
+from slopometry.core.models.hook import GitState
 
 logger = logging.getLogger(__name__)
 

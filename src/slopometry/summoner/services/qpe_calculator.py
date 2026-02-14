@@ -19,14 +19,9 @@ from slopometry.core.complexity_analyzer import ComplexityAnalyzer
 # Used to detect stale cached QPE scores computed with old weights.
 QPE_WEIGHT_VERSION = "2"
 
-from slopometry.core.models import (
-    SMELL_REGISTRY,
-    CrossProjectComparison,
-    ExtendedComplexityMetrics,
-    ProjectQPEResult,
-    QPEScore,
-    SmellAdvantage,
-)
+from slopometry.core.models.baseline import CrossProjectComparison, ProjectQPEResult, QPEScore, SmellAdvantage
+from slopometry.core.models.complexity import ExtendedComplexityMetrics
+from slopometry.core.models.smell import SMELL_REGISTRY
 from slopometry.core.settings import settings
 
 
@@ -85,9 +80,7 @@ def calculate_qpe(metrics: ExtendedComplexityMetrics) -> QPEScore:
         else 0.0
     )
     type_bonus = (
-        settings.qpe_type_coverage_bonus
-        if metrics.type_hint_coverage >= settings.qpe_type_coverage_threshold
-        else 0.0
+        settings.qpe_type_coverage_bonus if metrics.type_hint_coverage >= settings.qpe_type_coverage_threshold else 0.0
     )
     docstring_bonus = (
         settings.qpe_docstring_coverage_bonus

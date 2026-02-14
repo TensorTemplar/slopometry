@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from slopometry.core.models import TokenUsage
+from slopometry.core.models.session import TokenUsage
 from slopometry.core.transcript_token_analyzer import TranscriptTokenAnalyzer, analyze_transcript_tokens
 
 

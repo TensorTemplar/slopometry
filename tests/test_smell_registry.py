@@ -2,10 +2,9 @@
 
 import pytest
 
-from slopometry.core.models import (
+from slopometry.core.models.complexity import ComplexityDelta, ExtendedComplexityMetrics
+from slopometry.core.models.smell import (
     SMELL_REGISTRY,
-    ComplexityDelta,
-    ExtendedComplexityMetrics,
     SmellCategory,
     SmellData,
     get_smell_label,
@@ -204,7 +203,7 @@ class TestExtendedComplexityMetricsSmellMethods:
         self, metrics_with_smells: ExtendedComplexityMetrics
     ) -> None:
         """Verify get_smell_counts returns SmellCounts model with correct values."""
-        from slopometry.core.models import SmellCounts
+        from slopometry.core.models.smell import SmellCounts
 
         smell_counts = metrics_with_smells.get_smell_counts()
         assert isinstance(smell_counts, SmellCounts)

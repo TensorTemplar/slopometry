@@ -7,13 +7,8 @@ from datetime import datetime
 
 import pytest
 
-from slopometry.core.models import (
-    ComplexityDelta,
-    ExtendedComplexityMetrics,
-    HistoricalMetricStats,
-    ImpactCategory,
-    RepoBaseline,
-)
+from slopometry.core.models.baseline import HistoricalMetricStats, ImpactCategory, RepoBaseline
+from slopometry.core.models.complexity import ComplexityDelta, ExtendedComplexityMetrics
 from slopometry.summoner.services.impact_calculator import ImpactCalculator
 
 

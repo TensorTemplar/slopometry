@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 from slopometry.core.database import EventDatabase
-from slopometry.core.models import SessionStatistics
+from slopometry.core.models.session import SessionStatistics
 
 
 class SessionService:

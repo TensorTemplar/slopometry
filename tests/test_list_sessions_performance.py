@@ -5,7 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from slopometry.core.database import EventDatabase
-from slopometry.core.models import HookEvent, HookEventType, Project, ProjectSource
+from slopometry.core.models.hook import HookEvent, HookEventType, Project, ProjectSource
 
 
 class TestListSessionsPerformance:

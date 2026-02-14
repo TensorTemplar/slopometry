@@ -6,7 +6,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 from conftest import make_test_metrics
 
-from slopometry.core.models import ExperimentStatus, ExtendedComplexityMetrics
+from slopometry.core.models.complexity import ExtendedComplexityMetrics
+from slopometry.core.models.experiment import ExperimentStatus
 from slopometry.summoner.services.experiment_orchestrator import ExperimentOrchestrator
 
 

@@ -1,11 +1,7 @@
 """Impact calculator for staged changes analysis."""
 
-from slopometry.core.models import (
-    ComplexityDelta,
-    ImpactAssessment,
-    ImpactCategory,
-    RepoBaseline,
-)
+from slopometry.core.models.baseline import ImpactAssessment, ImpactCategory, RepoBaseline
+from slopometry.core.models.complexity import ComplexityDelta
 from slopometry.core.settings import settings
 
 

@@ -165,3 +165,29 @@ def test_has_uncommitted_changes__detects_status():
         with tempfile.TemporaryDirectory() as temp_dir:
             calculator = WorkingTreeStateCalculator(temp_dir)
             assert calculator.has_uncommitted_changes() is True
+
+
+def test_get_current_commit_sha__handles_git_failure(caplog):
+    """Test git failure returns None and logs warning."""
+    with patch("subprocess.run") as mock_run:
+        mock_run.side_effect = subprocess.TimeoutExpired("git rev-parse", 5)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            calculator = WorkingTreeStateCalculator(temp_dir)
+            result = calculator.get_current_commit_sha()
+
+        assert result is None
+        assert "Failed to get current commit SHA" in caplog.text
+
+
+def test_has_uncommitted_changes__handles_git_failure(caplog):
+    """Test git failure returns False and logs warning."""
+    with patch("subprocess.run") as mock_run:
+        mock_run.side_effect = subprocess.SubprocessError("git status failed")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            calculator = WorkingTreeStateCalculator(temp_dir)
+            result = calculator.has_uncommitted_changes()
+
+        assert result is False
+        assert "Failed to check for uncommitted changes" in caplog.text

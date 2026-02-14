@@ -1,7 +1,7 @@
 """Integration test for NotebookRead hook handling."""
 
 from slopometry.core.hook_handler import parse_hook_input
-from slopometry.core.models import PostToolUseInput
+from slopometry.core.models.hook import PostToolUseInput
 
 
 class TestNotebookReadIntegration:
