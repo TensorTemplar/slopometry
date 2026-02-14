@@ -217,6 +217,20 @@ class TestGuardSingleProject:
 
         assert exc_info.value.project_count == 0
 
+    def test_guard_single_project__passes_inside_parent_git_repo(self, tmp_path: Path) -> None:
+        """Running from subdirectory of a git repo passes."""
+        # Create parent git repo using the helper that creates a proper git repo
+        parent = tmp_path / "parent_repo"
+        parent.mkdir()
+        _init_git_repo(parent)
+
+        # Create subdirectory (no .git here)
+        subdir = parent / "subproject"
+        subdir.mkdir()
+
+        # Running from subdir should pass (it's inside the parent git repo)
+        guard_single_project(subdir)
+
 
 class TestMultiProjectError:
     """Tests for MultiProjectError."""

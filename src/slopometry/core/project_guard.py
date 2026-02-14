@@ -217,5 +217,7 @@ def guard_single_project(root: Path, max_depth: int = 2) -> None:
 
     if len(projects) == 0:
         git_dir = root / ".git"
-        if not git_dir.exists():
+        # Also check if we're inside a parent git repo
+        git_root = _get_git_root(root)
+        if not git_dir.exists() and git_root is None:
             raise MultiProjectError(0, [])
