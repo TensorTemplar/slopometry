@@ -696,12 +696,30 @@ def format_code_smell_feedback(
     lines: list[str] = []
     has_blocking = len(blocking_smells) > 0
 
-    if blocking_smells:
+    # Separate blocking smell increases from decreases
+    blocking_increased = [s for s in blocking_smells if s.change > 0]
+    blocking_decreased = [s for s in blocking_smells if s.change < 0]
+    blocking_unchanged = [s for s in blocking_smells if s.change == 0]
+
+    # Show improvements (decreases) first - don't require action
+    if blocking_decreased:
         lines.append("")
+        lines.append("**Code Smell Improvements** (decreases - great work!):")
+        lines.append("")
+        for smell in blocking_decreased:
+            change_str = f" ({smell.change})"
+            lines.append(f"   • **{smell.label}**: {smell.count} file(s){change_str}")
+        lines.append("")
+
+    # Show unchanged and increased blocking smells (require action)
+    blocking_requiring_action = blocking_unchanged + blocking_increased
+    if blocking_requiring_action:
+        if not blocking_decreased:
+            lines.append("")
         lines.append("**ACTION REQUIRED** - The following issues are in files that are in scope for this PR:")
         lines.append("")
-        for smell in blocking_smells:
-            change_str = f" (+{smell.change})" if smell.change > 0 else f" ({smell.change})" if smell.change < 0 else ""
+        for smell in blocking_requiring_action:
+            change_str = f" (+{smell.change})" if smell.change > 0 else ""
             lines.append(f"   • **{smell.label}**: {smell.count} file(s){change_str}")
             for f in smell.actionable_files[:5]:
                 lines.append(f"     - {truncate_path(f, max_width=60)}")
@@ -717,7 +735,7 @@ def format_code_smell_feedback(
     other_smells_with_changes = smells_increased + smells_decreased
 
     if other_smells_with_changes:
-        if not blocking_smells:
+        if not blocking_increased:
             lines.append("")
 
         # Show improvements first (decreases) - these don't require review
