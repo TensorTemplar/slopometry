@@ -13,7 +13,7 @@ from slopometry.core.migrations import MigrationRunner
 logger = logging.getLogger(__name__)
 from slopometry.core.models.baseline import HistoricalMetricStats, QPEScore, RepoBaseline, ResolvedBaselineStrategy
 from slopometry.core.models.complexity import ComplexityDelta, ExtendedComplexityMetrics
-from slopometry.core.models.display import LeaderboardEntry
+from slopometry.core.models.display import LeaderboardEntry, SessionDisplayData
 from slopometry.core.models.experiment import ExperimentProgress, ExperimentRun, ExperimentStatus, FeatureBoundary
 from slopometry.core.models.hook import GitState, HookEvent, HookEventType, Project, ProjectSource, ToolType
 from slopometry.core.models.session import ContextCoverage, PlanEvolution, SessionStatistics
@@ -806,7 +806,7 @@ class EventDatabase:
             rows = conn.execute(query, params).fetchall()
             return [row[0] for row in rows]
 
-    def get_sessions_summary(self, limit: int | None = None) -> list[dict]:
+    def get_sessions_summary(self, limit: int | None = None) -> list[SessionDisplayData]:
         """Get lightweight session summaries for list display."""
         with self._get_db_connection() as conn:
             query = """
@@ -827,20 +827,17 @@ class EventDatabase:
 
             rows = conn.execute(query).fetchall()
 
-            summaries = []
-            for row in rows:
-                summaries.append(
-                    {
-                        "session_id": row[0],
-                        "start_time": row[1],
-                        "total_events": row[2],
-                        "tools_used": row[3] if row[3] is not None else 0,
-                        "project_name": row[4],
-                        "project_source": row[5],
-                    }
+            return [
+                SessionDisplayData(
+                    session_id=row[0],
+                    start_time=row[1],
+                    total_events=row[2],
+                    tools_used=row[3] if row[3] is not None else 0,
+                    project_name=row[4],
+                    project_source=row[5],
                 )
-
-            return summaries
+                for row in rows
+            ]
 
     def cleanup_old_data(self, days: int, dry_run: bool = False) -> tuple[int, int]:
         """Clean up old session data and associated files."""

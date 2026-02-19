@@ -43,8 +43,10 @@ from slopometry.core.models.core import (
 # Display types
 from slopometry.core.models.display import (
     ExperimentDisplayData,
+    FeatureDisplayData,
     LeaderboardEntry,
     NFPObjectiveDisplayData,
+    SessionDisplayData,
 )
 
 # Experiment types
@@ -146,8 +148,10 @@ __all__ = [
     "MergeCommit",
     # Display
     "ExperimentDisplayData",
+    "FeatureDisplayData",
     "LeaderboardEntry",
     "NFPObjectiveDisplayData",
+    "SessionDisplayData",
     # User story
     "NextFeaturePrediction",
     "UserStory",

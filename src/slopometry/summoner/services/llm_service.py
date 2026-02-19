@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 
 from slopometry.core.database import EventDatabase
+from slopometry.core.models.display import FeatureDisplayData
 from slopometry.core.settings import settings
 
 
@@ -92,7 +93,7 @@ class LLMService:
         finally:
             os.chdir(original_dir)
 
-    def prepare_features_data_for_display(self, features: list) -> list[dict]:
+    def prepare_features_data_for_display(self, features: list) -> list[FeatureDisplayData]:
         """Prepare feature boundaries data for display formatting."""
         features_data = []
         for feature in features:
@@ -103,13 +104,13 @@ class LLMService:
             best_entry_short = best_entry_id[:8] if best_entry_id else "N/A"
 
             features_data.append(
-                {
-                    "feature_id": feature.short_id,
-                    "feature_message": feature.feature_message,
-                    "commits_display": f"{base_short} → {head_short}",
-                    "merge_message": feature.merge_message,
-                    "best_entry_id": best_entry_short,
-                }
+                FeatureDisplayData(
+                    feature_id=feature.short_id,
+                    feature_message=feature.feature_message,
+                    commits_display=f"{base_short} → {head_short}",
+                    merge_message=feature.merge_message,
+                    best_entry_id=best_entry_short,
+                )
             )
         return features_data
 

@@ -942,7 +942,11 @@ class TestFormattersInterpretZScore:
 
 
 class TestHookHandlerSmokeTests:
-    """Smoke tests to ensure hook handlers don't crash with valid input."""
+    """Smoke tests to ensure hook handlers don't crash with valid input.
+
+    These tests patch _read_stdin_with_timeout instead of sys.stdin because
+    the real implementation uses select.select() which requires a real file descriptor.
+    """
 
     def _init_git_repo(self, path: Path) -> None:
         """Initialize a git repo for testing."""
@@ -969,7 +973,6 @@ class TestHookHandlerSmokeTests:
     def test_handle_hook__pre_tool_use_does_not_crash(self):
         """Smoke test: PreToolUse hook should not crash."""
         import json
-        from io import StringIO
         from unittest.mock import patch
 
         from slopometry.core.hook_handler import handle_hook
@@ -982,7 +985,7 @@ class TestHookHandlerSmokeTests:
             "tool_input": {"command": "ls"},
         }
 
-        with patch("sys.stdin", StringIO(json.dumps(input_data))):
+        with patch("slopometry.core.hook_handler._read_stdin_with_timeout", return_value=json.dumps(input_data)):
             result = handle_hook(event_type_override=HookEventType.PRE_TOOL_USE)
 
         assert result == 0
@@ -990,7 +993,6 @@ class TestHookHandlerSmokeTests:
     def test_handle_hook__post_tool_use_does_not_crash(self):
         """Smoke test: PostToolUse hook should not crash."""
         import json
-        from io import StringIO
         from unittest.mock import patch
 
         from slopometry.core.hook_handler import handle_hook
@@ -1004,7 +1006,7 @@ class TestHookHandlerSmokeTests:
             "tool_response": "file1.txt\nfile2.txt",
         }
 
-        with patch("sys.stdin", StringIO(json.dumps(input_data))):
+        with patch("slopometry.core.hook_handler._read_stdin_with_timeout", return_value=json.dumps(input_data)):
             result = handle_hook(event_type_override=HookEventType.POST_TOOL_USE)
 
         assert result == 0
@@ -1012,7 +1014,6 @@ class TestHookHandlerSmokeTests:
     def test_handle_hook__notification_does_not_crash(self):
         """Smoke test: Notification hook should not crash."""
         import json
-        from io import StringIO
         from unittest.mock import patch
 
         from slopometry.core.hook_handler import handle_hook
@@ -1024,7 +1025,7 @@ class TestHookHandlerSmokeTests:
             "message": "Test notification",
         }
 
-        with patch("sys.stdin", StringIO(json.dumps(input_data))):
+        with patch("slopometry.core.hook_handler._read_stdin_with_timeout", return_value=json.dumps(input_data)):
             result = handle_hook(event_type_override=HookEventType.NOTIFICATION)
 
         assert result == 0
@@ -1032,7 +1033,6 @@ class TestHookHandlerSmokeTests:
     def test_handle_hook__stop_does_not_crash(self):
         """Smoke test: Stop hook should not crash."""
         import json
-        from io import StringIO
         from unittest.mock import patch
 
         from slopometry.core.hook_handler import handle_hook
@@ -1052,7 +1052,7 @@ class TestHookHandlerSmokeTests:
             }
 
             with (
-                patch("sys.stdin", StringIO(json.dumps(input_data))),
+                patch("slopometry.core.hook_handler._read_stdin_with_timeout", return_value=json.dumps(input_data)),
                 patch("os.getcwd", return_value=str(tmppath)),
             ):
                 result = handle_hook(event_type_override=HookEventType.STOP)
@@ -1063,7 +1063,6 @@ class TestHookHandlerSmokeTests:
     def test_handle_hook__subagent_stop_does_not_crash(self):
         """Smoke test: SubagentStop hook should not crash and return 0."""
         import json
-        from io import StringIO
         from unittest.mock import patch
 
         from slopometry.core.hook_handler import handle_hook
@@ -1075,8 +1074,30 @@ class TestHookHandlerSmokeTests:
             "stop_hook_active": True,
         }
 
-        with patch("sys.stdin", StringIO(json.dumps(input_data))):
+        with patch("slopometry.core.hook_handler._read_stdin_with_timeout", return_value=json.dumps(input_data)):
             result = handle_hook(event_type_override=HookEventType.STOP)
 
         # Subagent stops should return 0 (no feedback for subagents)
+        assert result == 0
+
+    def test_handle_hook__empty_stdin_returns_zero(self):
+        """Test that empty stdin (timeout) returns 0 without errors."""
+        from unittest.mock import patch
+
+        from slopometry.core.hook_handler import handle_hook
+
+        with patch("slopometry.core.hook_handler._read_stdin_with_timeout", return_value=""):
+            result = handle_hook()
+
+        assert result == 0
+
+    def test_handle_hook__invalid_json_returns_zero(self):
+        """Test that invalid JSON input returns 0 without crashing."""
+        from unittest.mock import patch
+
+        from slopometry.core.hook_handler import handle_hook
+
+        with patch("slopometry.core.hook_handler._read_stdin_with_timeout", return_value="not valid json"):
+            result = handle_hook()
+
         assert result == 0

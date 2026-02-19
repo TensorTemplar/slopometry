@@ -30,6 +30,19 @@ class BaselineStrategy(str, Enum):
     TIME_SAMPLED = "time_sampled"
     AUTO = "auto"
 
+    @property
+    def boundary_name(self) -> str:
+        """Return the boundary name for token delta display."""
+        match self:
+            case BaselineStrategy.MERGE_ANCHORED:
+                return "merge"
+            case BaselineStrategy.TIME_SAMPLED:
+                return "sample"
+            case BaselineStrategy.AUTO:
+                return "commit"
+            case _:
+                return "commit"
+
 
 class ResolvedBaselineStrategy(BaseModel):
     """Records which baseline strategy was actually used after AUTO resolution.
@@ -163,10 +176,7 @@ class RepoBaseline(BaseModel):
     )
 
     strategy: ResolvedBaselineStrategy | None = Field(
-        default=None,
-        description="Which baseline computation strategy produced this baseline. "
-        "None for legacy baselines computed before strategy support was added. "
-        "Used for cache invalidation: strategy mismatch with current settings triggers recomputation.",
+        default=None, description="Which baseline computation strategy produced this baseline."
     )
 
     qpe_weight_version: str | None = Field(

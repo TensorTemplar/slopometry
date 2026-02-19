@@ -4,6 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 from slopometry.core.database import EventDatabase
+from slopometry.core.models.display import SessionDisplayData
 from slopometry.core.models.session import SessionStatistics
 
 
@@ -54,27 +55,27 @@ class SessionService:
         """Clean up all session data."""
         return self.db.cleanup_all_sessions()
 
-    def get_sessions_for_display(self, limit: int | None = None) -> list[dict]:
+    def get_sessions_for_display(self, limit: int | None = None) -> list[SessionDisplayData]:
         """Get session summaries formatted for display."""
         summaries = self.db.get_sessions_summary(limit=limit)
 
         sessions_data = []
         for summary in summaries:
             try:
-                start_time = datetime.fromisoformat(summary["start_time"])
+                start_time = datetime.fromisoformat(summary.start_time)
                 formatted_time = start_time.strftime("%Y-%m-%d %H:%M:%S")
             except (ValueError, TypeError):
-                formatted_time = summary["start_time"] or "Unknown"
+                formatted_time = summary.start_time or "Unknown"
 
             sessions_data.append(
-                {
-                    "session_id": summary["session_id"],
-                    "project_name": summary["project_name"],
-                    "project_source": summary["project_source"],
-                    "start_time": formatted_time,
-                    "total_events": summary["total_events"],
-                    "tools_used": summary["tools_used"],
-                }
+                SessionDisplayData(
+                    session_id=summary.session_id,
+                    project_name=summary.project_name,
+                    project_source=summary.project_source,
+                    start_time=formatted_time,
+                    total_events=summary.total_events,
+                    tools_used=summary.tools_used,
+                )
             )
 
         return sessions_data

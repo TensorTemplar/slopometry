@@ -10,6 +10,27 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 
+class SessionDisplayData(BaseModel):
+    """Display data for session list tables."""
+
+    session_id: str = Field(description="Session identifier")
+    start_time: str = Field(description="Formatted start time")
+    total_events: int = Field(description="Total hook events in session")
+    tools_used: int = Field(description="Count of distinct tool types used")
+    project_name: str | None = Field(default=None, description="Project name")
+    project_source: str | None = Field(default=None, description="Project source (git, pyproject, etc)")
+
+
+class FeatureDisplayData(BaseModel):
+    """Display data for feature boundary tables."""
+
+    feature_id: str = Field(description="Short feature ID")
+    feature_message: str = Field(description="Feature description from merge commit")
+    commits_display: str = Field(description="Formatted commit range (e.g., 'abc123 → def456')")
+    best_entry_id: str = Field(description="Short ID of best user story entry, or 'N/A'")
+    merge_message: str = Field(description="Full merge commit message")
+
+
 class ExperimentDisplayData(BaseModel):
     """Display data for experiment runs in tables."""
 

@@ -94,16 +94,11 @@ class TestCurrentImpactService:
 
         service = CurrentImpactService(db=test_db)
 
-        # Modify a python file
-        target_file = test_repo_path / "src" / "slopometry" / "core" / "models.py"
-        if not target_file.exists():
-            # Fallback if structure changes, just make a new file
-            target_file = test_repo_path / "test_file.py"
-            target_file.write_text("def foo():\n    pass\n")
-        else:
-            # Append a complex function to increase complexity
-            with open(target_file, "a") as f:
-                f.write("\n\ndef complex_function(x):\n    if x > 0:\n        return x\n    else:\n        return -x\n")
+        # Modify a tracked python file
+        target_file = test_repo_path / "src" / "slopometry" / "core" / "models" / "baseline.py"
+        # Append a complex function to increase complexity
+        with open(target_file, "a") as f:
+            f.write("\n\ndef complex_function(x):\n    if x > 0:\n        return x\n    else:\n        return -x\n")
 
         result = service.analyze_uncommitted_changes(test_repo_path, real_baseline)
 
@@ -262,14 +257,10 @@ class TestCurrentImpactService:
 
         service = CurrentImpactService(db=test_db)
 
-        # Modify a python file to have uncommitted changes
-        target_file = test_repo_path / "src" / "slopometry" / "core" / "models.py"
-        if not target_file.exists():
-            target_file = test_repo_path / "test_file.py"
-            target_file.write_text("def foo():\n    pass\n")
-        else:
-            with open(target_file, "a") as f:
-                f.write("\n\ndef cached_test_func(x):\n    return x * 2\n")
+        # Modify a tracked python file to have uncommitted changes
+        target_file = test_repo_path / "src" / "slopometry" / "core" / "models" / "baseline.py"
+        with open(target_file, "a") as f:
+            f.write("\n\ndef cached_test_func(x):\n    return x * 2\n")
 
         # First call - should compute and cache
         with caplog.at_level(logging.DEBUG, logger="slopometry.summoner.services.current_impact_service"):
@@ -300,8 +291,7 @@ class TestCurrentImpactService:
         service = CurrentImpactService(db=test_db)
 
         # Modify an existing tracked Python file
-        target_file = test_repo_path / "src" / "slopometry" / "core" / "models.py"
-        assert target_file.exists(), f"models.py not found in cloned test repo at {target_file}"
+        target_file = test_repo_path / "src" / "slopometry" / "core" / "models" / "baseline.py"
 
         original_content = target_file.read_text()
 
