@@ -10,7 +10,7 @@ OpenCode (in-process)                    Slopometry (external)
 │  Plugin hooks into:  │                  │                     │
 │  - tool.execute.*    │  spawn + stdin   │  hook-opencode CLI  │
 │  - bus events        │ ──────────────>  │  parses JSON        │
-│  - system transform  │  <── stdout ───  │  stores in DB       │
+│  - promptAsync()     │  <── stdout ───  │  stores in DB       │
 │                      │    (feedback)    │  generates feedback  │
 └─────────────────────┘                  └─────────────────────┘
 ```
@@ -35,7 +35,7 @@ This mirrors how slopometry integrates with Claude Code via shell hooks.
 When slopometry returns feedback on stdout (code smells, context coverage warnings), the plugin injects it in two ways:
 
 1. **Inline** — appended to tool output via `tool.execute.after` (visible with the tool result)
-2. **System prompt** — cached and injected via `experimental.chat.system.transform` on the next LLM call
+2. **Stop feedback** — on `session.idle`, if slopometry returns smell feedback, the plugin calls `client.session.promptAsync()` to send a synthetic user message that triggers a new agent turn to address the smells (mirrors Claude Code's blocking stop hook). An `awaitingFeedbackTurn` flag prevents the follow-up idle from looping, but re-arms for subsequent user turns.
 
 ## Installation
 
@@ -63,9 +63,9 @@ ln -sf /path/to/slopometry/plugins/opencode/index.ts \
        $XDG_CONFIG_HOME/opencode/plugins/slopometry.ts
 ```
 
-OpenCode auto-discovers `plugins/*.ts` files in config directories and the
-`@opencode-ai/plugin` dependency is already available from OpenCode's own
-`package.json` in that directory.
+OpenCode auto-discovers `plugins/*.ts` files in config directories and
+auto-installs `@opencode-ai/plugin` (creates a managed `package.json`
+and runs `bun install` in the config dir on startup).
 
 ### Method 2: file:// in opencode.json
 
