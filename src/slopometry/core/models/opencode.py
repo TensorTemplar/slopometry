@@ -105,5 +105,9 @@ class OpenCodeStopEvent(BaseModel):
         default=None,
         description="Structured transcript: list of {role, parts, tokens, cost, ...}",
     )
+    opencode_version: str | None = Field(
+        default=None,
+        description="OpenCode version from /global/health endpoint",
+    )
 
     model_config = {"extra": "allow"}

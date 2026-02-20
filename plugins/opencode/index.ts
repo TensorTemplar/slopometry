@@ -81,6 +81,15 @@ export const SlopometryPlugin: Plugin = async (ctx: PluginInput) => {
   let pendingFeedback: string | null = null
   const sessionStartTimes = new Map<string, number>()
 
+  // Fetch OpenCode version once at plugin init
+  let opencodeVersion: string | undefined
+  try {
+    const health = await ctx.client.global.health()
+    opencodeVersion = (health.data as any)?.version
+  } catch {
+    // Server may not support health endpoint - leave undefined
+  }
+
   const hooks: Hooks = {
     // -------------------------------------------------------
     // Bus event listener - capture all internal bus events
@@ -172,6 +181,7 @@ export const SlopometryPlugin: Plugin = async (ctx: PluginInput) => {
             cost: sessionCost,
             todos,
             transcript,
+            opencode_version: opencodeVersion,
           })
 
           // Cache any stop feedback for system prompt injection

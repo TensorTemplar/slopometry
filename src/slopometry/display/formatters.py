@@ -165,6 +165,7 @@ def display_session_summary(
     assessment: ImpactAssessment | None = None,
     show_smell_files: bool = False,
     show_file_details: bool = False,
+    source: str | None = None,
 ) -> None:
     """Display comprehensive session statistics with Rich formatting.
 
@@ -175,6 +176,7 @@ def display_session_summary(
         assessment: Optional impact assessment computed from baseline
         show_smell_files: Show files affected by each code smell
         show_file_details: Show full file lists in delta sections
+        source: Session source ('claude_code' or 'opencode'), shown in header if provided
     """
     # Calculate Galen metrics from commit history (not session duration)
     current_tokens = stats.complexity_metrics.total_tokens if stats.complexity_metrics else None
@@ -183,7 +185,13 @@ def display_session_summary(
     if settings.enable_working_at_microsoft and baseline_galen_metrics:
         _display_microsoft_ngmi_alert(baseline_galen_metrics)
 
-    console.print(f"\n[bold]Session Statistics: {session_id}[/bold]")
+    source_label = ""
+    if source == "opencode":
+        source_label = " [cyan](OpenCode)[/cyan]"
+    elif source == "claude_code":
+        source_label = " [blue](Claude Code)[/blue]"
+
+    console.print(f"\n[bold]Session Statistics: {session_id}[/bold]{source_label}")
     console.print(f"Start: {stats.start_time.strftime('%Y-%m-%d %H:%M:%S')}")
 
     if stats.project:
@@ -923,10 +931,20 @@ def _format_coverage_ratio(read: int, total: int) -> str:
     return f"[{color}]{read}/{total}[/{color}]"
 
 
+def _format_source_label(source: str | None) -> str:
+    """Format the agent tool source as a colored label."""
+    if source == "opencode":
+        return "[cyan]opencode[/cyan]"
+    if source == "claude_code":
+        return "[blue]claude[/blue]"
+    return "[dim]unknown[/dim]"
+
+
 def create_sessions_table(sessions_data: list[SessionDisplayData]) -> Table:
     """Create a Rich table for displaying session list."""
     table = Table(title="Recent Sessions")
     table.add_column("Session ID", style="cyan")
+    table.add_column("Source")
     table.add_column("Project", style="magenta")
     table.add_column("Start Time", style="green")
     table.add_column("Events", justify="right")
@@ -934,12 +952,11 @@ def create_sessions_table(sessions_data: list[SessionDisplayData]) -> Table:
 
     for session_data in sessions_data:
         project_display = (
-            f"{session_data.project_name} ({session_data.project_source})"
-            if session_data.project_name
-            else "N/A"
+            f"{session_data.project_name} ({session_data.project_source})" if session_data.project_name else "N/A"
         )
         table.add_row(
             session_data.session_id,
+            _format_source_label(session_data.source),
             project_display,
             session_data.start_time,
             str(session_data.total_events),

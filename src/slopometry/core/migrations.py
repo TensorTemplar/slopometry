@@ -470,12 +470,8 @@ class Migration013AddSourceAndParentSession(Migration):
                 if "duplicate column name" not in str(e).lower():
                     raise
 
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_hook_events_source ON hook_events(source)"
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_hook_events_parent_session ON hook_events(parent_session_id)"
-        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_hook_events_source ON hook_events(source)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_hook_events_parent_session ON hook_events(parent_session_id)")
 
 
 class MigrationRunner:

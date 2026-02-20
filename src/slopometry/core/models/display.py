@@ -19,6 +19,7 @@ class SessionDisplayData(BaseModel):
     tools_used: int = Field(description="Count of distinct tool types used")
     project_name: str | None = Field(default=None, description="Project name")
     project_source: str | None = Field(default=None, description="Project source (git, pyproject, etc)")
+    source: str | None = Field(default=None, description="Agent tool source (claude_code, opencode)")
 
 
 class FeatureDisplayData(BaseModel):

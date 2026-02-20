@@ -54,13 +54,9 @@ def get_tool_type(tool_name: str) -> ToolType:
     return cc_get_tool_type(tool_name)
 
 
-def parse_opencode_event(event_type: str, raw_data: dict) -> (
-    OpenCodeToolEvent
-    | OpenCodeTodoEvent
-    | OpenCodeMessageEvent
-    | OpenCodeSessionEvent
-    | OpenCodeStopEvent
-):
+def parse_opencode_event(
+    event_type: str, raw_data: dict
+) -> OpenCodeToolEvent | OpenCodeTodoEvent | OpenCodeMessageEvent | OpenCodeSessionEvent | OpenCodeStopEvent:
     """Parse raw JSON into the appropriate OpenCode event model.
 
     Args:
@@ -139,11 +135,7 @@ def handle_opencode_hook(event_type: str) -> int:
 def _handle_opencode_internal(
     event_type: str,
     parsed_event: (
-        OpenCodeToolEvent
-        | OpenCodeTodoEvent
-        | OpenCodeMessageEvent
-        | OpenCodeSessionEvent
-        | OpenCodeStopEvent
+        OpenCodeToolEvent | OpenCodeTodoEvent | OpenCodeMessageEvent | OpenCodeSessionEvent | OpenCodeStopEvent
     ),
     raw_data: dict,
 ) -> int:
@@ -231,7 +223,11 @@ def _handle_opencode_internal(
 
 def _handle_opencode_stop(
     session_id: str,
-    parsed_event: OpenCodeStopEvent | OpenCodeToolEvent | OpenCodeTodoEvent | OpenCodeMessageEvent | OpenCodeSessionEvent,
+    parsed_event: OpenCodeStopEvent
+    | OpenCodeToolEvent
+    | OpenCodeTodoEvent
+    | OpenCodeMessageEvent
+    | OpenCodeSessionEvent,
     event_type: str,
 ) -> int:
     """Handle stop events from OpenCode with feedback generation.
@@ -263,26 +259,14 @@ def _handle_opencode_stop(
 
 
 def _get_session_id(
-    event: (
-        OpenCodeToolEvent
-        | OpenCodeTodoEvent
-        | OpenCodeMessageEvent
-        | OpenCodeSessionEvent
-        | OpenCodeStopEvent
-    ),
+    event: (OpenCodeToolEvent | OpenCodeTodoEvent | OpenCodeMessageEvent | OpenCodeSessionEvent | OpenCodeStopEvent),
 ) -> str | None:
     """Extract session_id from any OpenCode event type."""
     return event.session_id
 
 
 def _get_parent_id(
-    event: (
-        OpenCodeToolEvent
-        | OpenCodeTodoEvent
-        | OpenCodeMessageEvent
-        | OpenCodeSessionEvent
-        | OpenCodeStopEvent
-    ),
+    event: (OpenCodeToolEvent | OpenCodeTodoEvent | OpenCodeMessageEvent | OpenCodeSessionEvent | OpenCodeStopEvent),
 ) -> str | None:
     """Extract parent_id from events that have it (session/stop events)."""
     if isinstance(event, OpenCodeSessionEvent | OpenCodeStopEvent):

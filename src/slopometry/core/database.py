@@ -102,6 +102,14 @@ class EventDatabase:
                 CREATE INDEX IF NOT EXISTS idx_hook_events_session_timestamp
                 ON hook_events(session_id, timestamp)
             """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_hook_events_workdir_session_ts
+                ON hook_events(working_directory, session_id, timestamp)
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_hook_events_session_type_source
+                ON hook_events(session_id, event_type, source)
+            """)
 
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS experiment_runs (
@@ -406,6 +414,45 @@ class EventDatabase:
                 )
             return events
 
+    def get_session_source(self, session_id: str) -> str:
+        """Get the source agent tool for a session ('claude_code' or 'opencode').
+
+        Returns 'claude_code' for pre-migration sessions or if the column is missing.
+        """
+        with self._get_db_connection() as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT source FROM hook_events WHERE session_id = ? LIMIT 1",
+                (session_id,),
+            ).fetchone()
+            if row and row["source"]:
+                return row["source"]
+            return "claude_code"
+
+    def get_opencode_transcript(self, session_id: str) -> list[dict] | None:
+        """Extract the transcript from an OpenCode session's Stop event metadata.
+
+        OpenCode stores the full transcript (fetched via SDK) in the Stop event's
+        metadata.transcript field. Returns None if not found.
+        """
+        with self._get_db_connection() as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                """
+                SELECT metadata FROM hook_events
+                WHERE session_id = ? AND event_type = 'Stop' AND source = 'opencode'
+                ORDER BY sequence_number DESC LIMIT 1
+                """,
+                (session_id,),
+            ).fetchone()
+            if not row:
+                return None
+            try:
+                meta = json.loads(row["metadata"])
+                return meta.get("transcript")
+            except (json.JSONDecodeError, ValueError):
+                return None
+
     def get_session_basic_info(self, session_id: str) -> tuple[datetime, int] | None:
         """Get minimal session info (start_time, total_events) without expensive computations.
 
@@ -578,6 +625,17 @@ class EventDatabase:
                     compact_events = analyze_transcript_compacts(tp)
             except Exception as e:
                 logger.debug(f"Failed to analyze compact events for session {session_id}: {e}")
+        else:
+            try:
+                source = self.get_session_source(session_id)
+                if source == "opencode":
+                    oc_transcript = self.get_opencode_transcript(session_id)
+                    if oc_transcript:
+                        from slopometry.core.compact_analyzer import analyze_opencode_transcript
+
+                        compact_events = analyze_opencode_transcript(oc_transcript)
+            except Exception as e:
+                logger.debug(f"Failed to analyze OpenCode compact events for session {session_id}: {e}")
 
         context_coverage = None
         try:
@@ -820,26 +878,38 @@ class EventDatabase:
             rows = conn.execute(query, params).fetchall()
             return [row[0] for row in rows]
 
-    def get_sessions_summary(self, limit: int | None = None) -> list[SessionDisplayData]:
+    def get_sessions_summary(
+        self, limit: int | None = None, working_directory: str | None = None
+    ) -> list[SessionDisplayData]:
         """Get lightweight session summaries for list display."""
         with self._get_db_connection() as conn:
-            query = """
+            params: list = []
+            where_clauses = ["session_id IS NOT NULL"]
+
+            if working_directory:
+                where_clauses.append("working_directory = ?")
+                params.append(working_directory)
+
+            where_sql = " AND ".join(where_clauses)
+            query = f"""
                 SELECT
                     session_id,
                     MIN(timestamp) as start_time,
                     COUNT(*) as total_events,
                     COUNT(DISTINCT tool_type) as tools_used,
                     project_name,
-                    project_source
+                    project_source,
+                    COALESCE(MAX(source), 'claude_code') as source
                 FROM hook_events
-                WHERE session_id IS NOT NULL
+                WHERE {where_sql}
                 GROUP BY session_id, project_name, project_source
                 ORDER BY MIN(timestamp) DESC
             """
             if limit:
-                query += f" LIMIT {limit}"
+                query += " LIMIT ?"
+                params.append(limit)
 
-            rows = conn.execute(query).fetchall()
+            rows = conn.execute(query, params).fetchall()
 
             return [
                 SessionDisplayData(
@@ -849,6 +919,7 @@ class EventDatabase:
                     tools_used=row[3] if row[3] is not None else 0,
                     project_name=row[4],
                     project_source=row[5],
+                    source=row[6],
                 )
                 for row in rows
             ]
