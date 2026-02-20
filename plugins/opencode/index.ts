@@ -5,10 +5,10 @@
  * for storage, analysis, and feedback injection.
  *
  * Architecture:
- * - Hooks into OpenCode's plugin system (tool.execute.before/after, bus events, system transform)
+ * - Hooks into OpenCode's plugin system (tool.execute.before/after, bus events)
  * - Spawns `slopometry hook-opencode --event-type <type>` per event with JSON on stdin
  * - Reads stdout for feedback (code smells, coverage warnings)
- * - Injects feedback via tool output mutation or system prompt transform
+ * - Injects feedback via tool output mutation or promptAsync() on session.idle
  *
  * Registration: Add to opencode.json:
  *   "plugin": ["file:///path/to/slopometry/plugins/opencode"]
@@ -78,7 +78,10 @@ function parseFeedback(stdout: string): string | null {
 export const SlopometryPlugin: Plugin = async (ctx: PluginInput) => {
   // Per-session state
   const toolStarts = new Map<string, ToolStartRecord>()
-  let pendingFeedback: string | null = null
+  // Sessions where we just injected feedback via promptAsync. Used to skip
+  // the immediate follow-up session.idle (which is the agent finishing our
+  // injected turn) without blocking feedback on future user-initiated turns.
+  const awaitingFeedbackTurn = new Set<string>()
   const sessionStartTimes = new Map<string, number>()
 
   // Fetch OpenCode version once at plugin init
@@ -184,10 +187,22 @@ export const SlopometryPlugin: Plugin = async (ctx: PluginInput) => {
             opencode_version: opencodeVersion,
           })
 
-          // Cache any stop feedback for system prompt injection
+          // If this idle follows our own injected feedback turn, skip and
+          // re-arm so the next real user turn can trigger feedback again.
+          if (awaitingFeedbackTurn.has(sessionID)) {
+            awaitingFeedbackTurn.delete(sessionID)
+            break
+          }
+
           const feedback = parseFeedback(result.stdout)
           if (feedback) {
-            pendingFeedback = feedback
+            awaitingFeedbackTurn.add(sessionID)
+            await ctx.client.session.promptAsync({
+              path: { id: sessionID },
+              body: {
+                parts: [{ type: "text", text: feedback }],
+              },
+            })
           }
           break
         }
@@ -272,17 +287,6 @@ export const SlopometryPlugin: Plugin = async (ctx: PluginInput) => {
       }
     },
 
-    // -------------------------------------------------------
-    // System prompt injection for cached feedback
-    // -------------------------------------------------------
-    "experimental.chat.system.transform": async (_input, output) => {
-      if (pendingFeedback) {
-        output.system.push(
-          `<slopometry-feedback>\n${pendingFeedback}\n</slopometry-feedback>`,
-        )
-        pendingFeedback = null
-      }
-    },
   }
 
   return hooks
