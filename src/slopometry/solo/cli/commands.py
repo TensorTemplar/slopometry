@@ -59,12 +59,31 @@ def _warn_if_not_in_path() -> None:
     default=False,
     help="Install hooks globally (~/.claude) or locally (./.claude)",
 )
-def install(global_: bool) -> None:
-    """Install slopometry hooks into Claude Code settings to automatically track all sessions and tool usage."""
+@click.option(
+    "--target",
+    type=click.Choice(["claude-code", "opencode"]),
+    default="claude-code",
+    help="Target tool to install hooks for (default: claude-code)",
+)
+def install(global_: bool, target: str) -> None:
+    """Install slopometry hooks to automatically track all sessions and tool usage."""
     from slopometry.core.settings import get_default_config_dir, get_default_data_dir
     from slopometry.solo.services.hook_service import HookService
 
     hook_service = HookService()
+
+    if target == "opencode":
+        success, message = hook_service.install_opencode()
+        if success:
+            for line in message.split("\n"):
+                console.print(f"[green]{line}[/green]")
+            console.print("[cyan]All OpenCode sessions will now be automatically tracked[/cyan]")
+            console.print(f"[dim]Data: {get_default_data_dir()}[/dim]")
+            _warn_if_not_in_path()
+        else:
+            console.print(f"[red]{message}[/red]")
+        return
+
     success, message = hook_service.install_hooks(global_)
 
     if success:
@@ -85,12 +104,22 @@ def install(global_: bool) -> None:
     default=False,
     help="Remove hooks globally (~/.claude) or locally (./.claude)",
 )
-def uninstall(global_: bool) -> None:
-    """Remove slopometry hooks from Claude Code settings to completely stop automatic session tracking."""
+@click.option(
+    "--target",
+    type=click.Choice(["claude-code", "opencode"]),
+    default="claude-code",
+    help="Target tool to remove hooks from (default: claude-code)",
+)
+def uninstall(global_: bool, target: str) -> None:
+    """Remove slopometry hooks to completely stop automatic session tracking."""
     from slopometry.solo.services.hook_service import HookService
 
     hook_service = HookService()
-    success, message = hook_service.uninstall_hooks(global_)
+
+    if target == "opencode":
+        success, message = hook_service.uninstall_opencode()
+    else:
+        success, message = hook_service.uninstall_hooks(global_)
 
     if success:
         console.print(f"[green]{message}[/green]")

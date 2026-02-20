@@ -35,14 +35,25 @@ class Project(BaseModel):
     source: ProjectSource
 
 
+class EventSource(str, Enum):
+    """Source agent tool that generated the event."""
+
+    CLAUDE_CODE = "claude_code"
+    OPENCODE = "opencode"
+
+
 class HookEventType(str, Enum):
-    """Types of hook events in Claude Code."""
+    """Types of hook events from Claude Code and OpenCode."""
 
     PRE_TOOL_USE = "PreToolUse"
     POST_TOOL_USE = "PostToolUse"
     NOTIFICATION = "Notification"
     STOP = "Stop"
     SUBAGENT_STOP = "SubagentStop"
+    # OpenCode-specific event types
+    TODO_UPDATED = "TodoUpdated"
+    MESSAGE_UPDATED = "MessageUpdated"
+    SUBAGENT_START = "SubagentStart"
 
 
 class ToolType(str, Enum):
@@ -125,6 +136,8 @@ class HookEvent(BaseModel):
     working_directory: str
     project: Project | None = None
     transcript_path: str | None = None
+    source: EventSource = Field(default=EventSource.CLAUDE_CODE, description="Agent tool that generated this event")
+    parent_session_id: str | None = Field(default=None, description="Parent session ID for subagent sessions")
 
 
 class PreToolUseInput(BaseModel):

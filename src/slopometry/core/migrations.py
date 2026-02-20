@@ -441,6 +441,43 @@ class Migration012AddNFPObjectiveToExperimentRuns(Migration):
                 raise
 
 
+class Migration013AddSourceAndParentSession(Migration):
+    """Add source and parent_session_id columns to hook_events for OpenCode integration.
+
+    The source column distinguishes events from different agent tools (claude_code vs opencode).
+    The parent_session_id column tracks subagent session relationships in OpenCode.
+    """
+
+    @property
+    def version(self) -> str:
+        return "013"
+
+    @property
+    def description(self) -> str:
+        return "Add source and parent_session_id columns to hook_events for OpenCode integration"
+
+    def up(self, conn: sqlite3.Connection) -> None:
+        """Add source and parent_session_id columns."""
+        columns = [
+            ("source", "TEXT DEFAULT 'claude_code'"),
+            ("parent_session_id", "TEXT"),
+        ]
+
+        for column_name, column_def in columns:
+            try:
+                conn.execute(f"ALTER TABLE hook_events ADD COLUMN {column_name} {column_def}")
+            except sqlite3.OperationalError as e:
+                if "duplicate column name" not in str(e).lower():
+                    raise
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_hook_events_source ON hook_events(source)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_hook_events_parent_session ON hook_events(parent_session_id)"
+        )
+
+
 class MigrationRunner:
     """Manages database migrations."""
 
@@ -459,6 +496,7 @@ class MigrationRunner:
             Migration010AddBaselineQPEColumns(),
             Migration011AddQPEWeightVersionColumn(),
             Migration012AddNFPObjectiveToExperimentRuns(),
+            Migration013AddSourceAndParentSession(),
         ]
 
     @contextmanager

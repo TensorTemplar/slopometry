@@ -85,7 +85,9 @@ class EventDatabase:
                     working_directory TEXT,
                     project_name TEXT,
                     project_source TEXT,
-                    transcript_path TEXT
+                    transcript_path TEXT,
+                    source TEXT DEFAULT 'claude_code',
+                    parent_session_id TEXT
                 )
             """)
             conn.execute("""
@@ -319,8 +321,9 @@ class EventDatabase:
                     session_id, event_type, timestamp, sequence_number,
                     tool_name, tool_type, metadata, duration_ms,
                     exit_code, error_message, git_state, working_directory,
-                    project_name, project_source, transcript_path
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    project_name, project_source, transcript_path,
+                    source, parent_session_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     event.session_id,
@@ -338,6 +341,8 @@ class EventDatabase:
                     event.project.name if event.project else None,
                     event.project.source.value if event.project else None,
                     event.transcript_path,
+                    event.source.value,
+                    event.parent_session_id,
                 ),
             )
             return cursor.lastrowid or 0
@@ -371,6 +376,13 @@ class EventDatabase:
                         source=ProjectSource(row["project_source"]),
                     )
 
+                # Handle source column (may be NULL for pre-migration rows)
+                from slopometry.core.models.hook import EventSource
+
+                source_val = row["source"] if "source" in row.keys() else None
+                source = EventSource(source_val) if source_val else EventSource.CLAUDE_CODE
+                parent_session_id = row["parent_session_id"] if "parent_session_id" in row.keys() else None
+
                 events.append(
                     HookEvent(
                         id=row["id"],
@@ -388,6 +400,8 @@ class EventDatabase:
                         working_directory=working_directory,
                         project=project,
                         transcript_path=row["transcript_path"],
+                        source=source,
+                        parent_session_id=parent_session_id,
                     )
                 )
             return events

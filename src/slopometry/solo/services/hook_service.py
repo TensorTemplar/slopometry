@@ -289,3 +289,114 @@ class HookService:
             "global_path": str(global_settings),
             "local_path": str(local_settings),
         }
+
+    def _find_opencode_plugin_path(self) -> Path:
+        """Resolve the path to the slopometry OpenCode plugin directory.
+
+        Looks for the plugin relative to the slopometry package installation.
+        Tries multiple strategies since the package can be installed in different ways.
+        """
+        import slopometry
+
+        # Strategy 1: Relative to slopometry package (src/slopometry/__init__.py -> repo root)
+        # __init__.py is at <repo>/src/slopometry/__init__.py, so .parent.parent.parent = <repo>
+        repo_root = Path(slopometry.__file__).parent.parent.parent
+        plugin_path = repo_root / "plugins" / "opencode"
+        if plugin_path.exists():
+            return plugin_path.resolve()
+
+        # Strategy 2: Relative to this file (solo/services/hook_service.py)
+        this_file_root = Path(__file__).parent.parent.parent.parent.parent
+        plugin_path = this_file_root / "plugins" / "opencode"
+        if plugin_path.exists():
+            return plugin_path.resolve()
+
+        # Strategy 3: Fall back to first candidate
+        return (repo_root / "plugins" / "opencode").resolve()
+
+    def install_opencode(self, config_path: Path | None = None) -> tuple[bool, str]:
+        """Install slopometry plugin into OpenCode's opencode.json.
+
+        Adds the plugin path to the "plugin" array in opencode.json so that
+        OpenCode loads it on startup.
+
+        Args:
+            config_path: Path to opencode.json. Defaults to ./opencode.json.
+
+        Returns:
+            Tuple of (success, message).
+        """
+        self._ensure_global_directories()
+
+        if config_path is None:
+            config_path = Path.cwd() / "opencode.json"
+
+        plugin_path = self._find_opencode_plugin_path()
+        plugin_uri = f"file://{plugin_path}"
+
+        # Load or create opencode.json
+        config: dict = {}
+        if config_path.exists():
+            try:
+                config = json.loads(config_path.read_text())
+            except (json.JSONDecodeError, ValueError):
+                return False, f"Invalid JSON in {config_path}"
+
+        # Get or create plugin array
+        plugins: list[str] = config.get("plugin", [])
+
+        # Check if already installed
+        for existing in plugins:
+            if "slopometry" in existing:
+                return True, f"Slopometry plugin already registered in {config_path}"
+
+        plugins.append(plugin_uri)
+        config["plugin"] = plugins
+
+        try:
+            config_path.write_text(json.dumps(config, indent=2) + "\n")
+        except Exception as e:
+            return False, f"Failed to write {config_path}: {e}"
+
+        gitignore_message = None
+        _, gitignore_message = self._update_gitignore(Path.cwd())
+
+        message = f"Slopometry OpenCode plugin registered in {config_path}\nPlugin path: {plugin_uri}"
+        if gitignore_message:
+            message += f"\n{gitignore_message}"
+
+        return True, message
+
+    def uninstall_opencode(self, config_path: Path | None = None) -> tuple[bool, str]:
+        """Remove slopometry plugin from OpenCode's opencode.json.
+
+        Args:
+            config_path: Path to opencode.json. Defaults to ./opencode.json.
+
+        Returns:
+            Tuple of (success, message).
+        """
+        if config_path is None:
+            config_path = Path.cwd() / "opencode.json"
+
+        if not config_path.exists():
+            return True, f"No opencode.json found at {config_path}"
+
+        try:
+            config = json.loads(config_path.read_text())
+        except (json.JSONDecodeError, ValueError):
+            return False, f"Invalid JSON in {config_path}"
+
+        plugins: list[str] = config.get("plugin", [])
+        filtered = [p for p in plugins if "slopometry" not in p]
+
+        if len(filtered) == len(plugins):
+            return True, "No slopometry plugin found in opencode.json"
+
+        config["plugin"] = filtered
+        try:
+            config_path.write_text(json.dumps(config, indent=2) + "\n")
+        except Exception as e:
+            return False, f"Failed to write {config_path}: {e}"
+
+        return True, f"Slopometry plugin removed from {config_path}"
