@@ -1,11 +1,7 @@
 """Impact calculator for staged changes analysis."""
 
-from slopometry.core.models import (
-    ComplexityDelta,
-    ImpactAssessment,
-    ImpactCategory,
-    RepoBaseline,
-)
+from slopometry.core.models.baseline import ImpactAssessment, ImpactCategory, RepoBaseline
+from slopometry.core.models.complexity import ComplexityDelta
 from slopometry.core.settings import settings
 
 
@@ -73,6 +69,15 @@ class ImpactCalculator:
                 baseline.qpe_stats.std_dev,
             )
 
+        token_delta = staged_delta.total_tokens_change
+        token_z = 0.0
+        if baseline.token_delta_stats:
+            token_z = self._safe_z_score(
+                token_delta,
+                baseline.token_delta_stats.mean,
+                baseline.token_delta_stats.std_dev,
+            )
+
         # NOTE: Normalize z-score directions for impact scoring:
         # CC/Effort: negate (lower=better), MI/QPE: keep (higher=better)
         normalized_cc = -cc_z
@@ -98,6 +103,8 @@ class ImpactCalculator:
             mi_delta=mi_delta,
             qpe_delta=qpe_delta,
             qpe_z_score=qpe_z,
+            token_delta=token_delta,
+            token_z_score=token_z,
         )
 
     def _safe_z_score(self, value: float, mean: float, std: float) -> float:

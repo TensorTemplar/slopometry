@@ -7,7 +7,8 @@ from pathlib import Path
 import pytest
 from conftest import make_test_metrics
 
-from slopometry.core.models import ExtendedComplexityMetrics, QPEScore
+from slopometry.core.models.baseline import QPEScore
+from slopometry.core.models.complexity import ExtendedComplexityMetrics
 from slopometry.summoner.services.qpe_calculator import (
     calculate_qpe,
     compare_project_metrics,
@@ -106,7 +107,6 @@ class TestCalculateQPE:
 
     def test_calculate_qpe__spreading_smells_does_not_reduce_penalty(self):
         """Test that spreading smells across files doesn't reduce penalty (anti-gaming fix)."""
-
 
         # Same smells, 1 file
         metrics_concentrated = ExtendedComplexityMetrics(
@@ -430,7 +430,7 @@ def test_smell_advantage__uses_correct_weights_from_registry() -> None:
 
 def test_smell_advantage__covers_all_registry_entries() -> None:
     """Test that smell_advantage returns entries for all smells in SMELL_REGISTRY."""
-    from slopometry.core.models import SMELL_REGISTRY
+    from slopometry.core.models.smell import SMELL_REGISTRY
 
     baseline = QPEScore(qpe=0.5, mi_normalized=0.6, smell_penalty=0.2, adjusted_quality=0.5)
     candidate = QPEScore(qpe=0.6, mi_normalized=0.7, smell_penalty=0.1, adjusted_quality=0.6)
@@ -553,7 +553,6 @@ class TestQPEIntegration:
         analyzer = ComplexityAnalyzer(working_directory=repo_path)
         metrics = analyzer.analyze_extended_complexity()
 
-
         qpe_score = calculate_qpe(metrics)
 
         # QPE should be positive for a working codebase
@@ -585,7 +584,6 @@ class TestQPEIntegration:
 
         analyzer = ComplexityAnalyzer(working_directory=repo_path)
         metrics = analyzer.analyze_extended_complexity()
-
 
         qpe_score = calculate_qpe(metrics)
 
@@ -624,7 +622,6 @@ class TestQPEIntegration:
         analyzer = ComplexityAnalyzer(working_directory=tmp_path)
         metrics = analyzer.analyze_extended_complexity()
 
-
         qpe_score = calculate_qpe(metrics)
 
         # Should handle gracefully (might return 0 but shouldn't crash)
@@ -640,7 +637,6 @@ class TestQPEIntegration:
 
         analyzer = ComplexityAnalyzer(working_directory=repo_path)
         metrics = analyzer.analyze_extended_complexity()
-
 
         qpe_score = calculate_qpe(metrics)
 

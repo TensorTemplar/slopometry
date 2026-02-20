@@ -1,15 +1,18 @@
 """Working tree state calculation for intelligent caching."""
 
 import hashlib
+import logging
 import subprocess
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from slopometry.core.git_tracker import GitTracker
 from slopometry.core.language_config import (
     get_combined_git_patterns,
     should_ignore_path,
 )
-from slopometry.core.models import ProjectLanguage
+from slopometry.core.models.hook import ProjectLanguage
 
 
 class WorkingTreeStateCalculator:
@@ -146,8 +149,8 @@ class WorkingTreeStateCalculator:
             )
             if result.returncode == 0:
                 return result.stdout.strip()
-        except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError):
-            pass
+        except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError) as e:
+            logger.warning(f"Failed to get current commit SHA: {e}")
         return None
 
     def has_uncommitted_changes(self) -> bool:
@@ -166,6 +169,6 @@ class WorkingTreeStateCalculator:
             )
             if result.returncode == 0:
                 return bool(result.stdout.strip())
-        except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError):
-            pass
+        except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError) as e:
+            logger.warning(f"Failed to check for uncommitted changes: {e}")
         return False

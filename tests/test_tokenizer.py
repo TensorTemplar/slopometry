@@ -3,7 +3,7 @@
 from pathlib import Path
 from unittest.mock import patch
 
-from slopometry.core.models import TokenCountError
+from slopometry.core.models.complexity import TokenCountError
 from slopometry.core.tokenizer import count_file_tokens, count_tokens, get_encoder
 
 

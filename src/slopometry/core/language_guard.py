@@ -3,7 +3,7 @@
 from pathlib import Path
 
 from slopometry.core.language_detector import LanguageDetector
-from slopometry.core.models import LanguageGuardResult, ProjectLanguage
+from slopometry.core.models.hook import LanguageGuardResult, ProjectLanguage
 
 
 def check_language_support(

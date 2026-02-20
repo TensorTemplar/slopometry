@@ -1,4 +1,4 @@
-from slopometry.core.models import ToolType
+from slopometry.core.models.hook import ToolType
 from slopometry.core.plan_analyzer import PlanAnalyzer
 
 

@@ -5,7 +5,8 @@ import re
 from datetime import datetime
 from typing import Any
 
-from slopometry.core.models import PlanEvolution, PlanStep, TodoItem, ToolType
+from slopometry.core.models.hook import ToolType
+from slopometry.core.models.session import PlanEvolution, PlanStep, TodoItem
 
 logger = logging.getLogger(__name__)
 

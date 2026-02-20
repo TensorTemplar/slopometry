@@ -8,7 +8,7 @@ from conftest import make_test_metrics
 
 from slopometry.core.code_quality_cache import CodeQualityCacheManager
 from slopometry.core.database import EventDatabase
-from slopometry.core.models import ComplexityDelta, ExtendedComplexityMetrics
+from slopometry.core.models.complexity import ComplexityDelta, ExtendedComplexityMetrics
 
 
 class TestWorkingTreeCacheManager:

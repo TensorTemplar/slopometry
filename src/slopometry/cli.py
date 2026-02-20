@@ -49,7 +49,7 @@ def hook_handler() -> None:
 def hook_pre_tool_use() -> None:
     """Internal command for processing PreToolUse hook events."""
     from slopometry.core.hook_handler import handle_hook
-    from slopometry.core.models import HookEventType
+    from slopometry.core.models.hook import HookEventType
 
     sys.exit(handle_hook(event_type_override=HookEventType.PRE_TOOL_USE))
 
@@ -58,7 +58,7 @@ def hook_pre_tool_use() -> None:
 def hook_post_tool_use() -> None:
     """Internal command for processing PostToolUse hook events."""
     from slopometry.core.hook_handler import handle_hook
-    from slopometry.core.models import HookEventType
+    from slopometry.core.models.hook import HookEventType
 
     sys.exit(handle_hook(event_type_override=HookEventType.POST_TOOL_USE))
 
@@ -67,7 +67,7 @@ def hook_post_tool_use() -> None:
 def hook_notification() -> None:
     """Internal command for processing Notification hook events."""
     from slopometry.core.hook_handler import handle_hook
-    from slopometry.core.models import HookEventType
+    from slopometry.core.models.hook import HookEventType
 
     sys.exit(handle_hook(event_type_override=HookEventType.NOTIFICATION))
 
@@ -76,7 +76,7 @@ def hook_notification() -> None:
 def hook_stop() -> None:
     """Internal command for processing Stop hook events."""
     from slopometry.core.hook_handler import handle_hook
-    from slopometry.core.models import HookEventType
+    from slopometry.core.models.hook import HookEventType
 
     sys.exit(handle_hook(event_type_override=HookEventType.STOP))
 
@@ -85,7 +85,7 @@ def hook_stop() -> None:
 def hook_subagent_stop() -> None:
     """Internal command for processing SubagentStop hook events."""
     from slopometry.core.hook_handler import handle_hook
-    from slopometry.core.models import HookEventType
+    from slopometry.core.models.hook import HookEventType
 
     sys.exit(handle_hook(event_type_override=HookEventType.SUBAGENT_STOP))
 

@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 from slopometry.core.git_tracker import GitTracker
-from slopometry.core.models import ContextCoverage, FileCoverageStatus
+from slopometry.core.models.session import ContextCoverage, FileCoverageStatus
 
 
 class ContextCoverageAnalyzer:

@@ -5,7 +5,9 @@ from datetime import datetime
 from pathlib import Path
 
 from slopometry.core.database import EventDatabase
-from slopometry.core.models import HookEvent, HookEventType, LeaderboardEntry, ToolType, UserStoryEntry
+from slopometry.core.models.display import LeaderboardEntry, SessionDisplayData
+from slopometry.core.models.hook import HookEvent, HookEventType, Project, ProjectSource, ToolType
+from slopometry.core.models.user_story import UserStoryEntry
 
 
 def test_user_story_export_functionality() -> None:
@@ -143,6 +145,50 @@ def test_leaderboard_upsert__updates_existing_project_on_new_commit() -> None:
         assert leaderboard[0].commit_sha_full == "def5678901234"
         assert leaderboard[0].qpe_score == 0.8
         assert leaderboard[0].measured_at == datetime(2024, 6, 1)
+
+
+def test_leaderboard_save__round_trips_qpe_weight_version() -> None:
+    """Test that qpe_weight_version is persisted and retrieved from the leaderboard."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db = EventDatabase(db_path=Path(tmp_dir) / "test.db")
+
+        entry_with_version = LeaderboardEntry(
+            project_name="versioned-project",
+            project_path="/test/versioned",
+            commit_sha_short="aaa1111",
+            commit_sha_full="aaa1111222233334444",
+            measured_at=datetime(2024, 1, 1),
+            qpe_score=0.6,
+            mi_normalized=0.7,
+            smell_penalty=0.05,
+            adjusted_quality=0.65,
+            effort_factor=1.0,
+            total_effort=500.0,
+            metrics_json="{}",
+            qpe_weight_version="2",
+        )
+        entry_without_version = LeaderboardEntry(
+            project_name="legacy-project",
+            project_path="/test/legacy",
+            commit_sha_short="bbb2222",
+            commit_sha_full="bbb2222333344445555",
+            measured_at=datetime(2024, 1, 1),
+            qpe_score=0.5,
+            mi_normalized=0.6,
+            smell_penalty=0.1,
+            adjusted_quality=0.54,
+            effort_factor=1.0,
+            total_effort=600.0,
+            metrics_json="{}",
+        )
+        db.save_leaderboard_entry(entry_with_version)
+        db.save_leaderboard_entry(entry_without_version)
+
+        leaderboard = db.get_leaderboard()
+        by_name = {e.project_name: e for e in leaderboard}
+
+        assert by_name["versioned-project"].qpe_weight_version == "2"
+        assert by_name["legacy-project"].qpe_weight_version is None
 
 
 def test_clear_leaderboard__removes_all_entries() -> None:
@@ -325,3 +371,79 @@ def test_get_session_basic_info__returns_none_for_unknown_session() -> None:
         result = db.get_session_basic_info("nonexistent-session")
 
         assert result is None
+
+
+def test_get_sessions_summary__returns_session_display_data() -> None:
+    """get_sessions_summary returns SessionDisplayData with correct fields."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db = EventDatabase(db_path=Path(tmp_dir) / "test.db")
+
+        for i in range(3):
+            event = HookEvent(
+                session_id="sess-abc",
+                event_type=HookEventType.PRE_TOOL_USE,
+                timestamp=datetime(2025, 1, 1, 10, i),
+                sequence_number=i + 1,
+                working_directory="/repo",
+                project=Project(name="my-project", source=ProjectSource.GIT),
+                tool_name="bash" if i < 2 else "read",
+                tool_type=ToolType.BASH if i < 2 else ToolType.READ,
+            )
+            db.save_event(event)
+
+        result = db.get_sessions_summary()
+
+        assert len(result) == 1
+        summary = result[0]
+        assert isinstance(summary, SessionDisplayData)
+        assert summary.session_id == "sess-abc"
+        assert summary.total_events == 3
+        assert summary.tools_used == 2
+        assert summary.project_name == "my-project"
+        assert summary.project_source == "git"
+
+
+def test_get_sessions_summary__handles_null_tool_type() -> None:
+    """get_sessions_summary sets tools_used to 0 when tool_type is NULL."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db = EventDatabase(db_path=Path(tmp_dir) / "test.db")
+
+        event = HookEvent(
+            session_id="sess-null",
+            event_type=HookEventType.NOTIFICATION,
+            timestamp=datetime(2025, 1, 1, 12, 0),
+            sequence_number=1,
+            working_directory="/repo",
+            tool_name=None,
+            tool_type=None,
+        )
+        db.save_event(event)
+
+        result = db.get_sessions_summary()
+
+        assert len(result) == 1
+        assert result[0].tools_used == 0
+
+
+def test_get_sessions_summary__respects_limit() -> None:
+    """get_sessions_summary limits results when limit is provided."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db = EventDatabase(db_path=Path(tmp_dir) / "test.db")
+
+        for i in range(5):
+            event = HookEvent(
+                session_id=f"sess-{i:03d}",
+                event_type=HookEventType.PRE_TOOL_USE,
+                timestamp=datetime(2025, 1, 1, 10 + i, 0),
+                sequence_number=1,
+                working_directory="/repo",
+                tool_name="bash",
+                tool_type=ToolType.BASH,
+            )
+            db.save_event(event)
+
+        result = db.get_sessions_summary(limit=3)
+
+        assert len(result) == 3
+        assert result[0].session_id == "sess-004"
+        assert result[2].session_id == "sess-002"

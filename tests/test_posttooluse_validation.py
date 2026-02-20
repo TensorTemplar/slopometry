@@ -1,6 +1,6 @@
 """Tests for PostToolUseInput validation fix."""
 
-from slopometry.core.models import PostToolUseInput
+from slopometry.core.models.hook import PostToolUseInput
 
 
 class TestPostToolUseInputValidation:

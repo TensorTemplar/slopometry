@@ -4,27 +4,27 @@ import hashlib
 import json
 import logging
 import os
+import select
 import sys
 from pathlib import Path
 
 from slopometry.core.database import EventDatabase, SessionManager
 from slopometry.core.git_tracker import GitTracker
 from slopometry.core.lock import SlopometryLock
-from slopometry.core.models import (
-    ComplexityDelta,
-    ContextCoverage,
-    ExtendedComplexityMetrics,
+from slopometry.core.models.complexity import ComplexityDelta, ExtendedComplexityMetrics
+from slopometry.core.models.hook import (
     HookEvent,
     HookEventType,
     HookInputUnion,
     NotificationInput,
     PostToolUseInput,
     PreToolUseInput,
-    ScopedSmell,
     StopInput,
     SubagentStopInput,
     ToolType,
 )
+from slopometry.core.models.session import ContextCoverage
+from slopometry.core.models.smell import ScopedSmell
 from slopometry.core.project_tracker import ProjectTracker
 from slopometry.core.settings import settings
 from slopometry.core.working_tree_state import WorkingTreeStateCalculator
@@ -104,40 +104,76 @@ def parse_hook_input(raw_data: dict) -> HookInputUnion:
         return StopInput(**raw_data)
 
     elif "session_id" in fields and "transcript_path" in fields:
-        # Handle stop-type hooks without stop_hook_active field
         return StopInput(**raw_data)
 
     else:
         raise ValueError(f"Unknown hook input schema with fields: {fields}")
 
 
+def _read_stdin_with_timeout(timeout_seconds: float = 5.0) -> str:
+    """Read stdin with a timeout to prevent hanging on unclosed pipes.
+
+    Uses select() to check if stdin has data available before reading.
+    Returns empty string if stdin is not ready within the timeout.
+
+    Args:
+        timeout_seconds: Maximum seconds to wait for stdin data.
+
+    Returns:
+        Stripped stdin content, or empty string on timeout/error.
+    """
+    ready, _, _ = select.select([sys.stdin], [], [], timeout_seconds)
+    if not ready:
+        return ""
+    return sys.stdin.read().strip()
+
+
 def handle_hook(event_type_override: HookEventType | None = None) -> int:
     """Main hook handler function.
+
+    Reads and parses stdin BEFORE acquiring the lock to prevent hung pipes
+    from holding the lock and starving all other hook invocations.
 
     Args:
         event_type_override: Optional override for the event type, used when called via specific hook entrypoints
     """
+    try:
+        stdin_input = _read_stdin_with_timeout()
+    except Exception:
+        return 0
+    if not stdin_input:
+        return 0
+
+    try:
+        raw_data = json.loads(stdin_input)
+        parsed_input = parse_hook_input(raw_data)
+    except Exception as e:
+        if settings.debug_mode:
+            print(f"Slopometry: Failed to parse hook input: {e}", file=sys.stderr)
+        return 0
+
     lock = SlopometryLock()
     with lock.acquire() as acquired:
         if not acquired:
-            if settings.debug_mode:
-                print("Slopometry: Could not acquire lock, skipping hook execution.", file=sys.stderr)
+            print("Slopometry: Could not acquire lock, skipping hook execution.", file=sys.stderr)
             return 0
 
-        return _handle_hook_internal(event_type_override)
+        return _handle_hook_internal(event_type_override, parsed_input, raw_data)
 
 
-def _handle_hook_internal(event_type_override: HookEventType | None = None) -> int:
-    """Internal hook handler logic (extracted for locking support)."""
+def _handle_hook_internal(
+    event_type_override: HookEventType | None,
+    parsed_input: HookInputUnion,
+    raw_data: dict,
+) -> int:
+    """Internal hook handler logic (runs under lock with pre-parsed data).
+
+    Args:
+        event_type_override: Optional override for the event type.
+        parsed_input: Pre-parsed and validated hook input.
+        raw_data: Raw JSON data from stdin (stored as event metadata).
+    """
     try:
-        stdin_input = sys.stdin.read().strip()
-        if not stdin_input:
-            return 0
-
-        raw_data = json.loads(stdin_input)
-
-        parsed_input = parse_hook_input(raw_data)
-
         event_type = event_type_override if event_type_override else detect_event_type_from_parsed(parsed_input)
 
         session_id = parsed_input.session_id
@@ -297,18 +333,12 @@ def _compute_feedback_cache_key(working_directory: str, edited_files: set[str], 
     git_state = tracker.get_git_state()
     commit_sha = git_state.commit_sha or "unknown"
 
-    # Use all supported languages (currently Python only)
-    # Future: could use LanguageDetector to auto-detect project languages
     wt_calculator = WorkingTreeStateCalculator(working_directory, languages=None)
-
-    # Only compute working tree hash if there are source file changes
-    # (not just any file like uv.lock, submodules, or build artifacts)
     has_source_changes = bool(wt_calculator._get_modified_source_files_from_git())
     working_tree_hash = wt_calculator.calculate_working_tree_hash(commit_sha) if has_source_changes else "clean"
 
     files_key = ",".join(sorted(edited_files))
     key_parts = f"{commit_sha}:{working_tree_hash}:{files_key}:{feedback_hash}"
-    # Use blake2b for arm64/amd64 performance
     return hashlib.blake2b(key_parts.encode(), digest_size=8).hexdigest()
 
 
@@ -376,7 +406,7 @@ def handle_stop_event(session_id: str, parsed_input: "StopInput | SubagentStopIn
     current_metrics, delta = db.calculate_extended_complexity_metrics(stats.working_directory)
 
     feedback_parts: list[str] = []
-    cache_stable_parts: list[str] = []  # Only code-based feedback (stable between tool calls)
+    cache_stable_parts: list[str] = []
 
     # Get edited files from git (more reliable than transcript-based context coverage)
     try:
@@ -385,8 +415,7 @@ def handle_stop_event(session_id: str, parsed_input: "StopInput | SubagentStopIn
         logger.debug(f"Failed to get modified Python files: {e}")
         edited_files = set()
 
-    # Code smells - ALWAYS check (independent of enable_complexity_feedback)
-    # This is stable (based on code state, not session activity)
+    # Smell feedback is stable (based on code state, not session activity)
     if current_metrics:
         scoped_smells = scope_smells_for_session(
             current_metrics, delta, edited_files, stats.working_directory, stats.context_coverage
@@ -411,9 +440,8 @@ def handle_stop_event(session_id: str, parsed_input: "StopInput | SubagentStopIn
     if feedback_parts:
         feedback = "\n\n".join(feedback_parts)
 
-        # Hash ONLY code-based feedback (smell_feedback) for cache key
-        # Context coverage changes with every tool call and would invalidate cache
-        # Use blake2b for arm64/amd64 performance
+        # Cache key uses only code-based smell feedback — context coverage
+        # changes with every tool call and would invalidate cache
         cache_content = "\n\n".join(cache_stable_parts) if cache_stable_parts else ""
         feedback_hash = hashlib.blake2b(cache_content.encode(), digest_size=8).hexdigest()
 
@@ -421,7 +449,6 @@ def handle_stop_event(session_id: str, parsed_input: "StopInput | SubagentStopIn
             f"\n\n---\n**Session**: `{session_id}` | Details: `slopometry solo show {session_id} --smell-details`"
         )
 
-        # Check cache - skip if same feedback was already shown for this state
         cache_key = _compute_feedback_cache_key(stats.working_directory, edited_files, feedback_hash)
 
         if _is_feedback_cached(stats.working_directory, cache_key):
@@ -697,12 +724,30 @@ def format_code_smell_feedback(
     lines: list[str] = []
     has_blocking = len(blocking_smells) > 0
 
-    if blocking_smells:
+    # Separate blocking smell increases from decreases
+    blocking_increased = [s for s in blocking_smells if s.change > 0]
+    blocking_decreased = [s for s in blocking_smells if s.change < 0]
+    blocking_unchanged = [s for s in blocking_smells if s.change == 0]
+
+    # Show improvements (decreases) first - don't require action
+    if blocking_decreased:
         lines.append("")
+        lines.append("**Code Smell Improvements** (decreases - great work!):")
+        lines.append("")
+        for smell in blocking_decreased:
+            change_str = f" ({smell.change})"
+            lines.append(f"   • **{smell.label}**: {smell.count} file(s){change_str}")
+        lines.append("")
+
+    # Show unchanged and increased blocking smells (require action)
+    blocking_requiring_action = blocking_unchanged + blocking_increased
+    if blocking_requiring_action:
+        if not blocking_decreased:
+            lines.append("")
         lines.append("**ACTION REQUIRED** - The following issues are in files that are in scope for this PR:")
         lines.append("")
-        for smell in blocking_smells:
-            change_str = f" (+{smell.change})" if smell.change > 0 else f" ({smell.change})" if smell.change < 0 else ""
+        for smell in blocking_requiring_action:
+            change_str = f" (+{smell.change})" if smell.change > 0 else ""
             lines.append(f"   • **{smell.label}**: {smell.count} file(s){change_str}")
             for f in smell.actionable_files[:5]:
                 lines.append(f"     - {truncate_path(f, max_width=60)}")
@@ -712,23 +757,39 @@ def format_code_smell_feedback(
                 lines.append(f"     → {smell.guidance}")
         lines.append("")
 
-    other_smells_with_changes = [s for s in other_smells if s.change != 0]
+    # Separate increases (require review) from decreases (improvements - no review needed)
+    smells_increased = [s for s in other_smells if s.change > 0]
+    smells_decreased = [s for s in other_smells if s.change < 0]
+    other_smells_with_changes = smells_increased + smells_decreased
+
     if other_smells_with_changes:
-        if not blocking_smells:
+        if not blocking_increased:
             lines.append("")
-        lines.append(
-            "**Code Smells** (Any increase requires review, irrespective of which session edited related files):"
-        )
-        lines.append("")
-        for smell in other_smells_with_changes:
-            change_str = f" (+{smell.change})" if smell.change > 0 else f" ({smell.change})"
-            lines.append(f"   • **{smell.label}**: {smell.count}{change_str}")
-            for f in smell.actionable_files[:3]:
-                lines.append(f"     - {truncate_path(f, max_width=60)}")
-            if len(smell.actionable_files) > 3:
-                lines.append(f"     ... and {len(smell.actionable_files) - 3} more")
-            if smell.guidance:
-                lines.append(f"     → {smell.guidance}")
+
+        # Show improvements first (decreases) - these don't require review
+        if smells_decreased:
+            lines.append("**Code Smell Improvements** (decreases - great work!):")
+            lines.append("")
+            for smell in smells_decreased:
+                change_str = f" ({smell.change})"
+                lines.append(f"   • **{smell.label}**: {smell.count}{change_str}")
+            lines.append("")
+
+        # Show increases - these require review
+        if smells_increased:
+            lines.append(
+                "**Code Smells** (increases require review, irrespective of which session edited related files):"
+            )
+            lines.append("")
+            for smell in smells_increased:
+                change_str = f" (+{smell.change})"
+                lines.append(f"   • **{smell.label}**: {smell.count}{change_str}")
+                for f in smell.actionable_files[:3]:
+                    lines.append(f"     - {truncate_path(f, max_width=60)}")
+                if len(smell.actionable_files) > 3:
+                    lines.append(f"     ... and {len(smell.actionable_files) - 3} more")
+                if smell.guidance:
+                    lines.append(f"     → {smell.guidance}")
 
     has_smells = len(blocking_smells) > 0 or len(other_smells_with_changes) > 0
     if has_smells:

@@ -4,7 +4,7 @@ import logging
 import math
 from pathlib import Path
 
-from slopometry.core.models import FileAnalysisResult
+from slopometry.core.models.complexity import FileAnalysisResult
 from slopometry.core.tokenizer import count_file_tokens
 
 logger = logging.getLogger(__name__)

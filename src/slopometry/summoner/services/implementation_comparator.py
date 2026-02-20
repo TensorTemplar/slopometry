@@ -13,7 +13,7 @@ from io import BytesIO
 from pathlib import Path
 
 from slopometry.core.complexity_analyzer import ComplexityAnalyzer
-from slopometry.core.models import ImplementationComparison
+from slopometry.core.models.baseline import ImplementationComparison
 from slopometry.summoner.services.qpe_calculator import (
     calculate_qpe,
     grpo_advantage,

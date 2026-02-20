@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from slopometry.core.models import TokenCountError
+from slopometry.core.models.complexity import TokenCountError
 
 logger = logging.getLogger(__name__)
 

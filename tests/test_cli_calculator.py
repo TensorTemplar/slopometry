@@ -2,7 +2,7 @@
 
 from conftest import make_test_metrics
 
-from slopometry.core.models import ExtendedComplexityMetrics
+from slopometry.core.models.complexity import ExtendedComplexityMetrics
 from slopometry.summoner.services.cli_calculator import CLICalculator
 
 

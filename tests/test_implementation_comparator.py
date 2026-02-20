@@ -9,7 +9,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 from conftest import make_test_metrics
 
-from slopometry.core.models import ExtendedComplexityMetrics, QPEScore
+from slopometry.core.models.baseline import QPEScore
+from slopometry.core.models.complexity import ExtendedComplexityMetrics
 from slopometry.summoner.services.implementation_comparator import (
     SubtreeExtractionError,
     _extract_subtree,

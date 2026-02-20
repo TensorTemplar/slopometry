@@ -12,7 +12,7 @@ from slopometry.core.code_analyzer import (
     _analyze_single_file,
     _safe_float,
 )
-from slopometry.core.models import FileAnalysisResult
+from slopometry.core.models.complexity import FileAnalysisResult
 
 
 class TestSafeFloat:

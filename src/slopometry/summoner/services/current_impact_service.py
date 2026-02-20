@@ -7,16 +7,9 @@ from pathlib import Path
 
 from slopometry.core.complexity_analyzer import ComplexityAnalyzer
 from slopometry.core.database import EventDatabase
-from slopometry.core.models import (
-    AnalysisSource,
-    ComplexityDelta,
-    CurrentChangesAnalysis,
-    ExtendedComplexityMetrics,
-    GalenMetrics,
-    QPEScore,
-    RepoBaseline,
-    SmellAdvantage,
-)
+from slopometry.core.models.baseline import CurrentChangesAnalysis, GalenMetrics, QPEScore, RepoBaseline, SmellAdvantage
+from slopometry.core.models.complexity import ComplexityDelta, ExtendedComplexityMetrics
+from slopometry.core.models.hook import AnalysisSource
 from slopometry.core.working_tree_extractor import WorkingTreeExtractor
 from slopometry.core.working_tree_state import WorkingTreeStateCalculator
 from slopometry.summoner.services.impact_calculator import ImpactCalculator
@@ -65,6 +58,12 @@ class CurrentImpactService:
         current_metrics = self._get_or_compute_metrics(repo_path, commit_sha, working_tree_hash, extractor, analyzer)
 
         current_delta, smell_advantages, _, _ = self._compute_delta(baseline_metrics, current_metrics)
+
+        # Compute token count of changed files for proper impact analysis
+        # (instead of total tokens delta which compares incompatible scopes)
+        changed_files_tokens = sum(current_metrics.files_by_token_count.get(f, 0) for f in changed_files)
+        current_delta.total_tokens_change = changed_files_tokens
+        current_delta.avg_tokens_change = changed_files_tokens / len(changed_files) if changed_files else 0
 
         assessment = self.impact_calculator.calculate_impact(current_delta, baseline)
 
@@ -193,7 +192,6 @@ class CurrentImpactService:
             logger.debug(f"Failed to extract or analyze commits {parent_sha[:8]}..{head_sha[:8]}: {e}")
             return None
 
-        # Use parent as baseline, HEAD as current
         current_delta, smell_advantages, _, _ = self._compute_delta(parent_metrics, head_metrics)
         assessment = self.impact_calculator.calculate_impact(current_delta, baseline)
 
@@ -343,6 +341,8 @@ class CurrentImpactService:
             total_mi_change=current_metrics.total_mi - baseline_metrics.total_mi,
             avg_mi_change=current_metrics.average_mi - baseline_metrics.average_mi,
             net_files_change=(current_metrics.total_files_analyzed - baseline_metrics.total_files_analyzed),
+            total_tokens_change=(current_metrics.total_tokens - baseline_metrics.total_tokens),
+            avg_tokens_change=(current_metrics.average_tokens - baseline_metrics.average_tokens),
             qpe_change=current_qpe_score.qpe - baseline_qpe_score.qpe,
         )
 

@@ -156,7 +156,7 @@ The experiment tracking feature includes:
 - **Experiment Orchestrator**: Coordinates parallel experiment execution
 
 ### Important Notes
-- All `radon` calls use `uvx radon` to ensure proper uv environment execution
+- Complexity analysis uses `rust-code-analysis` (via Python package), not the abandoned `radon` tool
 - Experiments create temporary git worktrees for isolation
 - CLI scores: 1.0 = perfect match, <0 = overshooting target (prevents overfitting)
 - Database handles duplicate analysis runs gracefully

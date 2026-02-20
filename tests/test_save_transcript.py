@@ -7,7 +7,8 @@ from unittest.mock import Mock, patch
 
 from click.testing import CliRunner
 
-from slopometry.core.models import AgentTool, PlanEvolution, SessionMetadata, SessionStatistics, TodoItem, TokenUsage
+from slopometry.core.models.hook import AgentTool
+from slopometry.core.models.session import PlanEvolution, SessionMetadata, SessionStatistics, TodoItem, TokenUsage
 from slopometry.core.transcript_token_analyzer import TranscriptMetadata, extract_transcript_metadata
 from slopometry.solo.cli.commands import (
     _find_plan_names_from_transcript,

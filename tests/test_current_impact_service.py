@@ -1,3 +1,4 @@
+import json
 import logging
 import subprocess
 from datetime import datetime
@@ -7,7 +8,18 @@ import pytest
 
 from slopometry.core.complexity_analyzer import ComplexityAnalyzer
 from slopometry.core.database import EventDatabase
-from slopometry.core.models import AnalysisSource, HistoricalMetricStats, RepoBaseline
+from slopometry.core.git_tracker import GitOperationError, GitTracker
+from slopometry.core.models.baseline import (
+    CurrentChangesAnalysis,
+    CurrentImpactSummary,
+    HistoricalMetricStats,
+    ImpactAssessment,
+    ImpactCategory,
+    RepoBaseline,
+    SmellAdvantage,
+)
+from slopometry.core.models.complexity import ExtendedComplexityMetrics
+from slopometry.core.models.hook import AnalysisSource
 from slopometry.summoner.services.current_impact_service import CurrentImpactService
 
 
@@ -82,16 +94,11 @@ class TestCurrentImpactService:
 
         service = CurrentImpactService(db=test_db)
 
-        # Modify a python file
-        target_file = test_repo_path / "src" / "slopometry" / "core" / "models.py"
-        if not target_file.exists():
-            # Fallback if structure changes, just make a new file
-            target_file = test_repo_path / "test_file.py"
-            target_file.write_text("def foo():\n    pass\n")
-        else:
-            # Append a complex function to increase complexity
-            with open(target_file, "a") as f:
-                f.write("\n\ndef complex_function(x):\n    if x > 0:\n        return x\n    else:\n        return -x\n")
+        # Modify a tracked python file
+        target_file = test_repo_path / "src" / "slopometry" / "core" / "models" / "baseline.py"
+        # Append a complex function to increase complexity
+        with open(target_file, "a") as f:
+            f.write("\n\ndef complex_function(x):\n    if x > 0:\n        return x\n    else:\n        return -x\n")
 
         result = service.analyze_uncommitted_changes(test_repo_path, real_baseline)
 
@@ -229,8 +236,6 @@ class TestCurrentImpactService:
         """Test that analyze_previous_commit logs debug messages on GitOperationError."""
         assert real_baseline is not None, "Baseline computation failed"
 
-        from slopometry.core.git_tracker import GitOperationError, GitTracker
-
         def mock_get_changed_python_files(self, parent_sha, child_sha):
             raise GitOperationError("Simulated git diff failure")
 
@@ -252,14 +257,10 @@ class TestCurrentImpactService:
 
         service = CurrentImpactService(db=test_db)
 
-        # Modify a python file to have uncommitted changes
-        target_file = test_repo_path / "src" / "slopometry" / "core" / "models.py"
-        if not target_file.exists():
-            target_file = test_repo_path / "test_file.py"
-            target_file.write_text("def foo():\n    pass\n")
-        else:
-            with open(target_file, "a") as f:
-                f.write("\n\ndef cached_test_func(x):\n    return x * 2\n")
+        # Modify a tracked python file to have uncommitted changes
+        target_file = test_repo_path / "src" / "slopometry" / "core" / "models" / "baseline.py"
+        with open(target_file, "a") as f:
+            f.write("\n\ndef cached_test_func(x):\n    return x * 2\n")
 
         # First call - should compute and cache
         with caplog.at_level(logging.DEBUG, logger="slopometry.summoner.services.current_impact_service"):
@@ -290,8 +291,7 @@ class TestCurrentImpactService:
         service = CurrentImpactService(db=test_db)
 
         # Modify an existing tracked Python file
-        target_file = test_repo_path / "src" / "slopometry" / "core" / "models.py"
-        assert target_file.exists(), f"models.py not found in cloned test repo at {target_file}"
+        target_file = test_repo_path / "src" / "slopometry" / "core" / "models" / "baseline.py"
 
         original_content = target_file.read_text()
 
@@ -320,3 +320,159 @@ class TestCurrentImpactService:
         cached_logged = any("Cached metrics for current-impact" in record.message for record in caplog.records)
         assert not using_cache_logged, "Changed file should invalidate cache"
         assert cached_logged, "Should cache new metrics after recomputation"
+
+
+class TestCurrentImpactSummary:
+    """Tests for the compact CurrentImpactSummary model."""
+
+    @staticmethod
+    def _make_metrics() -> ExtendedComplexityMetrics:
+        return ExtendedComplexityMetrics(
+            total_volume=0.0,
+            total_effort=0.0,
+            total_difficulty=0.0,
+            average_volume=0.0,
+            average_effort=0.0,
+            average_difficulty=0.0,
+            total_mi=0.0,
+            average_mi=0.0,
+        )
+
+    def test_from_analysis__maps_all_fields(self):
+        """Test that from_analysis correctly maps fields from full analysis."""
+        metrics = self._make_metrics()
+        dummy_stats = HistoricalMetricStats(
+            metric_name="test",
+            mean=0.0,
+            std_dev=1.0,
+            median=0.0,
+            min_value=-1.0,
+            max_value=1.0,
+            sample_count=10,
+        )
+        baseline = RepoBaseline(
+            repository_path="/tmp/repo",
+            last_commit_hash="abc123",
+            analysis_timestamp=datetime.now(),
+            current_metrics=metrics,
+            head_commit_sha="abc123",
+            total_commits_analyzed=10,
+            cc_delta_stats=dummy_stats,
+            effort_delta_stats=dummy_stats,
+            mi_delta_stats=dummy_stats,
+        )
+        assessment = ImpactAssessment(
+            cc_z_score=0.5,
+            effort_z_score=-0.3,
+            mi_z_score=0.8,
+            impact_score=0.65,
+            impact_category=ImpactCategory.MINOR_IMPROVEMENT,
+            cc_delta=-2.0,
+            effort_delta=-100.0,
+            mi_delta=3.5,
+            qpe_delta=0.02,
+            qpe_z_score=0.4,
+        )
+        smell_adv = SmellAdvantage(
+            smell_name="orphan_comment",
+            baseline_count=10,
+            candidate_count=8,
+            weight=0.01,
+            weighted_delta=-0.02,
+        )
+        analysis = CurrentChangesAnalysis(
+            repository_path="/tmp/repo",
+            source=AnalysisSource.PREVIOUS_COMMIT,
+            analyzed_commit_sha="abc12345",
+            base_commit_sha="def67890",
+            changed_files=["src/a.py", "src/b.py", "src/c.py"],
+            current_metrics=metrics,
+            baseline_metrics=metrics,
+            assessment=assessment,
+            baseline=baseline,
+            blind_spots=["src/d.py"],
+            smell_advantages=[smell_adv],
+        )
+
+        summary = CurrentImpactSummary.from_analysis(analysis)
+
+        assert summary.source == AnalysisSource.PREVIOUS_COMMIT
+        assert summary.analyzed_commit_sha == "abc12345"
+        assert summary.base_commit_sha == "def67890"
+        assert summary.impact_score == 0.65
+        assert summary.impact_category == ImpactCategory.MINOR_IMPROVEMENT
+        assert summary.qpe_delta == 0.02
+        assert summary.cc_delta == -2.0
+        assert summary.effort_delta == -100.0
+        assert summary.mi_delta == 3.5
+        assert summary.changed_files_count == 3
+        assert summary.blind_spots_count == 1
+        assert len(summary.smell_advantages) == 1
+        assert summary.smell_advantages[0].smell_name == "orphan_comment"
+
+    def test_from_analysis__serializes_to_json(self):
+        """Test that summary serializes to valid JSON with expected keys."""
+        metrics = self._make_metrics()
+        dummy_stats = HistoricalMetricStats(
+            metric_name="test",
+            mean=0.0,
+            std_dev=1.0,
+            median=0.0,
+            min_value=-1.0,
+            max_value=1.0,
+            sample_count=10,
+        )
+        baseline = RepoBaseline(
+            repository_path="/tmp/repo",
+            last_commit_hash="abc123",
+            analysis_timestamp=datetime.now(),
+            current_metrics=metrics,
+            head_commit_sha="abc123",
+            total_commits_analyzed=10,
+            cc_delta_stats=dummy_stats,
+            effort_delta_stats=dummy_stats,
+            mi_delta_stats=dummy_stats,
+        )
+        assessment = ImpactAssessment(
+            cc_z_score=0.0,
+            effort_z_score=0.0,
+            mi_z_score=0.0,
+            impact_score=0.0,
+            impact_category=ImpactCategory.NEUTRAL,
+            cc_delta=0.0,
+            effort_delta=0.0,
+            mi_delta=0.0,
+            qpe_delta=0.0,
+            qpe_z_score=0.0,
+        )
+        analysis = CurrentChangesAnalysis(
+            repository_path="/tmp/repo",
+            changed_files=["src/a.py"],
+            current_metrics=metrics,
+            baseline_metrics=metrics,
+            assessment=assessment,
+            baseline=baseline,
+        )
+
+        summary = CurrentImpactSummary.from_analysis(analysis)
+        json_str = summary.model_dump_json(indent=2)
+        parsed = json.loads(json_str)
+
+        expected_keys = {
+            "source",
+            "analyzed_commit_sha",
+            "base_commit_sha",
+            "impact_score",
+            "impact_category",
+            "qpe_delta",
+            "cc_delta",
+            "effort_delta",
+            "mi_delta",
+            "token_delta",
+            "changed_files_count",
+            "blind_spots_count",
+            "smell_advantages",
+        }
+        assert set(parsed.keys()) == expected_keys
+        assert parsed["source"] == "uncommitted_changes"
+        assert parsed["impact_category"] == "neutral"

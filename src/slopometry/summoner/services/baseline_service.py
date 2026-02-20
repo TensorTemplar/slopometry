@@ -12,14 +12,14 @@ from statistics import mean, median, stdev
 from slopometry.core.complexity_analyzer import ComplexityAnalyzer
 from slopometry.core.database import EventDatabase
 from slopometry.core.git_tracker import GitOperationError, GitTracker
-from slopometry.core.models import (
+from slopometry.core.models.baseline import (
     BaselineStrategy,
     HistoricalMetricStats,
     RepoBaseline,
     ResolvedBaselineStrategy,
 )
 from slopometry.core.settings import settings
-from slopometry.summoner.services.qpe_calculator import calculate_qpe
+from slopometry.summoner.services.qpe_calculator import QPE_WEIGHT_VERSION, calculate_qpe
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +40,7 @@ class CommitDelta:
     effort_delta: float
     mi_delta: float
     qpe_delta: float
+    total_tokens_change: int
 
 
 def _compute_single_delta_task(repo_path: Path, parent_sha: str, child_sha: str) -> CommitDelta | None:
@@ -54,7 +55,7 @@ def _compute_single_delta_task(repo_path: Path, parent_sha: str, child_sha: str)
     try:
         changed_files = git_tracker.get_changed_python_files(parent_sha, child_sha)
         if not changed_files:
-            return CommitDelta(cc_delta=0.0, effort_delta=0.0, mi_delta=0.0, qpe_delta=0.0)
+            return CommitDelta(cc_delta=0.0, effort_delta=0.0, mi_delta=0.0, qpe_delta=0.0, total_tokens_change=0)
 
         parent_dir = git_tracker.extract_specific_files_from_commit(parent_sha, changed_files)
         child_dir = git_tracker.extract_specific_files_from_commit(child_sha, changed_files)
@@ -71,17 +72,20 @@ def _compute_single_delta_task(repo_path: Path, parent_sha: str, child_sha: str)
         parent_effort = parent_metrics.total_effort if parent_metrics else 0.0
         parent_mi = parent_metrics.total_mi if parent_metrics else 0.0
         parent_qpe = calculate_qpe(parent_metrics).qpe if parent_metrics else 0.0
+        parent_tokens = parent_metrics.total_tokens if parent_metrics else 0
 
         child_cc = child_metrics.total_complexity if child_metrics else 0
         child_effort = child_metrics.total_effort if child_metrics else 0.0
         child_mi = child_metrics.total_mi if child_metrics else 0.0
         child_qpe = calculate_qpe(child_metrics).qpe if child_metrics else 0.0
+        child_tokens = child_metrics.total_tokens if child_metrics else 0
 
         return CommitDelta(
             cc_delta=child_cc - parent_cc,
             effort_delta=child_effort - parent_effort,
             mi_delta=child_mi - parent_mi,
             qpe_delta=child_qpe - parent_qpe,
+            total_tokens_change=child_tokens - parent_tokens,
         )
 
     except GitOperationError as e:
@@ -138,7 +142,14 @@ class BaselineService:
         if not recompute:
             cached = self.db.get_cached_baseline(str(repo_path), head_sha)
             if cached and cached.qpe_stats is not None:
-                if self._is_cache_strategy_compatible(cached):
+                if cached.qpe_weight_version != QPE_WEIGHT_VERSION:
+                    logger.warning(
+                        "Cached baseline was computed with QPE weight version %s (current: %s). "
+                        "Recomputing with updated weights.",
+                        cached.qpe_weight_version or "unknown",
+                        QPE_WEIGHT_VERSION,
+                    )
+                elif self._is_cache_strategy_compatible(cached):
                     return cached
 
         baseline = self.compute_full_baseline(repo_path, max_workers=max_workers)
@@ -208,6 +219,7 @@ class BaselineService:
         effort_deltas = [d.effort_delta for d in deltas]
         mi_deltas = [d.mi_delta for d in deltas]
         qpe_deltas = [d.qpe_delta for d in deltas]
+        token_deltas = [d.total_tokens_change for d in deltas]
 
         newest_commit_date = commits[0].timestamp
         oldest_commit_date = commits[-1].timestamp
@@ -230,7 +242,9 @@ class BaselineService:
             oldest_commit_tokens=oldest_commit_tokens,
             qpe_stats=self._compute_stats("qpe_delta", qpe_deltas),
             current_qpe=current_qpe,
+            token_delta_stats=self._compute_stats("token_delta", token_deltas),
             strategy=strategy,
+            qpe_weight_version=QPE_WEIGHT_VERSION,
         )
 
     def _resolve_strategy(self, repo_path: Path) -> ResolvedBaselineStrategy:

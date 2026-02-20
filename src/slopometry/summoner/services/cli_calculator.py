@@ -10,7 +10,8 @@ Use calculate_qpe() from slopometry.summoner.services.qpe_calculator instead.
 
 import warnings
 
-from slopometry.core.models import ExtendedComplexityMetrics, QPEScore
+from slopometry.core.models.baseline import QPEScore
+from slopometry.core.models.complexity import ExtendedComplexityMetrics
 from slopometry.summoner.services.qpe_calculator import calculate_qpe as _calculate_qpe
 
 

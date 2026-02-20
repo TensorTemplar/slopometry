@@ -375,20 +375,30 @@ def _show_commit_range_baseline_comparison(repo_path: Path, start: str, end: str
     help="Show detailed file lists (blind spots)",
 )
 @click.option("--pager/--no-pager", default=True, help="Use pager for long output (like less)")
+@click.option(
+    "--json",
+    "output_json",
+    is_flag=True,
+    help="Output compact JSON for CI consumption",
+)
 def current_impact(
     repo_path: Path | None,
     recompute_baseline: bool,
     max_workers: int,
     file_details: bool,
     pager: bool,
+    output_json: bool,
 ) -> None:
-    """Analyze impact of uncommitted changes against repository baseline.
+    """Analyze impact of changes against repository baseline.
 
     Computes a baseline from your entire commit history, then evaluates
-    whether your uncommitted changes represent above-average or below-average
+    whether your changes represent above-average or below-average
     quality impact compared to typical commits in this repository.
 
-    Analyzes all uncommitted changes (staged + unstaged).
+    Analyzes uncommitted changes when present, otherwise compares
+    the latest commit against its parent (HEAD vs HEAD~1).
+
+    Use --json for machine-readable output in CI pipelines.
 
     Impact categories:
       - SIGNIFICANT_IMPROVEMENT: > 1.0 std dev better than average
@@ -405,11 +415,14 @@ def current_impact(
     try:
         guard_single_project(repo_path)
     except MultiProjectError as e:
-        console.print(f"[red]Error:[/red] {e}")
+        if output_json:
+            print(f'{{"error": "{e.project_count} git repositories found. Run from within a specific project."}}')
+        else:
+            console.print(f"[red]Error:[/red] {e}")
         return
 
     from slopometry.core.language_guard import check_language_support
-    from slopometry.core.models import ProjectLanguage
+    from slopometry.core.models import CurrentImpactSummary, ProjectLanguage
     from slopometry.core.working_tree_extractor import WorkingTreeExtractor
     from slopometry.display.formatters import display_current_impact_analysis
     from slopometry.summoner.services.baseline_service import BaselineService
@@ -417,9 +430,13 @@ def current_impact(
 
     guard = check_language_support(repo_path, ProjectLanguage.PYTHON)
     if warning := guard.format_warning():
-        console.print(f"[dim]{warning}[/dim]")
+        if not output_json:
+            console.print(f"[dim]{warning}[/dim]")
     if not guard.allowed:
-        console.print("[yellow]current-impact requires Python files for complexity analysis.[/yellow]")
+        if output_json:
+            print('{"error": "No code files detected in repository"}')
+        else:
+            console.print("[yellow]current-impact requires Python files for complexity analysis.[/yellow]")
         return
 
     extractor = WorkingTreeExtractor(repo_path)
@@ -431,46 +448,65 @@ def current_impact(
 
     if not changed_files:
         if not extractor.has_uncommitted_changes():
-            console.print("[yellow]No uncommitted changes found. Falling back to analyzing previous commit.[/yellow]")
+            logger.info("No uncommitted tracked code files found, analyzing previous commit (HEAD vs HEAD~1)")
             analyze_previous = True
         else:
-            console.print("[yellow]No uncommitted Python files found.[/yellow]")
-            console.print("[dim]Modify some Python files and try again.[/dim]")
+            if output_json:
+                print('{"error": "No code files found in uncommitted changes"}')
+            else:
+                console.print("[yellow]No uncommitted Python files found.[/yellow]")
+                console.print("[dim]Modify some Python files and try again.[/dim]")
             return
 
-    console.print(f"Repository: {repo_path}")
+    if not output_json:
+        console.print(f"Repository: {repo_path}")
+        console.print("\n[yellow]Computing repository baseline...[/yellow]")
 
-    console.print("\n[yellow]Computing repository baseline...[/yellow]")
     baseline = baseline_service.get_or_compute_baseline(
         repo_path, recompute=recompute_baseline, max_workers=max_workers
     )
 
     if not baseline:
-        console.print("[red]Failed to compute baseline.[/red]")
-        console.print("[dim]Ensure the repository has at least 2 commits.[/dim]")
+        if output_json:
+            print('{"error": "Failed to compute baseline. Ensure the repository has at least 2 commits."}')
+        else:
+            console.print("[red]Failed to compute baseline.[/red]")
+            console.print("[dim]Ensure the repository has at least 2 commits.[/dim]")
         return
 
-    console.print(f"[green]✓ Baseline computed from {baseline.total_commits_analyzed} commits[/green]")
+    if not output_json:
+        console.print(f"[green]✓ Baseline computed from {baseline.total_commits_analyzed} commits[/green]")
 
     try:
         if analyze_previous:
-            console.print("\n[yellow]Analyzing previous commit...[/yellow]")
+            if not output_json:
+                console.print("\n[yellow]Analyzing previous commit...[/yellow]")
             analysis = current_impact_service.analyze_previous_commit(repo_path, baseline)
 
             if not analysis:
-                console.print("[red]Failed to analyze previous commit.[/red]")
-                console.print("[dim]Ensure the repository has at least 2 commits with Python changes.[/dim]")
+                if output_json:
+                    print(
+                        '{"error": "Failed to analyze previous commit. Ensure at least 2 commits with code changes."}'
+                    )
+                else:
+                    console.print("[red]Failed to analyze previous commit.[/red]")
+                    console.print("[dim]Ensure the repository has at least 2 commits with Python changes.[/dim]")
                 return
 
-            console.print(f"Changed Python files in previous commit: {len(analysis.changed_files)}")
+            if not output_json:
+                console.print(f"Changed Python files in previous commit: {len(analysis.changed_files)}")
         else:
-            console.print("[bold]Analyzing uncommitted changes impact[/bold]")
-            console.print(f"Changed Python files: {len(changed_files)}")
-            console.print("\n[yellow]Analyzing uncommitted changes...[/yellow]")
+            if not output_json:
+                console.print("[bold]Analyzing uncommitted changes impact[/bold]")
+                console.print(f"Changed Python files: {len(changed_files)}")
+                console.print("\n[yellow]Analyzing uncommitted changes...[/yellow]")
             analysis = current_impact_service.analyze_uncommitted_changes(repo_path, baseline)
 
             if not analysis:
-                console.print("[red]Failed to analyze uncommitted changes.[/red]")
+                if output_json:
+                    print('{"error": "Failed to analyze uncommitted changes"}')
+                else:
+                    console.print("[red]Failed to analyze uncommitted changes.[/red]")
                 return
 
             try:
@@ -485,14 +521,21 @@ def current_impact(
             except Exception as e:
                 logger.debug(f"Coverage analysis failed (optional): {e}")
 
-        if pager:
+        if output_json:
+            summary = CurrentImpactSummary.from_analysis(analysis)
+            print(summary.model_dump_json(indent=2))
+        elif pager:
             with console.pager(styles=True):
                 display_current_impact_analysis(analysis, show_file_details=file_details)
         else:
             display_current_impact_analysis(analysis, show_file_details=file_details)
 
     except Exception as e:
-        console.print(f"[red]Failed to analyze changes: {e}[/red]")
+        if output_json:
+            escaped_msg = str(e).replace('"', '\\"')
+            print(f'{{"error": "{escaped_msg}"}}')
+        else:
+            console.print(f"[red]Failed to analyze changes: {e}[/red]")
         sys.exit(1)
 
 
@@ -1153,6 +1196,7 @@ def compare_projects(append_paths: tuple[Path, ...], reset: bool) -> None:
     """
     from slopometry.core.database import EventDatabase
     from slopometry.display.formatters import display_leaderboard
+    from slopometry.summoner.services.qpe_calculator import QPE_WEIGHT_VERSION
 
     db = EventDatabase()
 
@@ -1219,6 +1263,7 @@ def compare_projects(append_paths: tuple[Path, ...], reset: bool) -> None:
                 effort_factor=math.log(metrics.average_effort + 1),
                 total_effort=metrics.total_effort,
                 metrics_json=metrics.model_dump_json(),
+                qpe_weight_version=QPE_WEIGHT_VERSION,
             )
             db.save_leaderboard_entry(entry)
             console.print(f"[green]Added {project_path.name} (Quality: {qpe_score.qpe:.4f})[/green]")
@@ -1230,6 +1275,15 @@ def compare_projects(append_paths: tuple[Path, ...], reset: bool) -> None:
     if not leaderboard:
         console.print("[dim]Leaderboard is empty. Use --append to add projects.[/dim]")
         sys.exit(0)
+
+    stale_entries = [e for e in leaderboard if e.qpe_weight_version != QPE_WEIGHT_VERSION]
+    if stale_entries:
+        stale_names = ", ".join(e.project_name for e in stale_entries)
+        console.print(
+            f"[bold yellow]WARNING: {len(stale_entries)} leaderboard entries were computed with "
+            f"outdated QPE weights and may be inaccurate: {stale_names}[/bold yellow]"
+        )
+        console.print("[yellow]Re-run with --append <path> to recompute these entries.[/yellow]\n")
 
     display_leaderboard(leaderboard)
 

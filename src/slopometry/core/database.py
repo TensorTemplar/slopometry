@@ -11,31 +11,13 @@ from pathlib import Path
 from slopometry.core.migrations import MigrationRunner
 
 logger = logging.getLogger(__name__)
-from slopometry.core.models import (
-    ComplexityDelta,
-    ContextCoverage,
-    ExperimentProgress,
-    ExperimentRun,
-    ExperimentStatus,
-    ExtendedComplexityMetrics,
-    FeatureBoundary,
-    GitState,
-    HistoricalMetricStats,
-    HookEvent,
-    HookEventType,
-    LeaderboardEntry,
-    NextFeaturePrediction,
-    PlanEvolution,
-    Project,
-    ProjectSource,
-    QPEScore,
-    RepoBaseline,
-    ResolvedBaselineStrategy,
-    SessionStatistics,
-    ToolType,
-    UserStory,
-    UserStoryEntry,
-)
+from slopometry.core.models.baseline import HistoricalMetricStats, QPEScore, RepoBaseline, ResolvedBaselineStrategy
+from slopometry.core.models.complexity import ComplexityDelta, ExtendedComplexityMetrics
+from slopometry.core.models.display import LeaderboardEntry, SessionDisplayData
+from slopometry.core.models.experiment import ExperimentProgress, ExperimentRun, ExperimentStatus, FeatureBoundary
+from slopometry.core.models.hook import GitState, HookEvent, HookEventType, Project, ProjectSource, ToolType
+from slopometry.core.models.session import ContextCoverage, PlanEvolution, SessionStatistics
+from slopometry.core.models.user_story import NextFeaturePrediction, UserStory, UserStoryEntry
 from slopometry.core.plan_analyzer import PlanAnalyzer
 from slopometry.core.settings import settings
 
@@ -107,15 +89,15 @@ class EventDatabase:
                 )
             """)
             conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_hook_events_session_id 
+                CREATE INDEX IF NOT EXISTS idx_hook_events_session_id
                 ON hook_events(session_id)
             """)
             conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_hook_events_timestamp 
+                CREATE INDEX IF NOT EXISTS idx_hook_events_timestamp
                 ON hook_events(timestamp)
             """)
             conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_hook_events_session_timestamp 
+                CREATE INDEX IF NOT EXISTS idx_hook_events_session_timestamp
                 ON hook_events(session_id, timestamp)
             """)
 
@@ -129,7 +111,8 @@ class EventDatabase:
                     worktree_path TEXT,
                     start_time TEXT NOT NULL,
                     end_time TEXT,
-                    status TEXT NOT NULL
+                    status TEXT NOT NULL,
+                    nfp_objective_id TEXT REFERENCES nfp_objectives(id)
                 )
             """)
 
@@ -243,23 +226,6 @@ class EventDatabase:
                     created_at TEXT NOT NULL
                 )
             """)
-
-            try:
-                conn.execute("""
-                    ALTER TABLE experiment_runs
-                    ADD COLUMN nfp_objective_id TEXT
-                    REFERENCES nfp_objectives(id)
-                """)
-            except sqlite3.OperationalError:
-                pass
-
-            try:
-                conn.execute("""
-                    ALTER TABLE complexity_evolution
-                    ADD COLUMN test_coverage_percent REAL
-                """)
-            except sqlite3.OperationalError:
-                pass
 
             conn.execute("CREATE INDEX IF NOT EXISTS idx_experiment_runs_status ON experiment_runs(status)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_progress_cli ON experiment_progress(experiment_id, cli_score)")
@@ -392,7 +358,8 @@ class EventDatabase:
                     try:
                         git_state_data = json.loads(row["git_state"])
                         git_state = GitState.model_validate(git_state_data)
-                    except (json.JSONDecodeError, ValueError):
+                    except (json.JSONDecodeError, ValueError) as e:
+                        logger.debug("Corrupt git_state JSON in session row: %s", e)
                         git_state = None
 
                 working_directory = row["working_directory"] or "Unknown"
@@ -839,18 +806,18 @@ class EventDatabase:
             rows = conn.execute(query, params).fetchall()
             return [row[0] for row in rows]
 
-    def get_sessions_summary(self, limit: int | None = None) -> list[dict]:
+    def get_sessions_summary(self, limit: int | None = None) -> list[SessionDisplayData]:
         """Get lightweight session summaries for list display."""
         with self._get_db_connection() as conn:
             query = """
-                SELECT 
+                SELECT
                     session_id,
                     MIN(timestamp) as start_time,
                     COUNT(*) as total_events,
                     COUNT(DISTINCT tool_type) as tools_used,
                     project_name,
                     project_source
-                FROM hook_events 
+                FROM hook_events
                 WHERE session_id IS NOT NULL
                 GROUP BY session_id, project_name, project_source
                 ORDER BY MIN(timestamp) DESC
@@ -860,20 +827,17 @@ class EventDatabase:
 
             rows = conn.execute(query).fetchall()
 
-            summaries = []
-            for row in rows:
-                summaries.append(
-                    {
-                        "session_id": row[0],
-                        "start_time": row[1],
-                        "total_events": row[2],
-                        "tools_used": row[3] if row[3] is not None else 0,
-                        "project_name": row[4],
-                        "project_source": row[5],
-                    }
+            return [
+                SessionDisplayData(
+                    session_id=row[0],
+                    start_time=row[1],
+                    total_events=row[2],
+                    tools_used=row[3] if row[3] is not None else 0,
+                    project_name=row[4],
+                    project_source=row[5],
                 )
-
-            return summaries
+                for row in rows
+            ]
 
     def cleanup_old_data(self, days: int, dry_run: bool = False) -> tuple[int, int]:
         """Clean up old session data and associated files."""
@@ -958,7 +922,7 @@ class EventDatabase:
         with self._get_db_connection() as conn:
             conn.execute(
                 """
-                UPDATE experiment_runs 
+                UPDATE experiment_runs
                 SET status = ?, end_time = ?, worktree_path = ?
                 WHERE id = ?
             """,
@@ -1070,7 +1034,7 @@ class EventDatabase:
             if existing:
                 conn.execute(
                     """
-                    UPDATE commit_complexity_chains 
+                    UPDATE commit_complexity_chains
                     SET commit_count = ?, computed_at = ?
                     WHERE id = ?
                 """,
@@ -1214,7 +1178,7 @@ class EventDatabase:
         with self._get_db_connection() as conn:
             nfp_row = conn.execute(
                 """
-                SELECT id FROM nfp_objectives 
+                SELECT id FROM nfp_objectives
                 WHERE repository_path = ? AND base_commit = ? AND target_commit = ?
             """,
                 (repository_path, base_commit, target_commit),
@@ -1230,7 +1194,7 @@ class EventDatabase:
             if repository_path:
                 rows = conn.execute(
                     """
-                    SELECT id FROM nfp_objectives 
+                    SELECT id FROM nfp_objectives
                     WHERE repository_path = ?
                     ORDER BY created_at DESC
                 """,
@@ -1261,7 +1225,7 @@ class EventDatabase:
         with self._get_db_connection() as conn:
             conn.execute(
                 """
-                INSERT INTO diff_user_story_dataset 
+                INSERT INTO diff_user_story_dataset
                 (id, created_at, base_commit, head_commit, diff_content, user_stories,
                  rating, guidelines_for_improving, model_used, prompt_template, repository_path)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -1317,7 +1281,7 @@ class EventDatabase:
         with self._get_db_connection() as conn:
             stats = conn.execute(
                 """
-                SELECT 
+                SELECT
                     COUNT(*) as total_entries,
                     AVG(rating) as avg_rating,
                     COUNT(DISTINCT model_used) as unique_models,
@@ -1575,7 +1539,8 @@ class EventDatabase:
                        current_metrics_json,
                        oldest_commit_date, newest_commit_date, oldest_commit_tokens,
                        strategy_json,
-                       qpe_stats_json, current_qpe_json
+                       qpe_stats_json, current_qpe_json,
+                       qpe_weight_version
                 FROM repo_baselines
                 WHERE repository_path = ? AND head_commit_sha = ?
                 """,
@@ -1639,6 +1604,7 @@ class EventDatabase:
                 strategy=strategy,
                 qpe_stats=qpe_stats,
                 current_qpe=current_qpe,
+                qpe_weight_version=row[29],
             )
 
     def save_baseline(self, baseline: RepoBaseline) -> None:
@@ -1658,8 +1624,9 @@ class EventDatabase:
                     current_metrics_json,
                     oldest_commit_date, newest_commit_date, oldest_commit_tokens,
                     strategy_json,
-                    qpe_stats_json, current_qpe_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    qpe_stats_json, current_qpe_json,
+                    qpe_weight_version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     baseline.repository_path,
@@ -1691,6 +1658,7 @@ class EventDatabase:
                     strategy_json,
                     qpe_stats_json,
                     current_qpe_json,
+                    baseline.qpe_weight_version,
                 ),
             )
             conn.commit()
@@ -1707,8 +1675,9 @@ class EventDatabase:
                 INSERT INTO qpe_leaderboard (
                     project_name, project_path, commit_sha_short, commit_sha_full,
                     measured_at, qpe_score, mi_normalized, smell_penalty,
-                    adjusted_quality, effort_factor, total_effort, metrics_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    adjusted_quality, effort_factor, total_effort, metrics_json,
+                    qpe_weight_version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(project_path) DO UPDATE SET
                     project_name = excluded.project_name,
                     commit_sha_short = excluded.commit_sha_short,
@@ -1720,7 +1689,8 @@ class EventDatabase:
                     adjusted_quality = excluded.adjusted_quality,
                     effort_factor = excluded.effort_factor,
                     total_effort = excluded.total_effort,
-                    metrics_json = excluded.metrics_json
+                    metrics_json = excluded.metrics_json,
+                    qpe_weight_version = excluded.qpe_weight_version
                 """,
                 (
                     entry.project_name,
@@ -1735,6 +1705,7 @@ class EventDatabase:
                     entry.effort_factor,
                     entry.total_effort,
                     entry.metrics_json,
+                    entry.qpe_weight_version,
                 ),
             )
             conn.commit()
@@ -1746,7 +1717,8 @@ class EventDatabase:
                 """
                 SELECT id, project_name, project_path, commit_sha_short, commit_sha_full,
                        measured_at, qpe_score, mi_normalized, smell_penalty,
-                       adjusted_quality, effort_factor, total_effort, metrics_json
+                       adjusted_quality, effort_factor, total_effort, metrics_json,
+                       qpe_weight_version
                 FROM qpe_leaderboard
                 ORDER BY qpe_score DESC
                 """
@@ -1767,6 +1739,7 @@ class EventDatabase:
                     effort_factor=row[10],
                     total_effort=row[11],
                     metrics_json=row[12],
+                    qpe_weight_version=row[13],
                 )
                 for row in rows
             ]
@@ -1778,7 +1751,8 @@ class EventDatabase:
                 """
                 SELECT id, project_name, project_path, commit_sha_short, commit_sha_full,
                        measured_at, qpe_score, mi_normalized, smell_penalty,
-                       adjusted_quality, effort_factor, total_effort, metrics_json
+                       adjusted_quality, effort_factor, total_effort, metrics_json,
+                       qpe_weight_version
                 FROM qpe_leaderboard
                 WHERE project_path = ?
                 ORDER BY measured_at DESC
@@ -1801,6 +1775,7 @@ class EventDatabase:
                     effort_factor=row[10],
                     total_effort=row[11],
                     metrics_json=row[12],
+                    qpe_weight_version=row[13],
                 )
                 for row in rows
             ]
@@ -1832,7 +1807,8 @@ class SessionManager:
             try:
                 current_seq = int(seq_file.read_text().strip())
                 next_seq = current_seq + 1
-            except (ValueError, FileNotFoundError):
+            except (ValueError, FileNotFoundError) as e:
+                logger.debug("Corrupt or missing sequence file for session %s, resetting to 1: %s", session_id, e)
                 next_seq = 1
         else:
             next_seq = 1

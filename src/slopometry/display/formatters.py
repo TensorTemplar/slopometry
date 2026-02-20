@@ -7,21 +7,24 @@ from pathlib import Path
 
 from rich.table import Table
 
-from slopometry.core.models import (
-    SMELL_REGISTRY,
+from slopometry.core.models.baseline import (
     BaselineStrategy,
-    CompactEvent,
-    ExperimentDisplayData,
     ImplementationComparison,
-    NFPObjectiveDisplayData,
-    ProgressDisplayData,
     SmellAdvantage,
-    SmellCategory,
-    TokenUsage,
     ZScoreInterpretation,
-    get_smell_label,
-    get_smells_by_category,
 )
+from slopometry.core.models.display import (
+    ExperimentDisplayData,
+    FeatureDisplayData,
+    LeaderboardEntry,
+    NFPObjectiveDisplayData,
+    SessionDisplayData,
+)
+from slopometry.core.models.experiment import ProgressDisplayData
+from slopometry.core.models.hook import HookEventType, ToolType
+from slopometry.core.models.session import CompactEvent, TokenUsage
+from slopometry.core.models.smell import SMELL_REGISTRY, SmellCategory, get_smell_label, get_smells_by_category
+from slopometry.core.models.user_story import UserStoryDisplayData
 from slopometry.core.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -73,21 +76,19 @@ def truncate_path(path: str, max_width: int = 55) -> str:
     return f"{prefix}{ellipsis}{tail}"
 
 
-from slopometry.core.models import (
-    AnalysisSource,
-    ContextCoverage,
+from slopometry.core.models.baseline import (
     CrossProjectComparison,
     CurrentChangesAnalysis,
-    ExtendedComplexityMetrics,
     GalenMetrics,
     ImpactAssessment,
     ImpactCategory,
-    PlanEvolution,
     QPEScore,
     RepoBaseline,
-    SessionStatistics,
     StagedChangesAnalysis,
 )
+from slopometry.core.models.complexity import ExtendedComplexityMetrics
+from slopometry.core.models.hook import AnalysisSource
+from slopometry.core.models.session import ContextCoverage, PlanEvolution, SessionStatistics
 from slopometry.display.console import console
 
 
@@ -126,7 +127,7 @@ def _display_microsoft_ngmi_alert(galen_metrics: GalenMetrics) -> None:
     on track to hit 1 Galen (1M tokens/month) by end of month.
     """
     rate = galen_metrics.galen_rate
-    rate_color = "green" if rate >= 1.0 else "yellow" if rate >= 0.5 else "red"
+    rate_color = _color_for_galen_rate(rate)
 
     now = datetime.now()
     days_remaining = 30 - now.day
@@ -236,7 +237,7 @@ def display_session_summary(
         _display_context_coverage(stats.context_coverage, show_file_details=show_file_details)
 
 
-def _display_events_by_type_table(events_by_type: dict) -> None:
+def _display_events_by_type_table(events_by_type: dict[HookEventType, int]) -> None:
     """Display events by type table."""
     table = Table(title="Events by Type")
     table.add_column("Event Type", style="cyan")
@@ -248,7 +249,7 @@ def _display_events_by_type_table(events_by_type: dict) -> None:
     console.print(table)
 
 
-def _display_tool_usage_table(tool_usage: dict) -> None:
+def _display_tool_usage_table(tool_usage: dict[ToolType, int]) -> None:
     """Display tool usage table."""
     table = Table(title="Tool Usage")
     table.add_column("Tool", style="green")
@@ -343,15 +344,39 @@ def _display_complexity_metrics(
     show_smell_files: bool = False,
 ) -> None:
     """Display complexity metrics section."""
-    console.print("\n[bold]Complexity Metrics[/bold]")
-
-    overview_table = Table()
-    overview_table.add_column("Metric", style="cyan")
-    overview_table.add_column("Value", justify="right")
-
     metrics = stats.complexity_metrics
     if not metrics:
         return
+
+    console.print("\n[bold]Complexity Metrics[/bold]")
+    _display_complexity_overview(metrics)
+
+    if galen_metrics:
+        _display_galen_rate(galen_metrics)
+
+    if show_smell_files:
+        _display_code_smells_detailed(metrics)
+    else:
+        smell_files = metrics.get_smell_files()
+        has_smell_files = any(smell_files.values())
+        if has_smell_files:
+            console.print("\n[dim]Run with --smell-details to see affected files[/dim]")
+
+    if metrics.files_by_effort:
+        _display_files_by_effort(metrics)
+
+    if show_smell_files:
+        _display_smell_offenders(metrics)
+
+    if metrics.files_with_parse_errors:
+        _display_parse_errors(metrics)
+
+
+def _display_complexity_overview(metrics: ExtendedComplexityMetrics) -> None:
+    """Display the main complexity metrics overview table."""
+    overview_table = Table()
+    overview_table.add_column("Metric", style="cyan")
+    overview_table.add_column("Value", justify="right")
 
     overview_table.add_row("Files analyzed", str(metrics.total_files_analyzed))
     overview_table.add_row("[bold]Cyclomatic Complexity[/bold]", "")
@@ -380,20 +405,14 @@ def _display_complexity_metrics(
     overview_table.add_row("  Type Hint Coverage", f"{metrics.type_hint_coverage:.1f}%")
     overview_table.add_row("  Docstring Coverage", f"{metrics.docstring_coverage:.1f}%")
 
-    any_color = "green" if metrics.any_type_percentage < 5 else "yellow" if metrics.any_type_percentage < 15 else "red"
+    any_color = _color_for_inverted_threshold(metrics.any_type_percentage, 5, 15)
     overview_table.add_row("  Any Type Usage", f"[{any_color}]{metrics.any_type_percentage:.1f}%[/{any_color}]")
 
-    str_color = "green" if metrics.str_type_percentage < 20 else "yellow" if metrics.str_type_percentage < 40 else "red"
+    str_color = _color_for_inverted_threshold(metrics.str_type_percentage, 20, 40)
     overview_table.add_row("  str Type Usage", f"[{str_color}]{metrics.str_type_percentage:.1f}%[/{str_color}]")
 
     if metrics.test_coverage_percent is not None:
-        cov_color = (
-            "green"
-            if metrics.test_coverage_percent >= 80
-            else "yellow"
-            if metrics.test_coverage_percent >= 50
-            else "red"
-        )
+        cov_color = _color_for_coverage(metrics.test_coverage_percent)
         source_info = f" [dim](from {metrics.test_coverage_source})[/dim]" if metrics.test_coverage_source else ""
         overview_table.add_row(
             "  Test Coverage", f"[{cov_color}]{metrics.test_coverage_percent:.1f}%[/{cov_color}]{source_info}"
@@ -407,68 +426,63 @@ def _display_complexity_metrics(
     )
 
     overview_table.add_row("[bold]Code Smells[/bold]", "")
-    smell_counts = metrics.get_smell_counts()
+    smell_dict = {s.name: s.count for s in metrics.get_smells()}
 
     for category in [SmellCategory.GENERAL, SmellCategory.PYTHON]:
         category_label = "General" if category == SmellCategory.GENERAL else "Python"
         overview_table.add_row(f"  [dim]{category_label}[/dim]", "")
         for defn in get_smells_by_category(category):
-            count = getattr(smell_counts, defn.internal_name)
+            count = smell_dict.get(defn.internal_name, 0)
             smell_color = "red" if count > 0 else "green"
             overview_table.add_row(f"    {defn.label}", f"[{smell_color}]{count}[/{smell_color}]")
 
     console.print(overview_table)
 
-    if galen_metrics:
-        _display_galen_rate(galen_metrics)
 
-    if show_smell_files:
-        _display_code_smells_detailed(metrics)
-    else:
-        smell_files = metrics.get_smell_files()
-        has_smell_files = any(smell_files.values())
-        if has_smell_files:
-            console.print("\n[dim]Run with --smell-details to see affected files[/dim]")
+def _display_files_by_effort(metrics: ExtendedComplexityMetrics) -> None:
+    """Display files sorted by Halstead effort."""
+    files_table = Table(title="Files by Halstead Effort")
+    files_table.add_column("File", style="cyan", no_wrap=True, max_width=55)
+    files_table.add_column("Effort", justify="right", width=12)
 
-    if metrics.files_by_effort:
-        files_table = Table(title="Files by Halstead Effort")
-        files_table.add_column("File", style="cyan", no_wrap=True, max_width=55)
-        files_table.add_column("Effort", justify="right", width=12)
+    sorted_files = sorted(metrics.files_by_effort.items(), key=lambda x: x[1], reverse=True)[:10]
 
-        sorted_files = sorted(metrics.files_by_effort.items(), key=lambda x: x[1], reverse=True)[:10]
+    for file_path, effort in sorted_files:
+        files_table.add_row(truncate_path(file_path, max_width=55), f"{effort:,.0f}")
 
-        for file_path, effort in sorted_files:
-            files_table.add_row(truncate_path(file_path, max_width=55), f"{effort:,.0f}")
+    console.print(files_table)
 
-        console.print(files_table)
 
-    if show_smell_files:
-        smell_files = metrics.get_smell_files()
-        file_smell_counts: Counter[str] = Counter()
-        for files in smell_files.values():
-            for f in files:
-                file_smell_counts[f] += 1
+def _display_smell_offenders(metrics: ExtendedComplexityMetrics) -> None:
+    """Display files with the most code smells."""
+    smell_files = metrics.get_smell_files()
+    file_smell_counts: Counter[str] = Counter()
+    for files in smell_files.values():
+        for f in files:
+            file_smell_counts[f] += 1
 
-        if file_smell_counts:
-            offenders_table = Table(title="Worst Smell Offenders")
-            offenders_table.add_column("File", style="cyan", no_wrap=True, max_width=55)
-            offenders_table.add_column("Smell Types", justify="right", width=12)
+    if file_smell_counts:
+        offenders_table = Table(title="Worst Smell Offenders")
+        offenders_table.add_column("File", style="cyan", no_wrap=True, max_width=55)
+        offenders_table.add_column("Smell Types", justify="right", width=12)
 
-            sorted_offenders = sorted(file_smell_counts.items(), key=lambda x: x[1], reverse=True)[:10]
-            for file_path, count in sorted_offenders:
-                offenders_table.add_row(truncate_path(file_path, max_width=55), str(count))
+        sorted_offenders = sorted(file_smell_counts.items(), key=lambda x: x[1], reverse=True)[:10]
+        for file_path, count in sorted_offenders:
+            offenders_table.add_row(truncate_path(file_path, max_width=55), str(count))
 
-            console.print(offenders_table)
+        console.print(offenders_table)
 
-    if metrics.files_with_parse_errors:
-        errors_table = Table(title="[yellow]Files with Parse Errors[/yellow]")
-        errors_table.add_column("File", style="yellow", no_wrap=True, max_width=55)
-        errors_table.add_column("Error", style="dim")
 
-        for file_path, error_msg in metrics.files_with_parse_errors.items():
-            errors_table.add_row(truncate_path(file_path, max_width=55), error_msg)
+def _display_parse_errors(metrics: ExtendedComplexityMetrics) -> None:
+    """Display files that could not be parsed."""
+    errors_table = Table(title="[yellow]Files with Parse Errors[/yellow]")
+    errors_table.add_column("File", style="yellow", no_wrap=True, max_width=55)
+    errors_table.add_column("Error", style="dim")
 
-        console.print(errors_table)
+    for file_path, error_msg in metrics.files_with_parse_errors.items():
+        errors_table.add_row(truncate_path(file_path, max_width=55), error_msg)
+
+    console.print(errors_table)
 
 
 def _display_complexity_delta(
@@ -495,7 +509,7 @@ def _display_complexity_delta(
     if has_baseline:
         changes_table.add_column("vs Baseline", justify="right")
 
-    cc_color = "green" if delta.avg_complexity_change < 0 else "red" if delta.avg_complexity_change > 0 else "yellow"
+    cc_color = _color_for_positive_negative(delta.avg_complexity_change)
     cc_baseline = _format_baseline_cell(assessment.cc_z_score, invert=True) if has_baseline else None
     changes_table.add_row(
         "Average Cyclomatic Complexity",
@@ -503,7 +517,7 @@ def _display_complexity_delta(
         cc_baseline if has_baseline else None,
     )
 
-    effort_color = "green" if delta.avg_effort_change < 0 else "red" if delta.avg_effort_change > 0 else "yellow"
+    effort_color = _color_for_positive_negative(delta.avg_effort_change)
     effort_baseline = _format_baseline_cell(assessment.effort_z_score, invert=True) if has_baseline else None
     changes_table.add_row(
         "Average Effort",
@@ -511,7 +525,7 @@ def _display_complexity_delta(
         effort_baseline if has_baseline else None,
     )
 
-    mi_color = "red" if delta.avg_mi_change < 0 else "green" if delta.avg_mi_change > 0 else "yellow"
+    mi_color = _color_for_positive_negative(delta.avg_mi_change, invert=True)
     mi_baseline = _format_baseline_cell(assessment.mi_z_score, invert=False) if has_baseline else None
     changes_table.add_row(
         "Maintainability (file avg)",
@@ -519,14 +533,14 @@ def _display_complexity_delta(
         mi_baseline if has_baseline else None,
     )
 
-    token_color = "red" if delta.total_tokens_change > 0 else "green" if delta.total_tokens_change < 0 else "yellow"
+    token_color = _color_for_positive_negative(delta.total_tokens_change, invert=True)
     changes_table.add_row(
         "Total Tokens",
         f"[{token_color}]{delta.total_tokens_change:+d}[/{token_color}]",
         "" if has_baseline else None,
     )
 
-    file_color = "green" if delta.net_files_change < 0 else "red" if delta.net_files_change > 0 else "yellow"
+    file_color = _color_for_positive_negative(delta.net_files_change)
     changes_table.add_row(
         "Files changed",
         f"[{file_color}]{delta.net_files_change:+d}[/{file_color}] ({len(delta.files_added)} added, {len(delta.files_removed)} removed)",
@@ -578,7 +592,7 @@ def _display_complexity_delta(
                     current_effort = files_by_effort[file_path]
                     previous_effort = current_effort - change
 
-                    change_color = "green" if change < 0 else "red"
+                    change_color = _color_for_positive_negative(change)
                     file_changes_table.add_row(
                         truncate_path(file_path, max_width=55),
                         f"{previous_effort:,.0f}",
@@ -597,7 +611,7 @@ def _display_complexity_delta(
                 file_changes_table.add_column("Change", justify="right", width=12)
 
                 for file_path, change in sorted_changes:
-                    change_color = "green" if change < 0 else "red"
+                    change_color = _color_for_positive_negative(change)
                     file_changes_table.add_row(
                         truncate_path(file_path, max_width=55), f"[{change_color}]{change:+,.0f}[/{change_color}]"
                     )
@@ -626,6 +640,95 @@ def _format_token_count(tokens: int) -> str:
         return f"~{tokens}"
 
 
+def _color_for_threshold(value: float, green_threshold: float, yellow_threshold: float) -> str:
+    """Return color for values where higher is better.
+
+    Args:
+        value: The value to color
+        green_threshold: threshold for green (inclusive)
+        yellow_threshold: threshold for yellow (inclusive)
+
+    Returns:
+        "green", "yellow", or "red"
+    """
+    if value >= green_threshold:
+        return "green"
+    elif value >= yellow_threshold:
+        return "yellow"
+    else:
+        return "red"
+
+
+def _color_for_inverted_threshold(value: float, green_threshold: float, yellow_threshold: float) -> str:
+    """Return color for values where lower is better.
+
+    Args:
+        value: The value to color
+        green_threshold: threshold for green (exclusive - lower is better)
+        yellow_threshold: threshold for yellow (exclusive)
+
+    Returns:
+        "green", "yellow", or "red"
+    """
+    if value < green_threshold:
+        return "green"
+    elif value < yellow_threshold:
+        return "yellow"
+    else:
+        return "red"
+
+
+def _color_for_positive_negative(value: float, invert: bool = False) -> str:
+    """Return color for delta values where negative is good (or positive if invert=True).
+
+    Args:
+        value: The delta value
+        invert: If True, positive is good (e.g., for Maintainability Index)
+
+    Returns:
+        "green" if good change, "red" if bad change, "yellow" if zero
+    """
+    if invert:
+        return "green" if value > 0 else "red" if value < 0 else "yellow"
+    else:
+        return "green" if value < 0 else "red" if value > 0 else "yellow"
+
+
+def _color_for_galen_rate(rate: float) -> str:
+    """Return color for Galen productivity rate."""
+    return _color_for_threshold(rate, 1.0, 0.5)
+
+
+def _color_for_qpe(qpe: float) -> str:
+    """Return color for QPE score."""
+    return _color_for_threshold(qpe, 0.6, 0.4)
+
+
+def _color_for_coverage(pct: float) -> str:
+    """Return color for coverage percentage."""
+    return _color_for_threshold(pct, 80, 50)
+
+
+def _color_for_context_coverage(ratio: float) -> str:
+    """Return color for context coverage ratio."""
+    return _color_for_threshold(ratio, 0.9, 0.7)
+
+
+def _color_for_read_before_edit(ratio: float) -> str:
+    """Return color for files read before edit ratio."""
+    return _color_for_threshold(ratio, 0.8, 0.5)
+
+
+def _color_for_advantage(adv: float) -> str:
+    """Return color for GRPO advantage."""
+    if adv > 0.01:
+        return "green"
+    elif adv < -0.01:
+        return "red"
+    else:
+        return "yellow"
+
+
 def _display_galen_rate(galen_metrics: GalenMetrics, title: str = "Galen Rate") -> None:
     """Display Galen Rate metrics with color coding.
 
@@ -652,7 +755,7 @@ def _display_galen_rate(galen_metrics: GalenMetrics, title: str = "Galen Rate") 
         galen_table.add_row("Analysis Period", f"{hours:.1f} hours")
 
     rate = galen_metrics.galen_rate
-    rate_color = "green" if rate >= 1.0 else "yellow" if rate >= 0.5 else "red"
+    rate_color = _color_for_galen_rate(rate)
     galen_table.add_row("Galen Rate", f"[{rate_color}]{rate:.2f} Galens[/{rate_color}]")
 
     if galen_metrics.tokens_per_day_to_reach_one_galen is not None:
@@ -773,7 +876,7 @@ def _display_context_coverage(coverage: ContextCoverage, show_file_details: bool
     console.print(f"Files read: {len(coverage.files_read)}")
 
     read_before_ratio = coverage.files_read_before_edit_ratio
-    ratio_color = "green" if read_before_ratio >= 0.9 else "yellow" if read_before_ratio >= 0.7 else "red"
+    ratio_color = _color_for_context_coverage(read_before_ratio)
     console.print(f"Read before edit: [{ratio_color}]{read_before_ratio:.0%}[/{ratio_color}]")
 
     if coverage.file_coverage:
@@ -816,11 +919,11 @@ def _format_coverage_ratio(read: int, total: int) -> str:
     if total == 0:
         return "[dim]n/a[/dim]"
     ratio = read / total
-    color = "green" if ratio >= 0.8 else "yellow" if ratio >= 0.5 else "red"
+    color = _color_for_read_before_edit(ratio)
     return f"[{color}]{read}/{total}[/{color}]"
 
 
-def create_sessions_table(sessions_data: list[dict]) -> Table:
+def create_sessions_table(sessions_data: list[SessionDisplayData]) -> Table:
     """Create a Rich table for displaying session list."""
     table = Table(title="Recent Sessions")
     table.add_column("Session ID", style="cyan")
@@ -831,16 +934,16 @@ def create_sessions_table(sessions_data: list[dict]) -> Table:
 
     for session_data in sessions_data:
         project_display = (
-            f"{session_data['project_name']} ({session_data['project_source']})"
-            if session_data["project_name"]
+            f"{session_data.project_name} ({session_data.project_source})"
+            if session_data.project_name
             else "N/A"
         )
         table.add_row(
-            session_data["session_id"],
+            session_data.session_id,
             project_display,
-            session_data["start_time"],
-            str(session_data["total_events"]),
-            str(session_data["tools_used"]),
+            session_data.start_time,
+            str(session_data.total_events),
+            str(session_data.tools_used),
         )
 
     return table
@@ -871,7 +974,7 @@ def create_experiment_table(experiments_data: list[ExperimentDisplayData]) -> Ta
     return table
 
 
-def create_user_story_entries_table(entries_data: list, count: int) -> Table:
+def create_user_story_entries_table(entries_data: list[UserStoryDisplayData], count: int) -> Table:
     """Create a Rich table for displaying user story entries."""
     table = Table(title=f"Recent User Story Entries (showing {count})")
     table.add_column("Entry ID", style="blue", no_wrap=True, width=10)
@@ -917,7 +1020,7 @@ def create_nfp_objectives_table(objectives_data: list[NFPObjectiveDisplayData]) 
     return table
 
 
-def create_features_table(features_data: list[dict]) -> Table:
+def create_features_table(features_data: list[FeatureDisplayData]) -> Table:
     """Create a Rich table for displaying detected features."""
     table = Table(title="Detected Features", show_lines=True)
     table.add_column("Feature ID", style="blue", no_wrap=True, width=10)
@@ -928,11 +1031,11 @@ def create_features_table(features_data: list[dict]) -> Table:
 
     for feature_data in features_data:
         table.add_row(
-            feature_data["feature_id"],
-            feature_data["feature_message"],
-            feature_data["commits_display"],
-            feature_data["best_entry_id"],
-            feature_data["merge_message"],
+            feature_data.feature_id,
+            feature_data.feature_message,
+            feature_data.commits_display,
+            feature_data.best_entry_id,
+            feature_data.merge_message,
         )
 
     return table
@@ -1009,7 +1112,7 @@ def display_staged_impact_analysis(analysis: StagedChangesAnalysis) -> None:
     impact_table.add_column("Z-Score", justify="right")
     impact_table.add_column("Assessment", style="dim")
 
-    cc_color = "green" if assessment.cc_z_score < 0 else "red" if assessment.cc_z_score > 0 else "yellow"
+    cc_color = _color_for_positive_negative(assessment.cc_z_score)
     impact_table.add_row(
         "Cyclomatic Complexity",
         f"[{cc_color}]{assessment.cc_delta:+.2f}[/{cc_color}]",
@@ -1017,7 +1120,7 @@ def display_staged_impact_analysis(analysis: StagedChangesAnalysis) -> None:
         _interpret_z_score(-assessment.cc_z_score),
     )
 
-    effort_color = "green" if assessment.effort_z_score < 0 else "red" if assessment.effort_z_score > 0 else "yellow"
+    effort_color = _color_for_positive_negative(assessment.effort_z_score)
     impact_table.add_row(
         "Average Effort",
         f"[{effort_color}]{assessment.effort_delta:+.2f}[/{effort_color}]",
@@ -1025,7 +1128,7 @@ def display_staged_impact_analysis(analysis: StagedChangesAnalysis) -> None:
         _interpret_z_score(-assessment.effort_z_score),
     )
 
-    mi_color = "green" if assessment.mi_z_score > 0 else "red" if assessment.mi_z_score < 0 else "yellow"
+    mi_color = _color_for_positive_negative(assessment.mi_z_score, invert=True)
     impact_table.add_row(
         "Maintainability Index",
         f"[{mi_color}]{assessment.mi_delta:+.2f}[/{mi_color}]",
@@ -1192,10 +1295,10 @@ def display_current_impact_analysis(
     quality_table.add_row("Type Hint Coverage", f"{metrics.type_hint_coverage:.1f}%")
     quality_table.add_row("Docstring Coverage", f"{metrics.docstring_coverage:.1f}%")
 
-    any_color = "green" if metrics.any_type_percentage < 5 else "yellow" if metrics.any_type_percentage < 15 else "red"
+    any_color = _color_for_inverted_threshold(metrics.any_type_percentage, 5, 15)
     quality_table.add_row("Any Type Usage", f"[{any_color}]{metrics.any_type_percentage:.1f}%[/{any_color}]")
 
-    str_color = "green" if metrics.str_type_percentage < 20 else "yellow" if metrics.str_type_percentage < 40 else "red"
+    str_color = _color_for_inverted_threshold(metrics.str_type_percentage, 20, 40)
     quality_table.add_row("str Type Usage", f"[{str_color}]{metrics.str_type_percentage:.1f}%[/{str_color}]")
 
     if metrics.test_coverage_percent is not None:
@@ -1226,7 +1329,7 @@ def display_current_impact_analysis(
 
         for fname in sorted(analysis.filtered_coverage.keys()):
             pct = analysis.filtered_coverage[fname]
-            color = "green" if pct >= 80 else "yellow" if pct >= 50 else "red"
+            color = _color_for_coverage(pct)
             cov_table.add_row(truncate_path(fname, max_width=55), f"[{color}]{pct:.1f}%[/{color}]")
         console.print(cov_table)
 
@@ -1337,12 +1440,21 @@ def display_baseline_comparison(
             _format_trend(baseline.qpe_stats.trend_coefficient, lower_is_better=False),
         )
 
+    if baseline.token_delta_stats and baseline.strategy:
+        boundary_label = baseline.strategy.resolved.boundary_name
+        baseline_table.add_row(
+            f"Tokens/{boundary_label}",
+            _format_token_count(int(baseline.token_delta_stats.mean)),
+            f"±{_format_token_count(int(baseline.token_delta_stats.std_dev))}",
+            _format_trend(baseline.token_delta_stats.trend_coefficient, lower_is_better=False),
+        )
+
     console.print(baseline_table)
 
     # Show current QPE absolute value for context
     if baseline.current_qpe:
         current_qpe_val = baseline.current_qpe.qpe
-        qpe_abs_color = "green" if current_qpe_val > 0.6 else "yellow" if current_qpe_val > 0.4 else "red"
+        qpe_abs_color = _color_for_qpe(current_qpe_val)
         console.print(f"  Current QPE: [{qpe_abs_color}]{current_qpe_val:.4f}[/{qpe_abs_color}]")
 
     console.print(f"\n[bold]{title}:[/bold]")
@@ -1353,23 +1465,25 @@ def display_baseline_comparison(
     impact_table.add_column("Z-Score", justify="right")
     impact_table.add_column("Assessment", style="dim")
 
-    # Apply deadband: if QPE delta is negligible, don't show misleading z-score
-    qpe_delta_negligible = abs(assessment.qpe_delta) < 0.001
-    if qpe_delta_negligible:
-        impact_table.add_row(
-            "QPE (GRPO)",
-            "[dim]negligible[/dim]",
-            f"[dim]{assessment.qpe_z_score:+.2f}[/dim]",
-            "[dim]change too small to assess[/dim]",
-        )
-    else:
-        qpe_color = "green" if assessment.qpe_z_score > 0 else "red" if assessment.qpe_z_score < 0 else "yellow"
-        impact_table.add_row(
-            "QPE (GRPO)",
-            f"[{qpe_color}]{assessment.qpe_delta:+.4f}[/{qpe_color}]",
-            f"{assessment.qpe_z_score:+.2f}",
-            _interpret_z_score(assessment.qpe_z_score),
-        )
+    boundary_label = baseline.strategy.resolved.boundary_name if baseline.strategy else "commit"
+
+    # QPE row - always show numeric value
+    qpe_color = _color_for_positive_negative(assessment.qpe_z_score)
+    impact_table.add_row(
+        "QPE (GRPO)",
+        f"[{qpe_color}]{assessment.qpe_delta:+.4f}[/{qpe_color}]",
+        f"{assessment.qpe_z_score:+.2f}",
+        _interpret_z_score(assessment.qpe_z_score),
+    )
+
+    # Tokens row - neutral interpretation (size isn't inherently good/bad)
+    token_color = "green" if assessment.token_z_score > 0 else "red" if assessment.token_z_score < 0 else "yellow"
+    impact_table.add_row(
+        f"Tokens/{boundary_label}",
+        f"[{token_color}]{_format_token_count(assessment.token_delta)}[/{token_color}]",
+        f"[{token_color}]{assessment.token_z_score:+.2f}[/{token_color}]",
+        _interpret_z_score(assessment.token_z_score),
+    )
 
     console.print(impact_table)
 
@@ -1402,7 +1516,7 @@ def display_baseline_comparison(
             smell_table.add_column("Weighted Δ", justify="right")
 
             for sa in non_zero:
-                delta_color = "green" if sa.weighted_delta < 0 else "red"
+                delta_color = _color_for_positive_negative(sa.weighted_delta)
                 smell_table.add_row(
                     get_smell_label(sa.smell_name),
                     str(sa.baseline_count),
@@ -1450,7 +1564,7 @@ def display_qpe_score(
 
     console.print("\n[bold]Quality Score[/bold]")
 
-    qpe_color = "green" if qpe_score.qpe > 0.6 else "yellow" if qpe_score.qpe > 0.4 else "red"
+    qpe_color = _color_for_qpe(qpe_score.qpe)
     console.print(f"  [bold]QPE:[/bold] [{qpe_color}]{qpe_score.qpe:.4f}[/{qpe_color}]")
 
     component_table = Table(title="QPE Components", show_header=True)
@@ -1464,7 +1578,7 @@ def display_qpe_score(
         f"Maintainability Index / 100 (raw: {metrics.average_mi:.1f})",
     )
 
-    smell_color = "green" if qpe_score.smell_penalty < 0.1 else "yellow" if qpe_score.smell_penalty < 0.3 else "red"
+    smell_color = _color_for_inverted_threshold(qpe_score.smell_penalty, 0.1, 0.3)
     component_table.add_row(
         "Smell Penalty",
         f"[{smell_color}]{qpe_score.smell_penalty:.3f}[/{smell_color}]",
@@ -1487,7 +1601,7 @@ def display_qpe_score(
 
         for category in [SmellCategory.GENERAL, SmellCategory.PYTHON]:
             category_smells = [
-                (name, getattr(qpe_score.smell_counts, name))
+                (name, smell_counts_dict.get(name, 0))
                 for name, defn in SMELL_REGISTRY.items()
                 if defn.category == category
             ]
@@ -1524,14 +1638,8 @@ def display_cross_project_comparison(comparison: "CrossProjectComparison") -> No
 
     for rank, result in enumerate(comparison.rankings, 1):
         rank_style = "green" if rank == 1 else "yellow" if rank == 2 else ""
-        qpe_color = "green" if result.qpe_score.qpe > 0.6 else "yellow" if result.qpe_score.qpe > 0.4 else "red"
-        smell_color = (
-            "green"
-            if result.qpe_score.smell_penalty < 0.1
-            else "yellow"
-            if result.qpe_score.smell_penalty < 0.3
-            else "red"
-        )
+        qpe_color = _color_for_qpe(result.qpe_score.qpe)
+        smell_color = _color_for_inverted_threshold(result.qpe_score.smell_penalty, 0.1, 0.3)
 
         table.add_row(
             f"[{rank_style}]#{rank}[/{rank_style}]" if rank_style else f"#{rank}",
@@ -1545,7 +1653,7 @@ def display_cross_project_comparison(comparison: "CrossProjectComparison") -> No
     console.print("\n[dim]Higher QPE = better quality[/dim]")
 
 
-def display_leaderboard(entries: list) -> None:
+def display_leaderboard(entries: list[LeaderboardEntry]) -> None:
     """Display the Quality leaderboard for cross-project comparison.
 
     Args:
@@ -1566,8 +1674,8 @@ def display_leaderboard(entries: list) -> None:
 
     for rank, entry in enumerate(entries, 1):
         rank_style = "green" if rank == 1 else "yellow" if rank == 2 else "blue" if rank == 3 else ""
-        qual_color = "green" if entry.qpe_score > 0.6 else "yellow" if entry.qpe_score > 0.4 else "red"
-        smell_color = "green" if entry.smell_penalty < 0.1 else "yellow" if entry.smell_penalty < 0.3 else "red"
+        qual_color = _color_for_qpe(entry.qpe_score)
+        smell_color = _color_for_inverted_threshold(entry.smell_penalty, 0.1, 0.3)
 
         try:
             metrics = ExtendedComplexityMetrics.model_validate_json(entry.metrics_json)
@@ -1611,8 +1719,8 @@ def display_implementation_comparison(comparison: ImplementationComparison) -> N
     qpe_table.add_column("A", justify="right")
     qpe_table.add_column("B", justify="right")
 
-    qpe_a_color = "green" if comparison.qpe_a.qpe > 0.6 else "yellow" if comparison.qpe_a.qpe > 0.4 else "red"
-    qpe_b_color = "green" if comparison.qpe_b.qpe > 0.6 else "yellow" if comparison.qpe_b.qpe > 0.4 else "red"
+    qpe_a_color = _color_for_qpe(comparison.qpe_a.qpe)
+    qpe_b_color = _color_for_qpe(comparison.qpe_b.qpe)
 
     qpe_table.add_row(
         "QPE",
@@ -1633,7 +1741,7 @@ def display_implementation_comparison(comparison: ImplementationComparison) -> N
 
     # Advantage display
     adv = comparison.aggregate_advantage
-    adv_color = "green" if adv > 0.01 else "red" if adv < -0.01 else "yellow"
+    adv_color = _color_for_advantage(adv)
     console.print(f"\n  [bold]GRPO Advantage (B over A):[/bold] [{adv_color}]{adv:+.4f}[/{adv_color}]")
 
     winner_color = "green" if comparison.winner != "tie" else "yellow"
@@ -1650,7 +1758,7 @@ def display_implementation_comparison(comparison: ImplementationComparison) -> N
         smell_table.add_column("Weighted Δ", justify="right")
 
         for sa in non_zero_smells:
-            delta_color = "green" if sa.weighted_delta < 0 else "red"
+            delta_color = _color_for_positive_negative(sa.weighted_delta)
             smell_table.add_row(
                 get_smell_label(sa.smell_name),
                 str(sa.baseline_count),

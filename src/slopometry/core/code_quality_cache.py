@@ -5,7 +5,7 @@ import sqlite3
 from datetime import datetime, timedelta
 
 from slopometry.core.complexity_analyzer import CALCULATOR_VERSION
-from slopometry.core.models import CacheUpdateError, ComplexityDelta, ExtendedComplexityMetrics
+from slopometry.core.models.complexity import CacheUpdateError, ComplexityDelta, ExtendedComplexityMetrics
 
 
 class CodeQualityCacheManager:
@@ -105,7 +105,7 @@ class CodeQualityCacheManager:
 
             self.db_connection.execute(
                 """
-                INSERT OR REPLACE INTO code_quality_cache 
+                INSERT OR REPLACE INTO code_quality_cache
                 (session_id, repository_path, commit_sha, calculated_at, complexity_metrics_json, complexity_delta_json, working_tree_hash, calculator_version)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
@@ -141,8 +141,8 @@ class CodeQualityCacheManager:
             if working_tree_hash is None:
                 cursor = self.db_connection.execute(
                     """
-                    SELECT COUNT(*) FROM code_quality_cache 
-                    WHERE repository_path = ? AND commit_sha = ? 
+                    SELECT COUNT(*) FROM code_quality_cache
+                    WHERE repository_path = ? AND commit_sha = ?
                       AND working_tree_hash IS NULL
                       AND calculator_version = ?
                     """,
@@ -151,8 +151,8 @@ class CodeQualityCacheManager:
             else:
                 cursor = self.db_connection.execute(
                     """
-                    SELECT COUNT(*) FROM code_quality_cache 
-                    WHERE repository_path = ? AND commit_sha = ? 
+                    SELECT COUNT(*) FROM code_quality_cache
+                    WHERE repository_path = ? AND commit_sha = ?
                       AND working_tree_hash = ?
                       AND calculator_version = ?
                     """,
@@ -241,7 +241,7 @@ class CodeQualityCacheManager:
         try:
             cursor = self.db_connection.execute(
                 """
-                SELECT 
+                SELECT
                     COUNT(*) as total_entries,
                     COUNT(DISTINCT repository_path) as unique_repositories,
                     COUNT(DISTINCT session_id) as unique_sessions

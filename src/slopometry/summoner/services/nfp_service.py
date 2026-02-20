@@ -1,7 +1,8 @@
 """NFP (Next Feature Prediction) service for summoner features."""
 
 from slopometry.core.database import EventDatabase
-from slopometry.core.models import NextFeaturePrediction, NFPObjectiveDisplayData
+from slopometry.core.models.display import NFPObjectiveDisplayData
+from slopometry.core.models.user_story import NextFeaturePrediction
 
 
 class NFPService:

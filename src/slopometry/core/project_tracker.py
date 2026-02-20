@@ -6,7 +6,7 @@ from pathlib import Path
 
 import toml
 
-from slopometry.core.models import Project, ProjectSource
+from slopometry.core.models.hook import Project, ProjectSource
 
 logger = logging.getLogger(__name__)
 
