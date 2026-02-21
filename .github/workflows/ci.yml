@@ -13,14 +13,14 @@ permissions:
 jobs:
   test:
     runs-on: slopometry-linux-x64
-
+    timeout-minutes: 15  # Safety feature: prevents rogue PRs from creating infinite loops on your hardware
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
         with:
           fetch-depth: 0  # Full history for git-dependent tests
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
 
       - name: Install dependencies
         run: uv sync --all-extras
@@ -37,12 +37,12 @@ jobs:
     if: github.event_name == 'pull_request'
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
         with:
           fetch-depth: 0  # Full history for baseline computation and current-impact
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
 
       - name: Install slopometry from checkout
         run: uv tool install . --find-links "https://github.com/Droidcraft/rust-code-analysis/releases/expanded_assets/python-2026.1.31"
@@ -54,10 +54,13 @@ jobs:
           echo "json=$(slopometry summoner qpe --json | jq -c)" >> $GITHUB_OUTPUT
 
       - name: Comment on PR
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          QPE_JSON: ${{ steps.qpe.outputs.json }}
         with:
           script: |
-            const qpe = ${{ steps.qpe.outputs.json }};
+            // Safely parse the environment variable instead of interpolating
+            const qpe = JSON.parse(process.env.QPE_JSON);
             const smells = Object.entries(qpe.smell_counts)
               .filter(([_, v]) => v > 0)
               .sort((a, b) => b[1] - a[1])
@@ -115,10 +118,13 @@ jobs:
           echo "json=$(slopometry summoner current-impact --json --no-pager | jq -c)" >> $GITHUB_OUTPUT
 
       - name: Comment impact on PR
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          IMPACT_JSON: ${{ steps.impact.outputs.json }}
         with:
           script: |
-            const impact = ${{ steps.impact.outputs.json }};
+            // Safely parse the environment variable instead of interpolating
+            const impact = JSON.parse(process.env.IMPACT_JSON);
 
             if (impact.error) {
               core.warning(`Current-impact skipped: ${impact.error}`);
@@ -186,4 +192,3 @@ jobs:
                 body
               });
             }
-
