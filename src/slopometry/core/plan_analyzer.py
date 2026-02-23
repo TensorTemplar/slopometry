@@ -24,6 +24,8 @@ class PlanAnalyzer:
         ToolType.READ,
         ToolType.LS,
         ToolType.TODO_READ,
+        ToolType.TASK_LIST,
+        ToolType.TASK_GET,
         ToolType.NOTEBOOK_READ,
         ToolType.MCP_IDE_GET_DIAGNOSTICS,
         ToolType.MCP_IDE_GET_WORKSPACE_INFO,
@@ -46,6 +48,8 @@ class PlanAnalyzer:
         ToolType.MULTI_EDIT,
         ToolType.BASH,
         ToolType.TODO_WRITE,
+        ToolType.TASK_CREATE,
+        ToolType.TASK_UPDATE,
         ToolType.NOTEBOOK_EDIT,
         ToolType.EXIT_PLAN_MODE,
         ToolType.MCP_IDE_EXECUTE_CODE,
@@ -66,6 +70,7 @@ class PlanAnalyzer:
         self.search_events_since_last_todo = 0
         self.implementation_events_since_last_todo = 0
         self.plan_file_paths: set[str] = set()
+        self._task_items: dict[str, TodoItem] = {}
 
     def analyze_todo_write_event(self, tool_input: dict[str, Any], timestamp: datetime) -> None:
         """Analyze a TodoWrite event and track plan evolution.
@@ -75,7 +80,7 @@ class PlanAnalyzer:
             timestamp: When the event occurred
         """
         todos_data = tool_input.get("todos", [])
-        if not todos_data:
+        if not todos_data and not self.previous_todos:
             return
 
         current_todos = {}
@@ -107,6 +112,74 @@ class PlanAnalyzer:
         file_path = tool_input.get("file_path", "")
         if self.PLAN_FILE_PATTERN.search(file_path):
             self.plan_file_paths.add(file_path)
+
+    def analyze_task_create_event(
+        self, tool_input: dict[str, Any], tool_response: dict[str, Any] | str | list[Any], timestamp: datetime
+    ) -> None:
+        """Analyze a Claude Code TaskCreate event.
+
+        Creates a TodoItem from the task and feeds the full task list into
+        analyze_todo_write_event to reuse existing diff logic.
+
+        Args:
+            tool_input: The tool input containing subject, description, activeForm
+            tool_response: The tool response (may contain taskId)
+            timestamp: When the event occurred
+        """
+        subject = tool_input.get("subject", "")
+        if not subject:
+            return
+
+        # Extract taskId from response if available
+        task_id = None
+        if isinstance(tool_response, dict):
+            task_id = tool_response.get("taskId") or tool_response.get("id")
+        key = task_id or subject
+
+        todo = TodoItem(
+            content=subject,
+            status="pending",
+            activeForm=tool_input.get("activeForm", ""),
+        )
+        self._task_items[key] = todo
+
+        # Feed full current task list into existing todo analysis
+        todos_list = [item.model_dump() for item in self._task_items.values()]
+        self.analyze_todo_write_event({"todos": todos_list}, timestamp)
+
+    def analyze_task_update_event(self, tool_input: dict[str, Any], timestamp: datetime) -> None:
+        """Analyze a Claude Code TaskUpdate event.
+
+        Finds the task by taskId, applies updates, and feeds the full task list
+        into analyze_todo_write_event to reuse existing diff logic.
+
+        Args:
+            tool_input: The tool input containing taskId, status, subject, etc.
+            timestamp: When the event occurred
+        """
+        task_id = tool_input.get("taskId", "")
+        if not task_id or task_id not in self._task_items:
+            return
+
+        task = self._task_items[task_id]
+
+        # Apply updates
+        if "status" in tool_input:
+            new_status = tool_input["status"]
+            if new_status == "deleted":
+                del self._task_items[task_id]
+            else:
+                task.status = new_status
+
+        if "subject" in tool_input and task_id in self._task_items:
+            task.content = tool_input["subject"]
+
+        if "activeForm" in tool_input and task_id in self._task_items:
+            task.activeForm = tool_input["activeForm"]
+
+        # Feed full current task list into existing todo analysis
+        todos_list = [item.model_dump() for item in self._task_items.values()]
+        self.analyze_todo_write_event({"todos": todos_list}, timestamp)
 
     def increment_event_count(
         self, tool_type: ToolType | None = None, tool_input: dict[str, Any] | None = None

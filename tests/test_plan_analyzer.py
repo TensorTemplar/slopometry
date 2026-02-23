@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from slopometry.core.models.hook import ToolType
 from slopometry.core.plan_analyzer import PlanAnalyzer
 
@@ -137,8 +139,6 @@ def test_analyze_write_event__handles_empty_file_path() -> None:
 
 def test_get_plan_evolution__includes_final_todos() -> None:
     """Verify that final_todos contains the todo items from the last TodoWrite."""
-    from datetime import datetime
-
     analyzer = PlanAnalyzer()
 
     # Simulate a TodoWrite event with multiple todos
@@ -180,3 +180,217 @@ def test_get_plan_evolution__final_todos_empty_when_no_todowrite() -> None:
 
     assert evolution.final_todos == []
     assert evolution.plan_files_created == 1
+
+
+# --- TaskCreate / TaskUpdate tests (Claude Code new tool names) ---
+
+
+def test_analyze_task_create_event__creates_todo_and_plan_step() -> None:
+    """TaskCreate should create a TodoItem and generate a PlanStep."""
+    analyzer = PlanAnalyzer()
+
+    tool_input = {"subject": "Fix login bug", "description": "Fix the auth flow", "activeForm": "Fixing login bug"}
+    tool_response = {"taskId": "1"}
+
+    analyzer.analyze_task_create_event(tool_input, tool_response, datetime.now())
+
+    evolution = analyzer.get_plan_evolution()
+    assert evolution.total_plan_steps == 1
+    assert len(evolution.final_todos) == 1
+    assert evolution.final_todos[0].content == "Fix login bug"
+    assert evolution.final_todos[0].status == "pending"
+    assert evolution.final_todos[0].activeForm == "Fixing login bug"
+
+
+def test_analyze_task_create_event__multiple_tasks() -> None:
+    """Multiple TaskCreate events should accumulate todos."""
+    analyzer = PlanAnalyzer()
+
+    analyzer.analyze_task_create_event(
+        {"subject": "Task A", "activeForm": "Working on A"},
+        {"taskId": "1"},
+        datetime.now(),
+    )
+    analyzer.analyze_task_create_event(
+        {"subject": "Task B", "activeForm": "Working on B"},
+        {"taskId": "2"},
+        datetime.now(),
+    )
+
+    evolution = analyzer.get_plan_evolution()
+    assert len(evolution.final_todos) == 2
+    contents = {t.content for t in evolution.final_todos}
+    assert contents == {"Task A", "Task B"}
+
+
+def test_analyze_task_create_event__ignores_empty_subject() -> None:
+    """TaskCreate with empty subject should be ignored."""
+    analyzer = PlanAnalyzer()
+
+    analyzer.analyze_task_create_event({"subject": ""}, {}, datetime.now())
+
+    evolution = analyzer.get_plan_evolution()
+    assert evolution.total_plan_steps == 0
+    assert len(evolution.final_todos) == 0
+
+
+def test_analyze_task_update_event__updates_status() -> None:
+    """TaskUpdate should change task status and generate a PlanStep with status change."""
+    analyzer = PlanAnalyzer()
+
+    # Create a task first
+    analyzer.analyze_task_create_event(
+        {"subject": "Implement feature", "activeForm": "Implementing"},
+        {"taskId": "1"},
+        datetime.now(),
+    )
+
+    # Update status to in_progress
+    analyzer.analyze_task_update_event(
+        {"taskId": "1", "status": "in_progress"},
+        datetime.now(),
+    )
+
+    evolution = analyzer.get_plan_evolution()
+    assert len(evolution.final_todos) == 1
+    assert evolution.final_todos[0].status == "in_progress"
+
+    # The second plan step should show a status change
+    assert len(evolution.plan_steps) >= 2
+    last_step = evolution.plan_steps[-1]
+    assert "Implement feature" in last_step.todos_status_changed
+    assert last_step.todos_status_changed["Implement feature"] == ("pending", "in_progress")
+
+
+def test_analyze_task_update_event__completes_task() -> None:
+    """TaskUpdate to completed status should be reflected in plan evolution."""
+    analyzer = PlanAnalyzer()
+
+    analyzer.analyze_task_create_event(
+        {"subject": "Write tests", "activeForm": "Writing tests"},
+        {"taskId": "1"},
+        datetime.now(),
+    )
+    analyzer.analyze_task_update_event(
+        {"taskId": "1", "status": "completed"},
+        datetime.now(),
+    )
+
+    evolution = analyzer.get_plan_evolution()
+    assert evolution.total_todos_completed == 1
+    assert evolution.final_todos[0].status == "completed"
+
+
+def test_analyze_task_update_event__deletes_task() -> None:
+    """TaskUpdate with status=deleted should remove the task."""
+    analyzer = PlanAnalyzer()
+
+    analyzer.analyze_task_create_event(
+        {"subject": "Temporary task", "activeForm": "Working"},
+        {"taskId": "1"},
+        datetime.now(),
+    )
+    analyzer.analyze_task_update_event(
+        {"taskId": "1", "status": "deleted"},
+        datetime.now(),
+    )
+
+    evolution = analyzer.get_plan_evolution()
+    assert len(evolution.final_todos) == 0
+    # The deletion should appear as a todo_removed in the plan step
+    last_step = evolution.plan_steps[-1]
+    assert "Temporary task" in last_step.todos_removed
+
+
+def test_analyze_task_update_event__ignores_unknown_task_id() -> None:
+    """TaskUpdate with unknown taskId should be ignored."""
+    analyzer = PlanAnalyzer()
+
+    analyzer.analyze_task_update_event(
+        {"taskId": "nonexistent", "status": "completed"},
+        datetime.now(),
+    )
+
+    evolution = analyzer.get_plan_evolution()
+    assert evolution.total_plan_steps == 0
+
+
+def test_analyze_task_create_event__uses_subject_as_fallback_key() -> None:
+    """When tool_response has no taskId, subject should be used as key."""
+    analyzer = PlanAnalyzer()
+
+    analyzer.analyze_task_create_event(
+        {"subject": "Fallback task", "activeForm": "Working"},
+        {},  # No taskId in response
+        datetime.now(),
+    )
+
+    evolution = analyzer.get_plan_evolution()
+    assert len(evolution.final_todos) == 1
+    assert evolution.final_todos[0].content == "Fallback task"
+
+
+# --- OpenCode todo format tests ---
+
+
+def test_analyze_todo_write_event__opencode_format_with_priority() -> None:
+    """OpenCode todos have priority instead of activeForm — should parse correctly."""
+    analyzer = PlanAnalyzer()
+
+    tool_input = {
+        "todos": [
+            {"content": "Fix bug", "status": "pending", "priority": "high"},
+            {"content": "Add tests", "status": "in_progress", "priority": "medium"},
+        ]
+    }
+    analyzer.analyze_todo_write_event(tool_input, datetime.now())
+
+    evolution = analyzer.get_plan_evolution()
+    assert len(evolution.final_todos) == 2
+
+    todo_by_content = {t.content: t for t in evolution.final_todos}
+    assert todo_by_content["Fix bug"].priority == "high"
+    assert todo_by_content["Fix bug"].activeForm == ""  # Not provided by OpenCode
+    assert todo_by_content["Add tests"].status == "in_progress"
+
+
+def test_analyze_todo_write_event__minimal_todo_only_content() -> None:
+    """Todos with only content field should use defaults for status and other fields."""
+    analyzer = PlanAnalyzer()
+
+    tool_input = {
+        "todos": [
+            {"content": "Minimal todo"},
+        ]
+    }
+    analyzer.analyze_todo_write_event(tool_input, datetime.now())
+
+    evolution = analyzer.get_plan_evolution()
+    assert len(evolution.final_todos) == 1
+    assert evolution.final_todos[0].content == "Minimal todo"
+    assert evolution.final_todos[0].status == "pending"
+    assert evolution.final_todos[0].activeForm == ""
+    assert evolution.final_todos[0].priority == ""
+
+
+# --- Tool classification tests ---
+
+
+def test_task_create_classified_as_implementation_tool() -> None:
+    """TASK_CREATE should be in IMPLEMENTATION_TOOLS."""
+    assert ToolType.TASK_CREATE in PlanAnalyzer.IMPLEMENTATION_TOOLS
+
+
+def test_task_update_classified_as_implementation_tool() -> None:
+    """TASK_UPDATE should be in IMPLEMENTATION_TOOLS."""
+    assert ToolType.TASK_UPDATE in PlanAnalyzer.IMPLEMENTATION_TOOLS
+
+
+def test_task_list_classified_as_search_tool() -> None:
+    """TASK_LIST should be in SEARCH_TOOLS."""
+    assert ToolType.TASK_LIST in PlanAnalyzer.SEARCH_TOOLS
+
+
+def test_task_get_classified_as_search_tool() -> None:
+    """TASK_GET should be in SEARCH_TOOLS."""
+    assert ToolType.TASK_GET in PlanAnalyzer.SEARCH_TOOLS

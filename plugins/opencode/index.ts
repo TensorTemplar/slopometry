@@ -128,6 +128,22 @@ export const SlopometryPlugin: Plugin = async (ctx: PluginInput) => {
           let sessionCost = 0
           let todos: any[] = []
 
+          // Fetch final todo state via SDK
+          try {
+            const todoResponse = await ctx.client.session.todo({
+              path: { id: sessionID },
+            })
+            if (todoResponse.data) {
+              todos = (todoResponse.data as any[]).map((t: any) => ({
+                content: t.content,
+                status: t.status,
+                priority: t.priority,
+              }))
+            }
+          } catch {
+            // SDK call failed - send stop with empty todos
+          }
+
           try {
             const response = await ctx.client.session.messages({
               path: { id: sessionID },

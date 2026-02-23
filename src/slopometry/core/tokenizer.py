@@ -1,6 +1,7 @@
 """Token counting utilities using tiktoken."""
 
 import logging
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -60,3 +61,41 @@ def count_file_tokens(file_path: Path) -> int | TokenCountError:
     except Exception as e:
         logger.warning("Failed to read file for token counting %s: %s", file_path, e)
         return TokenCountError(message=str(e), path=str(file_path))
+
+
+def count_git_diff_tokens(working_directory: Path) -> int:
+    """Count tokens in uncommitted changes (staged + unstaged).
+
+    Runs ``git diff`` and ``git diff --cached``, combines output, and
+    tokenizes the result.  Returns 0 if not a git repo or no changes.
+
+    Args:
+        working_directory: Root of the git repository.
+
+    Returns:
+        Number of tokens in the combined diff output.
+    """
+    try:
+        unstaged = subprocess.run(
+            ["git", "diff"],
+            cwd=working_directory,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        staged = subprocess.run(
+            ["git", "diff", "--cached"],
+            cwd=working_directory,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
+        logger.debug("Failed to run git diff in %s: %s", working_directory, e)
+        return 0
+
+    combined = (unstaged.stdout or "") + (staged.stdout or "")
+    if not combined.strip():
+        return 0
+
+    return count_tokens(combined)

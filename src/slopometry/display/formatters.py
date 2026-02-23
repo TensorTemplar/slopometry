@@ -314,12 +314,13 @@ def _display_token_impact(token_usage: TokenUsage | None, compact_events: list[C
     token_table.add_column("Metric", style="cyan")
     token_table.add_column("Value", justify="right")
 
-    token_table.add_row("Changeset Tokens", _format_token_count(token_usage.total_tokens))
+    if token_usage.changeset_tokens > 0:
+        token_table.add_row("Changeset Tokens", _format_token_count(token_usage.changeset_tokens))
+    else:
+        token_table.add_row("Changeset Tokens", "[dim]N/A[/dim]")
+
     token_table.add_row("Exploration Tokens", _format_token_count(token_usage.exploration_tokens))
     token_table.add_row("Implementation Tokens", _format_token_count(token_usage.implementation_tokens))
-
-    if token_usage.subagent_tokens > 0:
-        token_table.add_row("Subagent Tokens", _format_token_count(token_usage.subagent_tokens))
 
     if compact_events:
         tokens_without_compact = sum(c.pre_tokens for c in compact_events)

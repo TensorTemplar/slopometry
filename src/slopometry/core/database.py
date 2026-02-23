@@ -612,6 +612,27 @@ class EventDatabase:
                         plan_evolution.token_usage = analyze_transcript_tokens(tp)
                 except Exception as e:
                     logger.debug(f"Failed to analyze transcript tokens for session {session_id}: {e}")
+            elif plan_evolution and not transcript_path:
+                try:
+                    source = self.get_session_source(session_id)
+                    if source == "opencode":
+                        oc_transcript = self.get_opencode_transcript(session_id)
+                        if oc_transcript:
+                            from slopometry.core.transcript_token_analyzer import (
+                                analyze_opencode_transcript_tokens,
+                            )
+
+                            plan_evolution.token_usage = analyze_opencode_transcript_tokens(oc_transcript)
+                except Exception as e:
+                    logger.debug(f"Failed to analyze OpenCode transcript tokens for session {session_id}: {e}")
+
+            if plan_evolution and plan_evolution.token_usage:
+                try:
+                    from slopometry.core.tokenizer import count_git_diff_tokens
+
+                    plan_evolution.token_usage.changeset_tokens = count_git_diff_tokens(Path(working_directory))
+                except Exception as e:
+                    logger.debug(f"Failed to count git diff tokens for session {session_id}: {e}")
         except Exception as e:
             logger.debug(f"Failed to calculate plan evolution for session {session_id}: {e}")
 
@@ -642,6 +663,18 @@ class EventDatabase:
             context_coverage = self._calculate_context_coverage(transcript_path, working_directory)
         except Exception as e:
             logger.debug(f"Failed to calculate context coverage for session {session_id}: {e}")
+        if context_coverage is None and not transcript_path:
+            try:
+                source = self.get_session_source(session_id)
+                if source == "opencode":
+                    oc_transcript = self.get_opencode_transcript(session_id)
+                    if oc_transcript and working_directory:
+                        from slopometry.core.context_coverage_analyzer import ContextCoverageAnalyzer
+
+                        analyzer = ContextCoverageAnalyzer(Path(working_directory))
+                        context_coverage = analyzer.analyze_opencode_transcript(oc_transcript)
+            except Exception as e:
+                logger.debug(f"Failed to analyze OpenCode context coverage for session {session_id}: {e}")
 
         return SessionStatistics(
             session_id=session_id,
@@ -724,8 +757,9 @@ class EventDatabase:
     def _calculate_plan_evolution(self, session_id: str) -> PlanEvolution:
         """Calculate plan evolution using optimized SQL queries.
 
-        Only loads POST_TOOL_USE events needed for plan analysis, avoiding
-        loading all events into memory.
+        Loads POST_TOOL_USE and TODO_UPDATED events for plan analysis.
+        Handles both Claude Code (TodoWrite, TaskCreate, TaskUpdate) and
+        OpenCode (todo.updated bus events) sources.
         """
         analyzer = PlanAnalyzer()
 
@@ -734,27 +768,49 @@ class EventDatabase:
 
             rows = conn.execute(
                 """
-                SELECT timestamp, tool_name, tool_type, metadata
+                SELECT event_type, timestamp, tool_name, tool_type, metadata
                 FROM hook_events
-                WHERE session_id = ? AND event_type = ?
+                WHERE session_id = ? AND event_type IN (?, ?)
                 ORDER BY sequence_number
                 """,
-                (session_id, HookEventType.POST_TOOL_USE.value),
+                (session_id, HookEventType.POST_TOOL_USE.value, HookEventType.TODO_UPDATED.value),
             ).fetchall()
+
+            # Check if this session has TODO_UPDATED events (OpenCode).
+            # If so, skip POST_TOOL_USE todowrite events to avoid duplicate analysis.
+            has_todo_updated = any(row["event_type"] == HookEventType.TODO_UPDATED.value for row in rows)
 
             for row in rows:
                 timestamp = datetime.fromisoformat(row["timestamp"])
-                tool_name = row["tool_name"]
+                event_type = row["event_type"]
+                tool_name = row["tool_name"] or ""
                 tool_type = ToolType(row["tool_type"]) if row["tool_type"] else None
 
                 metadata = json.loads(row["metadata"]) if row["metadata"] else {}
-                tool_input = metadata.get("tool_input", {})
 
-                if tool_name == "TodoWrite":
-                    if tool_input:
+                if event_type == HookEventType.TODO_UPDATED.value:
+                    # OpenCode todo.updated bus event — canonical source for OpenCode todos
+                    todos = metadata.get("todos", [])
+                    if todos:
+                        analyzer.analyze_todo_write_event({"todos": todos}, timestamp)
+                    continue
+
+                # POST_TOOL_USE events below
+                tool_input = metadata.get("tool_input") or metadata.get("args", {})
+                tool_name_lower = tool_name.lower()
+
+                if tool_name_lower == "todowrite":
+                    # Skip if OpenCode TODO_UPDATED events exist (avoids duplicate)
+                    if not has_todo_updated and tool_input:
                         analyzer.analyze_todo_write_event(tool_input, timestamp)
-                elif tool_name == "Write":
-                    # Track Write events for plan files (in addition to counting as implementation)
+                elif tool_name_lower == "taskcreate":
+                    tool_response = metadata.get("tool_response", {})
+                    if tool_input:
+                        analyzer.analyze_task_create_event(tool_input, tool_response, timestamp)
+                elif tool_name_lower == "taskupdate":
+                    if tool_input:
+                        analyzer.analyze_task_update_event(tool_input, timestamp)
+                elif tool_name_lower == "write":
                     if tool_input:
                         analyzer.analyze_write_event(tool_input)
                     analyzer.increment_event_count(tool_type, tool_input)
