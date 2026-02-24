@@ -156,7 +156,7 @@ def handle_hook(event_type_override: HookEventType | None = None) -> int:
             print(f"Slopometry: Failed to parse hook input: {e}", file=sys.stderr)
         return 0
 
-    lock = SlopometryLock()
+    lock = SlopometryLock(project_dir=os.getcwd())
     with lock.acquire() as acquired:
         if not acquired:
             print("Slopometry: Could not acquire lock, skipping hook execution.", file=sys.stderr)
