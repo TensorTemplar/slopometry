@@ -11,10 +11,19 @@ from slopometry.core.models.hook import AgentTool, GitState, HookEventType, Proj
 class TodoItem(BaseModel):
     """Represents a single todo item from Claude Code's TodoWrite/TaskCreate or OpenCode's TodoWrite."""
 
-    content: str = Field(description="Task description. Maps to 'content' (OpenCode TodoWrite) or 'subject' (Claude Code TaskCreate)")
-    status: str = Field(default="pending", description="Status: pending, in_progress, completed, cancelled. Used by both sources.")
-    activeForm: str = Field(default="", description="Present continuous form shown during execution (Claude Code TaskCreate only, empty for OpenCode)")
-    priority: str = Field(default="", description="Priority level: high, medium, low (OpenCode TodoWrite only, empty for Claude Code)")
+    content: str = Field(
+        description="Task description. Maps to 'content' (OpenCode TodoWrite) or 'subject' (Claude Code TaskCreate)"
+    )
+    status: str = Field(
+        default="pending", description="Status: pending, in_progress, completed, cancelled. Used by both sources."
+    )
+    activeForm: str = Field(
+        default="",
+        description="Present continuous form shown during execution (Claude Code TaskCreate only, empty for OpenCode)",
+    )
+    priority: str = Field(
+        default="", description="Priority level: high, medium, low (OpenCode TodoWrite only, empty for Claude Code)"
+    )
 
 
 class PlanStep(BaseModel):
@@ -68,12 +77,12 @@ class TokenUsage(BaseModel):
 
     @property
     def implementation_tokens(self) -> int:
-        """Total tokens in the agent's context when it finished.
+        """Total tokens spent on implementation work.
 
-        NOTE: does not account for context compaction -- after compaction the
-        context window shrinks, so this represents post-compaction context size.
+        Includes incremental input/output tokens from implementation-classified
+        tool invocations plus non-Explore subagent work.
         """
-        return self.final_context_input_tokens + self.non_explore_subagent_tokens
+        return self.implementation_input_tokens + self.implementation_output_tokens + self.non_explore_subagent_tokens
 
     @property
     def exploration_token_percentage(self) -> float:

@@ -1,15 +1,21 @@
 """Tests for hook handler functionality."""
 
+import json
 import subprocess
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
+import pytest
+
+from slopometry.core.database import SessionManager
 from slopometry.core.hook_handler import (
     _get_related_files_via_imports,
     detect_event_type_from_parsed,
     extract_dev_guidelines_from_claude_md,
     format_code_smell_feedback,
     format_context_coverage_feedback,
+    handle_hook,
     parse_hook_input,
     scope_smells_for_session,
 )
@@ -25,6 +31,7 @@ from slopometry.core.models.hook import (
 )
 from slopometry.core.models.session import ContextCoverage, FileCoverageStatus
 from slopometry.core.models.smell import SmellField
+from slopometry.display.formatters import _interpret_z_score
 
 
 class TestEventTypeDetection:
@@ -918,7 +925,6 @@ class TestFormattersInterpretZScore:
 
     def test_interpret_z_score__uses_verbose_mode(self):
         """Test that _interpret_z_score uses verbose mode thresholds."""
-        from slopometry.display.formatters import _interpret_z_score
 
         # At z=1.2: compact would be "much better", verbose is "better"
         result = _interpret_z_score(1.2)
@@ -926,7 +932,6 @@ class TestFormattersInterpretZScore:
 
     def test_interpret_z_score__returns_string_value(self):
         """Test that _interpret_z_score returns string, not enum."""
-        from slopometry.display.formatters import _interpret_z_score
 
         result = _interpret_z_score(2.0)
         assert isinstance(result, str)
@@ -934,7 +939,6 @@ class TestFormattersInterpretZScore:
 
     def test_interpret_z_score__negative_is_worse(self):
         """Test negative z-scores are interpreted as worse."""
-        from slopometry.display.formatters import _interpret_z_score
 
         assert _interpret_z_score(-2.0) == "much worse than avg"
         assert _interpret_z_score(-0.8) == "worse than avg"
@@ -947,6 +951,25 @@ class TestHookHandlerSmokeTests:
     These tests patch _read_stdin_with_timeout instead of sys.stdin because
     the real implementation uses select.select() which requires a real file descriptor.
     """
+
+    @pytest.fixture(autouse=True)
+    def _isolate_db(self, tmp_path):
+        """Redirect database and session state to temp directories so smoke tests don't pollute the real DB."""
+        db_path = tmp_path / "test.db"
+        state_dir = tmp_path / "state"
+        state_dir.mkdir()
+
+        original_init = SessionManager.__init__
+
+        def _isolated_init(self_inner):
+            original_init(self_inner)
+            self_inner.state_dir = state_dir
+
+        with (
+            patch("slopometry.core.settings.settings.database_path", db_path),
+            patch.object(SessionManager, "__init__", _isolated_init),
+        ):
+            yield
 
     def _init_git_repo(self, path: Path) -> None:
         """Initialize a git repo for testing."""
@@ -972,11 +995,6 @@ class TestHookHandlerSmokeTests:
 
     def test_handle_hook__pre_tool_use_does_not_crash(self):
         """Smoke test: PreToolUse hook should not crash."""
-        import json
-        from unittest.mock import patch
-
-        from slopometry.core.hook_handler import handle_hook
-        from slopometry.core.models.hook import HookEventType
 
         input_data = {
             "session_id": "smoke-test-session",
@@ -992,11 +1010,6 @@ class TestHookHandlerSmokeTests:
 
     def test_handle_hook__post_tool_use_does_not_crash(self):
         """Smoke test: PostToolUse hook should not crash."""
-        import json
-        from unittest.mock import patch
-
-        from slopometry.core.hook_handler import handle_hook
-        from slopometry.core.models.hook import HookEventType
 
         input_data = {
             "session_id": "smoke-test-session",
@@ -1013,11 +1026,6 @@ class TestHookHandlerSmokeTests:
 
     def test_handle_hook__notification_does_not_crash(self):
         """Smoke test: Notification hook should not crash."""
-        import json
-        from unittest.mock import patch
-
-        from slopometry.core.hook_handler import handle_hook
-        from slopometry.core.models.hook import HookEventType
 
         input_data = {
             "session_id": "smoke-test-session",
@@ -1032,11 +1040,6 @@ class TestHookHandlerSmokeTests:
 
     def test_handle_hook__stop_does_not_crash(self):
         """Smoke test: Stop hook should not crash."""
-        import json
-        from unittest.mock import patch
-
-        from slopometry.core.hook_handler import handle_hook
-        from slopometry.core.models.hook import HookEventType
 
         with tempfile.TemporaryDirectory() as tmpdir:
             tmppath = Path(tmpdir)
@@ -1062,11 +1065,6 @@ class TestHookHandlerSmokeTests:
 
     def test_handle_hook__subagent_stop_does_not_crash(self):
         """Smoke test: SubagentStop hook should not crash and return 0."""
-        import json
-        from unittest.mock import patch
-
-        from slopometry.core.hook_handler import handle_hook
-        from slopometry.core.models.hook import HookEventType
 
         input_data = {
             "session_id": "smoke-test-subagent",
@@ -1082,10 +1080,6 @@ class TestHookHandlerSmokeTests:
 
     def test_handle_hook__empty_stdin_returns_zero(self):
         """Test that empty stdin (timeout) returns 0 without errors."""
-        from unittest.mock import patch
-
-        from slopometry.core.hook_handler import handle_hook
-
         with patch("slopometry.core.hook_handler._read_stdin_with_timeout", return_value=""):
             result = handle_hook()
 
@@ -1093,10 +1087,6 @@ class TestHookHandlerSmokeTests:
 
     def test_handle_hook__invalid_json_returns_zero(self):
         """Test that invalid JSON input returns 0 without crashing."""
-        from unittest.mock import patch
-
-        from slopometry.core.hook_handler import handle_hook
-
         with patch("slopometry.core.hook_handler._read_stdin_with_timeout", return_value="not valid json"):
             result = handle_hook()
 

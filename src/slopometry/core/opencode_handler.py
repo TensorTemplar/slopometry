@@ -8,6 +8,7 @@ with JSON on stdin. This module parses the JSON, maps it to HookEvent, and store
 import json
 import logging
 import os
+import select
 import sys
 
 from slopometry.core.database import EventDatabase, SessionManager
@@ -86,8 +87,6 @@ def parse_opencode_event(
 
 def _read_stdin_with_timeout(timeout_seconds: float = 5.0) -> str:
     """Read stdin with a timeout to prevent hanging on unclosed pipes."""
-    import select
-
     ready, _, _ = select.select([sys.stdin], [], [], timeout_seconds)
     if not ready:
         return ""
@@ -123,7 +122,7 @@ def handle_opencode_hook(event_type: str) -> int:
             print(f"Slopometry: Failed to parse OpenCode event: {e}", file=sys.stderr)
         return 0
 
-    lock = SlopometryLock()
+    lock = SlopometryLock(project_dir=os.getcwd())
     with lock.acquire() as acquired:
         if not acquired:
             print("Slopometry: Could not acquire lock, skipping.", file=sys.stderr)
@@ -239,10 +238,6 @@ def _handle_opencode_stop(
         Exit code (0 or 2 for blocking feedback).
     """
     if not isinstance(parsed_event, OpenCodeStopEvent):
-        return 0
-
-    # For subagent stop, check if parent is still active
-    if event_type == "subagent_stop" and parsed_event.parent_id:
         return 0
 
     from slopometry.core.hook_handler import handle_stop_event

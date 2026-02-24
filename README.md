@@ -117,21 +117,16 @@ curl -fsSL http://claude.ai/install.sh | bash
 ### Install slopometry as a uv tool
 
 ```bash
-# Install as a global tool (requires find-links for rust-code-analysis dependency)
-uv tool install git+https://github.com/TensorTemplar/slopometry.git \
-  --find-links "https://github.com/Droidcraft/rust-code-analysis/releases/expanded_assets/python-2026.1.31"
+uv tool install git+https://github.com/TensorTemplar/slopometry.git --find-links "https://github.com/Droidcraft/rust-code-analysis/releases/expanded_assets/python-2026.1.31"
+```
 
-# Add tool directory to PATH (required on macOS, may be needed on Linux)
+```bash
 uv tool update-shell
+```
 
 # Restart your terminal or run:
 source ~/.zshrc  # for zsh
 # or: source ~/.bashrc  # for bash
-
-# Or install from a local directory
-git clone https://github.com/TensorTemplar/slopometry
-cd slopometry
-uv tool install . --find-links "https://github.com/Droidcraft/rust-code-analysis/releases/expanded_assets/python-2026.1.31"
 
 # After making code changes, reinstall to update the global tool
 uv tool install . --reinstall --find-links "https://github.com/Droidcraft/rust-code-analysis/releases/expanded_assets/python-2026.1.31"
@@ -145,17 +140,19 @@ Note: tested on Ubuntu linux 24.04.1
 # Install hooks globally (recommended)
 slopometry install --global
 
-# Use Claude normally
-claude
+# Use claude code or opencode normally
+claude 
+opencode
 
 # View tracked sessions and code delta vs. the previous commit or branch parent
+# Note solo commands will scope project-relative completions and candidates
 slopometry solo ls
 slopometry solo show <session_id> 
 
-# Alias for latest session, same as solo show <session_id>
+# Alias for latest session, works from everywhere
 slopometry latest
 
-# Save session artifacts (transcript, plans, todos) to .slopometry/<session_id>/
+# Save session artifacts (transcript, plans, tasks) to .slopometry/<session_id>/
 slopometry solo save-transcript  # latest
 slopometry solo save-transcript <session_id>
 ```
@@ -192,7 +189,7 @@ cd slopometry
 git pull
 uv tool install . --reinstall --find-links "https://github.com/Droidcraft/rust-code-analysis/releases/expanded_assets/python-2026.1.31"
 
-# Note: After upgrading, you may need to reinstall hooks if the default config changed
+# Note: After upgrading, you may need to reinstall hooks and completions if the api changed
 slopometry install
 ```
 
@@ -233,8 +230,6 @@ Customize via `.env` file or environment variables:
     - Linux: `~/.local/share/slopometry/slopometry.db` (or `$XDG_DATA_HOME/slopometry/slopometry.db` if set)
     - macOS: `~/Library/Application Support/slopometry/slopometry.db`
     - Windows: `%LOCALAPPDATA%\slopometry\slopometry.db`
-- `SLOPOMETRY_PYTHON_EXECUTABLE`: Python command for hooks (default: uses uv tool's python)
-- `SLOPOMETRY_SESSION_ID_PREFIX`: Custom session ID prefix
 - `SLOPOMETRY_ENABLE_COMPLEXITY_ANALYSIS`: Collect complexity metrics (default: `true`)
 - `SLOPOMETRY_ENABLE_COMPLEXITY_FEEDBACK`: Provide feedback to Claude (default: `false`)
 

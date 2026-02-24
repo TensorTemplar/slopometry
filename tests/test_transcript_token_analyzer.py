@@ -40,30 +40,33 @@ class TestTokenUsageModel:
         )
         assert usage.exploration_tokens == 6000
 
-    def test_implementation_tokens__is_final_context_plus_non_explore_subagent(self):
-        """Implementation tokens = final context input + non-explore subagent tokens."""
+    def test_implementation_tokens__is_incremental_impl_plus_non_explore_subagent(self):
+        """Implementation tokens = incremental impl input + output + non-explore subagent tokens."""
         usage = TokenUsage(
-            final_context_input_tokens=100_000,
+            implementation_input_tokens=50_000,
+            implementation_output_tokens=30_000,
             non_explore_subagent_tokens=20_000,
         )
-        assert usage.implementation_tokens == 120_000
+        assert usage.implementation_tokens == 100_000
 
-    def test_implementation_tokens__zero_when_no_final_context(self):
-        """Implementation tokens are 0 with no final context or subagent tokens."""
+    def test_implementation_tokens__uses_incremental_not_final_context(self):
+        """Implementation tokens use incremental impl tokens, not final context window size."""
         usage = TokenUsage(
             implementation_input_tokens=600,
             implementation_output_tokens=400,
+            final_context_input_tokens=100_000,  # should NOT be used
         )
-        assert usage.implementation_tokens == 0
+        assert usage.implementation_tokens == 1_000
 
     def test_exploration_token_percentage__calculates_correctly(self):
-        """Test exploration percentage calculation with new definitions."""
+        """Test exploration percentage calculation with incremental tokens."""
         usage = TokenUsage(
             exploration_input_tokens=300,
             exploration_output_tokens=200,  # 500 exploration from main agent
             explore_subagent_tokens=500,  # 500 from Explore subagents = 1000 total exploration
-            final_context_input_tokens=800,
-            non_explore_subagent_tokens=200,  # 1000 total implementation
+            implementation_input_tokens=600,
+            implementation_output_tokens=200,  # 800 implementation from main agent
+            non_explore_subagent_tokens=200,  # 200 from non-explore subagents = 1000 total implementation
         )
         # 1000 / 2000 = 50%
         assert usage.exploration_token_percentage == 50.0
@@ -108,7 +111,7 @@ class TestTranscriptTokenAnalyzer:
 
         # Exploration and implementation are now independent metrics (not a partition).
         # Exploration = main-agent exploration i/o + explore subagent tokens.
-        # Implementation = final context input + non-explore subagent tokens.
+        # Implementation = incremental impl input/output + non-explore subagent tokens.
         # Both should be populated for a real transcript.
         assert usage.exploration_tokens > 0 or usage.implementation_tokens > 0
         assert usage.total_tokens > 0
@@ -588,12 +591,14 @@ class TestSubagentRouting:
         """Build an assistant event with tool_use content blocks."""
         content = []
         for tu in tool_uses:
-            content.append({
-                "type": "tool_use",
-                "id": tu["id"],
-                "name": tu["name"],
-                "input": tu.get("input", {}),
-            })
+            content.append(
+                {
+                    "type": "tool_use",
+                    "id": tu["id"],
+                    "name": tu["name"],
+                    "input": tu.get("input", {}),
+                }
+            )
         return {
             "type": "assistant",
             "message": {
@@ -616,12 +621,19 @@ class TestSubagentRouting:
 
     def test_explore_subagent_tokens__routed_to_explore_bucket(self, tmp_path):
         """Explore Task subagent tokens should go to explore_subagent_tokens."""
-        transcript = self._make_transcript(tmp_path, [
-            self._assistant_event(50_000, 5_000, [
-                {"id": "tu_1", "name": "Task", "input": {"subagent_type": "Explore"}},
-            ]),
-            self._user_event_with_subagent("tu_1", 100_000),
-        ])
+        transcript = self._make_transcript(
+            tmp_path,
+            [
+                self._assistant_event(
+                    50_000,
+                    5_000,
+                    [
+                        {"id": "tu_1", "name": "Task", "input": {"subagent_type": "Explore"}},
+                    ],
+                ),
+                self._user_event_with_subagent("tu_1", 100_000),
+            ],
+        )
         analyzer = TranscriptTokenAnalyzer()
         usage = analyzer.analyze_transcript(transcript)
 
@@ -633,12 +645,19 @@ class TestSubagentRouting:
 
     def test_non_explore_subagent_tokens__routed_to_non_explore_bucket(self, tmp_path):
         """Non-Explore Task subagent tokens should go to non_explore_subagent_tokens."""
-        transcript = self._make_transcript(tmp_path, [
-            self._assistant_event(50_000, 5_000, [
-                {"id": "tu_2", "name": "Task", "input": {"subagent_type": "Bash"}},
-            ]),
-            self._user_event_with_subagent("tu_2", 80_000),
-        ])
+        transcript = self._make_transcript(
+            tmp_path,
+            [
+                self._assistant_event(
+                    50_000,
+                    5_000,
+                    [
+                        {"id": "tu_2", "name": "Task", "input": {"subagent_type": "Bash"}},
+                    ],
+                ),
+                self._user_event_with_subagent("tu_2", 80_000),
+            ],
+        )
         analyzer = TranscriptTokenAnalyzer()
         usage = analyzer.analyze_transcript(transcript)
 
@@ -648,16 +667,27 @@ class TestSubagentRouting:
 
     def test_mixed_subagent_tokens__routed_correctly(self, tmp_path):
         """Mixed Explore and non-Explore Task invocations route to correct buckets."""
-        transcript = self._make_transcript(tmp_path, [
-            self._assistant_event(50_000, 5_000, [
-                {"id": "tu_explore", "name": "Task", "input": {"subagent_type": "Explore"}},
-            ]),
-            self._user_event_with_subagent("tu_explore", 100_000),
-            self._assistant_event(100_000, 3_000, [
-                {"id": "tu_bash", "name": "Task", "input": {"subagent_type": "Bash"}},
-            ]),
-            self._user_event_with_subagent("tu_bash", 50_000),
-        ])
+        transcript = self._make_transcript(
+            tmp_path,
+            [
+                self._assistant_event(
+                    50_000,
+                    5_000,
+                    [
+                        {"id": "tu_explore", "name": "Task", "input": {"subagent_type": "Explore"}},
+                    ],
+                ),
+                self._user_event_with_subagent("tu_explore", 100_000),
+                self._assistant_event(
+                    100_000,
+                    3_000,
+                    [
+                        {"id": "tu_bash", "name": "Task", "input": {"subagent_type": "Bash"}},
+                    ],
+                ),
+                self._user_event_with_subagent("tu_bash", 50_000),
+            ],
+        )
         analyzer = TranscriptTokenAnalyzer()
         usage = analyzer.analyze_transcript(transcript)
 
@@ -667,12 +697,19 @@ class TestSubagentRouting:
 
     def test_unknown_tool_use_id__defaults_to_non_explore(self, tmp_path):
         """Subagent tokens with unknown tool_use_id default to non-explore."""
-        transcript = self._make_transcript(tmp_path, [
-            self._assistant_event(50_000, 5_000, [
-                {"id": "tu_known", "name": "Read", "input": {}},
-            ]),
-            self._user_event_with_subagent("tu_unknown", 30_000),
-        ])
+        transcript = self._make_transcript(
+            tmp_path,
+            [
+                self._assistant_event(
+                    50_000,
+                    5_000,
+                    [
+                        {"id": "tu_known", "name": "Read", "input": {}},
+                    ],
+                ),
+                self._user_event_with_subagent("tu_unknown", 30_000),
+            ],
+        )
         analyzer = TranscriptTokenAnalyzer()
         usage = analyzer.analyze_transcript(transcript)
 
