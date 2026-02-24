@@ -1,0 +1,16 @@
+{
+  "name": "@slopometry/opencode-plugin",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Slopometry integration plugin for OpenCode - session tracking, code quality feedback, and metrics collection",
+  "main": "index.ts",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "dependencies": {
+    "@opencode-ai/plugin": "latest"
+  },
+  "peerDependencies": {
+    "@opencode-ai/sdk": "*"
+  }
+}

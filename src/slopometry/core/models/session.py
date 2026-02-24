@@ -9,11 +9,12 @@ from slopometry.core.models.hook import AgentTool, GitState, HookEventType, Proj
 
 
 class TodoItem(BaseModel):
-    """Represents a single todo item from Claude Code's TodoWrite tool."""
+    """Represents a single todo item from Claude Code's TodoWrite/TaskCreate or OpenCode's TodoWrite."""
 
-    content: str = Field(description="The todo item description")
-    status: str = Field(description="Status: pending, in_progress, or completed")
-    activeForm: str = Field(description="Present continuous form shown during execution")
+    content: str = Field(description="Task description. Maps to 'content' (OpenCode TodoWrite) or 'subject' (Claude Code TaskCreate)")
+    status: str = Field(default="pending", description="Status: pending, in_progress, completed, cancelled. Used by both sources.")
+    activeForm: str = Field(default="", description="Present continuous form shown during execution (Claude Code TaskCreate only, empty for OpenCode)")
+    priority: str = Field(default="", description="Priority level: high, medium, low (OpenCode TodoWrite only, empty for Claude Code)")
 
 
 class PlanStep(BaseModel):
@@ -45,6 +46,12 @@ class TokenUsage(BaseModel):
     implementation_input_tokens: int = Field(default=0, description="Input tokens for implementation tools")
     implementation_output_tokens: int = Field(default=0, description="Output tokens for implementation tools")
     subagent_tokens: int = Field(default=0, description="Total tokens from subagent (Task tool) executions")
+    changeset_tokens: int = Field(default=0, description="Tokenized git diff of uncommitted changes")
+    final_context_input_tokens: int = Field(
+        default=0, description="Raw input_tokens from the last assistant message (final context window size)"
+    )
+    explore_subagent_tokens: int = Field(default=0, description="Subagent tokens from Explore Task invocations")
+    non_explore_subagent_tokens: int = Field(default=0, description="Subagent tokens from non-Explore Task invocations")
 
     @property
     def total_tokens(self) -> int:
@@ -53,13 +60,20 @@ class TokenUsage(BaseModel):
 
     @property
     def exploration_tokens(self) -> int:
-        """Total exploration tokens (input + output)."""
-        return self.exploration_input_tokens + self.exploration_output_tokens
+        """Total tokens spent understanding the problem.
+
+        Includes main agent exploration tool tokens plus Explore subagent work.
+        """
+        return self.exploration_input_tokens + self.exploration_output_tokens + self.explore_subagent_tokens
 
     @property
     def implementation_tokens(self) -> int:
-        """Total implementation tokens (input + output)."""
-        return self.implementation_input_tokens + self.implementation_output_tokens
+        """Total tokens in the agent's context when it finished.
+
+        NOTE: does not account for context compaction -- after compaction the
+        context window shrinks, so this represents post-compaction context size.
+        """
+        return self.final_context_input_tokens + self.non_explore_subagent_tokens
 
     @property
     def exploration_token_percentage(self) -> float:

@@ -90,6 +90,25 @@ def hook_subagent_stop() -> None:
     sys.exit(handle_hook(event_type_override=HookEventType.SUBAGENT_STOP))
 
 
+@cli.command("hook-opencode", hidden=True)
+@click.option(
+    "--event-type",
+    required=True,
+    type=click.Choice(
+        ["pre_tool_use", "post_tool_use", "stop", "subagent_stop", "subagent_start", "todo_updated", "message_updated"]
+    ),
+    help="Type of OpenCode event being forwarded.",
+)
+def hook_opencode(event_type: str) -> None:
+    """Internal command for processing OpenCode plugin events.
+
+    Called by the OpenCode TypeScript plugin with JSON on stdin.
+    """
+    from slopometry.core.opencode_handler import handle_opencode_hook
+
+    sys.exit(handle_opencode_hook(event_type))
+
+
 @cli.command("shell-completion")
 @click.argument("shell", type=click.Choice(["bash", "zsh", "fish"]))
 def shell_completion(shell: str) -> None:

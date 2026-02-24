@@ -55,9 +55,11 @@ class SessionService:
         """Clean up all session data."""
         return self.db.cleanup_all_sessions()
 
-    def get_sessions_for_display(self, limit: int | None = None) -> list[SessionDisplayData]:
+    def get_sessions_for_display(
+        self, limit: int | None = None, working_directory: str | None = None
+    ) -> list[SessionDisplayData]:
         """Get session summaries formatted for display."""
-        summaries = self.db.get_sessions_summary(limit=limit)
+        summaries = self.db.get_sessions_summary(limit=limit, working_directory=working_directory)
 
         sessions_data = []
         for summary in summaries:
@@ -75,6 +77,7 @@ class SessionService:
                     start_time=formatted_time,
                     total_events=summary.total_events,
                     tools_used=summary.tools_used,
+                    source=summary.source,
                 )
             )
 

@@ -85,7 +85,9 @@ class EventDatabase:
                     working_directory TEXT,
                     project_name TEXT,
                     project_source TEXT,
-                    transcript_path TEXT
+                    transcript_path TEXT,
+                    source TEXT DEFAULT 'claude_code',
+                    parent_session_id TEXT
                 )
             """)
             conn.execute("""
@@ -99,6 +101,14 @@ class EventDatabase:
             conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_hook_events_session_timestamp
                 ON hook_events(session_id, timestamp)
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_hook_events_workdir_session_ts
+                ON hook_events(working_directory, session_id, timestamp)
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_hook_events_session_type_source
+                ON hook_events(session_id, event_type, source)
             """)
 
             conn.execute("""
@@ -319,8 +329,9 @@ class EventDatabase:
                     session_id, event_type, timestamp, sequence_number,
                     tool_name, tool_type, metadata, duration_ms,
                     exit_code, error_message, git_state, working_directory,
-                    project_name, project_source, transcript_path
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    project_name, project_source, transcript_path,
+                    source, parent_session_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     event.session_id,
@@ -338,6 +349,8 @@ class EventDatabase:
                     event.project.name if event.project else None,
                     event.project.source.value if event.project else None,
                     event.transcript_path,
+                    event.source.value,
+                    event.parent_session_id,
                 ),
             )
             return cursor.lastrowid or 0
@@ -371,6 +384,13 @@ class EventDatabase:
                         source=ProjectSource(row["project_source"]),
                     )
 
+                # Handle source column (may be NULL for pre-migration rows)
+                from slopometry.core.models.hook import EventSource
+
+                source_val = row["source"] if "source" in row.keys() else None
+                source = EventSource(source_val) if source_val else EventSource.CLAUDE_CODE
+                parent_session_id = row["parent_session_id"] if "parent_session_id" in row.keys() else None
+
                 events.append(
                     HookEvent(
                         id=row["id"],
@@ -388,9 +408,50 @@ class EventDatabase:
                         working_directory=working_directory,
                         project=project,
                         transcript_path=row["transcript_path"],
+                        source=source,
+                        parent_session_id=parent_session_id,
                     )
                 )
             return events
+
+    def get_session_source(self, session_id: str) -> str:
+        """Get the source agent tool for a session ('claude_code' or 'opencode').
+
+        Returns 'claude_code' for pre-migration sessions or if the column is missing.
+        """
+        with self._get_db_connection() as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT source FROM hook_events WHERE session_id = ? LIMIT 1",
+                (session_id,),
+            ).fetchone()
+            if row and row["source"]:
+                return row["source"]
+            return "claude_code"
+
+    def get_opencode_transcript(self, session_id: str) -> list[dict] | None:
+        """Extract the transcript from an OpenCode session's Stop event metadata.
+
+        OpenCode stores the full transcript (fetched via SDK) in the Stop event's
+        metadata.transcript field. Returns None if not found.
+        """
+        with self._get_db_connection() as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                """
+                SELECT metadata FROM hook_events
+                WHERE session_id = ? AND event_type = 'Stop' AND source = 'opencode'
+                ORDER BY sequence_number DESC LIMIT 1
+                """,
+                (session_id,),
+            ).fetchone()
+            if not row:
+                return None
+            try:
+                meta = json.loads(row["metadata"])
+                return meta.get("transcript")
+            except (json.JSONDecodeError, ValueError):
+                return None
 
     def get_session_basic_info(self, session_id: str) -> tuple[datetime, int] | None:
         """Get minimal session info (start_time, total_events) without expensive computations.
@@ -551,6 +612,27 @@ class EventDatabase:
                         plan_evolution.token_usage = analyze_transcript_tokens(tp)
                 except Exception as e:
                     logger.debug(f"Failed to analyze transcript tokens for session {session_id}: {e}")
+            elif plan_evolution and not transcript_path:
+                try:
+                    source = self.get_session_source(session_id)
+                    if source == "opencode":
+                        oc_transcript = self.get_opencode_transcript(session_id)
+                        if oc_transcript:
+                            from slopometry.core.transcript_token_analyzer import (
+                                analyze_opencode_transcript_tokens,
+                            )
+
+                            plan_evolution.token_usage = analyze_opencode_transcript_tokens(oc_transcript)
+                except Exception as e:
+                    logger.debug(f"Failed to analyze OpenCode transcript tokens for session {session_id}: {e}")
+
+            if plan_evolution and plan_evolution.token_usage:
+                try:
+                    from slopometry.core.tokenizer import count_git_diff_tokens
+
+                    plan_evolution.token_usage.changeset_tokens = count_git_diff_tokens(Path(working_directory))
+                except Exception as e:
+                    logger.debug(f"Failed to count git diff tokens for session {session_id}: {e}")
         except Exception as e:
             logger.debug(f"Failed to calculate plan evolution for session {session_id}: {e}")
 
@@ -564,12 +646,35 @@ class EventDatabase:
                     compact_events = analyze_transcript_compacts(tp)
             except Exception as e:
                 logger.debug(f"Failed to analyze compact events for session {session_id}: {e}")
+        else:
+            try:
+                source = self.get_session_source(session_id)
+                if source == "opencode":
+                    oc_transcript = self.get_opencode_transcript(session_id)
+                    if oc_transcript:
+                        from slopometry.core.compact_analyzer import analyze_opencode_transcript
+
+                        compact_events = analyze_opencode_transcript(oc_transcript)
+            except Exception as e:
+                logger.debug(f"Failed to analyze OpenCode compact events for session {session_id}: {e}")
 
         context_coverage = None
         try:
             context_coverage = self._calculate_context_coverage(transcript_path, working_directory)
         except Exception as e:
             logger.debug(f"Failed to calculate context coverage for session {session_id}: {e}")
+        if context_coverage is None and not transcript_path:
+            try:
+                source = self.get_session_source(session_id)
+                if source == "opencode":
+                    oc_transcript = self.get_opencode_transcript(session_id)
+                    if oc_transcript and working_directory:
+                        from slopometry.core.context_coverage_analyzer import ContextCoverageAnalyzer
+
+                        analyzer = ContextCoverageAnalyzer(Path(working_directory))
+                        context_coverage = analyzer.analyze_opencode_transcript(oc_transcript)
+            except Exception as e:
+                logger.debug(f"Failed to analyze OpenCode context coverage for session {session_id}: {e}")
 
         return SessionStatistics(
             session_id=session_id,
@@ -652,8 +757,9 @@ class EventDatabase:
     def _calculate_plan_evolution(self, session_id: str) -> PlanEvolution:
         """Calculate plan evolution using optimized SQL queries.
 
-        Only loads POST_TOOL_USE events needed for plan analysis, avoiding
-        loading all events into memory.
+        Loads POST_TOOL_USE and TODO_UPDATED events for plan analysis.
+        Handles both Claude Code (TodoWrite, TaskCreate, TaskUpdate) and
+        OpenCode (todo.updated bus events) sources.
         """
         analyzer = PlanAnalyzer()
 
@@ -662,27 +768,49 @@ class EventDatabase:
 
             rows = conn.execute(
                 """
-                SELECT timestamp, tool_name, tool_type, metadata
+                SELECT event_type, timestamp, tool_name, tool_type, metadata
                 FROM hook_events
-                WHERE session_id = ? AND event_type = ?
+                WHERE session_id = ? AND event_type IN (?, ?)
                 ORDER BY sequence_number
                 """,
-                (session_id, HookEventType.POST_TOOL_USE.value),
+                (session_id, HookEventType.POST_TOOL_USE.value, HookEventType.TODO_UPDATED.value),
             ).fetchall()
+
+            # Check if this session has TODO_UPDATED events (OpenCode).
+            # If so, skip POST_TOOL_USE todowrite events to avoid duplicate analysis.
+            has_todo_updated = any(row["event_type"] == HookEventType.TODO_UPDATED.value for row in rows)
 
             for row in rows:
                 timestamp = datetime.fromisoformat(row["timestamp"])
-                tool_name = row["tool_name"]
+                event_type = row["event_type"]
+                tool_name = row["tool_name"] or ""
                 tool_type = ToolType(row["tool_type"]) if row["tool_type"] else None
 
                 metadata = json.loads(row["metadata"]) if row["metadata"] else {}
-                tool_input = metadata.get("tool_input", {})
 
-                if tool_name == "TodoWrite":
-                    if tool_input:
+                if event_type == HookEventType.TODO_UPDATED.value:
+                    # OpenCode todo.updated bus event — canonical source for OpenCode todos
+                    todos = metadata.get("todos", [])
+                    if todos:
+                        analyzer.analyze_todo_write_event({"todos": todos}, timestamp)
+                    continue
+
+                # POST_TOOL_USE events below
+                tool_input = metadata.get("tool_input") or metadata.get("args", {})
+                tool_name_lower = tool_name.lower()
+
+                if tool_name_lower == "todowrite":
+                    # Skip if OpenCode TODO_UPDATED events exist (avoids duplicate)
+                    if not has_todo_updated and tool_input:
                         analyzer.analyze_todo_write_event(tool_input, timestamp)
-                elif tool_name == "Write":
-                    # Track Write events for plan files (in addition to counting as implementation)
+                elif tool_name_lower == "taskcreate":
+                    tool_response = metadata.get("tool_response", {})
+                    if tool_input:
+                        analyzer.analyze_task_create_event(tool_input, tool_response, timestamp)
+                elif tool_name_lower == "taskupdate":
+                    if tool_input:
+                        analyzer.analyze_task_update_event(tool_input, timestamp)
+                elif tool_name_lower == "write":
                     if tool_input:
                         analyzer.analyze_write_event(tool_input)
                     analyzer.increment_event_count(tool_type, tool_input)
@@ -806,26 +934,38 @@ class EventDatabase:
             rows = conn.execute(query, params).fetchall()
             return [row[0] for row in rows]
 
-    def get_sessions_summary(self, limit: int | None = None) -> list[SessionDisplayData]:
+    def get_sessions_summary(
+        self, limit: int | None = None, working_directory: str | None = None
+    ) -> list[SessionDisplayData]:
         """Get lightweight session summaries for list display."""
         with self._get_db_connection() as conn:
-            query = """
+            params: list = []
+            where_clauses = ["session_id IS NOT NULL"]
+
+            if working_directory:
+                where_clauses.append("working_directory = ?")
+                params.append(working_directory)
+
+            where_sql = " AND ".join(where_clauses)
+            query = f"""
                 SELECT
                     session_id,
                     MIN(timestamp) as start_time,
                     COUNT(*) as total_events,
                     COUNT(DISTINCT tool_type) as tools_used,
                     project_name,
-                    project_source
+                    project_source,
+                    COALESCE(MAX(source), 'claude_code') as source
                 FROM hook_events
-                WHERE session_id IS NOT NULL
+                WHERE {where_sql}
                 GROUP BY session_id, project_name, project_source
                 ORDER BY MIN(timestamp) DESC
             """
             if limit:
-                query += f" LIMIT {limit}"
+                query += " LIMIT ?"
+                params.append(limit)
 
-            rows = conn.execute(query).fetchall()
+            rows = conn.execute(query, params).fetchall()
 
             return [
                 SessionDisplayData(
@@ -835,6 +975,7 @@ class EventDatabase:
                     tools_used=row[3] if row[3] is not None else 0,
                     project_name=row[4],
                     project_source=row[5],
+                    source=row[6],
                 )
                 for row in rows
             ]

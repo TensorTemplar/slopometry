@@ -222,6 +222,76 @@ def find_compact_instructions(transcript_path: Path, compact_line_number: int, l
     return None
 
 
+def analyze_opencode_transcript(transcript: list[dict]) -> list[CompactEvent]:
+    """Extract compact events from an OpenCode session transcript.
+
+    OpenCode compaction appears as a user message with a compaction part
+    (``type == "compaction"`` in ``parts``) followed by an assistant message
+    with ``agent == "compaction"``.
+
+    Args:
+        transcript: List of message dicts from the Stop event metadata.
+
+    Returns:
+        List of CompactEvent objects found in the transcript.
+    """
+    events: list[CompactEvent] = []
+
+    for i, msg in enumerate(transcript):
+        # Look for compaction trigger: user message with a compaction part
+        if msg.get("role") != "user":
+            continue
+
+        compaction_part = None
+        for part in msg.get("parts", []):
+            if isinstance(part, dict) and part.get("type") == "compaction":
+                compaction_part = part
+                break
+        if compaction_part is None:
+            continue
+
+        # Next message should be the compaction assistant response
+        if i + 1 >= len(transcript):
+            continue
+        result_msg = transcript[i + 1]
+        if result_msg.get("role") != "assistant" or result_msg.get("agent") != "compaction":
+            continue
+
+        trigger = "auto" if compaction_part.get("auto") else "manual"
+        tokens = result_msg.get("tokens", {})
+        pre_tokens = tokens.get("input", 0)
+
+        summary_content = ""
+        for part in result_msg.get("parts", []):
+            if isinstance(part, dict) and part.get("type") == "text":
+                summary_content = part.get("text", "")
+                break
+
+        timestamp = datetime.now()
+        time_info = result_msg.get("time", {})
+        created_ms = time_info.get("created")
+        if created_ms:
+            try:
+                timestamp = datetime.fromtimestamp(created_ms / 1000)
+            except (OSError, ValueError, OverflowError):
+                pass
+
+        events.append(
+            CompactEvent(
+                line_number=i,
+                trigger=trigger,
+                pre_tokens=pre_tokens,
+                summary_content=summary_content,
+                timestamp=timestamp,
+                uuid=result_msg.get("id", ""),
+                version="n/a",
+                git_branch="n/a",
+            )
+        )
+
+    return events
+
+
 def analyze_transcript_compacts(transcript_path: Path) -> list[CompactEvent]:
     """Convenience function to analyze compact events from a transcript.
 

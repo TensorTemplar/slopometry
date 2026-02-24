@@ -2749,7 +2749,7 @@ wheels = [
 
 [[package]]
 name = "slopometry"
-version = "2026.2.13.1"
+version = "2026.2.21.1"
 source = { editable = "." }
 dependencies = [
     { name = "click" },

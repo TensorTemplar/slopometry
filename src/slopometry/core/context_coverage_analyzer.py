@@ -63,6 +63,100 @@ class ContextCoverageAnalyzer:
             blind_spots=sorted(all_blind_spots),
         )
 
+    def analyze_opencode_transcript(self, transcript: list[dict]) -> ContextCoverage:
+        """Analyze an OpenCode session transcript to compute context coverage.
+
+        OpenCode transcripts are stored in stop event metadata as a list of
+        message dicts with {role, parts: [{type, tool, ...}]}.
+
+        Args:
+            transcript: List of message dicts from the stop event metadata.
+
+        Returns:
+            ContextCoverage with coverage metrics for all edited files
+        """
+        files_read, files_edited, read_timestamps, edit_timestamps = self._extract_opencode_file_events(transcript)
+
+        self._build_import_graph()
+
+        file_coverage = []
+        all_blind_spots: set[str] = set()
+
+        for edited_file in files_edited:
+            coverage = self._compute_file_coverage(edited_file, files_read, read_timestamps, edit_timestamps)
+            file_coverage.append(coverage)
+
+            unread_imports = set(coverage.imports) - set(coverage.imports_read)
+            unread_dependents = set(coverage.dependents) - set(coverage.dependents_read)
+            unread_tests = set(coverage.test_files) - set(coverage.test_files_read)
+            all_blind_spots.update(unread_imports)
+            all_blind_spots.update(unread_dependents)
+            all_blind_spots.update(unread_tests)
+
+        return ContextCoverage(
+            files_edited=list(files_edited),
+            files_read=list(files_read),
+            file_coverage=file_coverage,
+            blind_spots=sorted(all_blind_spots),
+        )
+
+    def _extract_opencode_file_events(
+        self, transcript: list[dict]
+    ) -> tuple[set[str], set[str], dict[str, int], dict[str, int]]:
+        """Extract Read and Edit file paths from an OpenCode transcript.
+
+        OpenCode transcript parts have: {type: "tool-invocation", tool: "Read", ...}
+        Tool args are not stored in the transcript (truncated), so we extract
+        file paths from the part's state.title field which contains the file path.
+
+        Args:
+            transcript: List of message dicts from the stop event metadata.
+
+        Returns:
+            Tuple of (files_read, files_edited, read_timestamps, edit_timestamps)
+        """
+        files_read: set[str] = set()
+        files_edited: set[str] = set()
+        read_timestamps: dict[str, int] = {}
+        edit_timestamps: dict[str, int] = {}
+        sequence = 0
+
+        for msg in transcript:
+            for part in msg.get("parts", []):
+                if not isinstance(part, dict):
+                    continue
+                tool = part.get("tool")
+                if not tool:
+                    continue
+
+                sequence += 1
+
+                # Extract file path from state.title (OpenCode stores it there)
+                file_path = None
+                state = part.get("state")
+                if isinstance(state, dict):
+                    title = state.get("title", "")
+                    if title and ("/" in title or "\\" in title):
+                        file_path = title
+
+                if not file_path:
+                    continue
+
+                relative_path = self._to_relative_path(file_path)
+                if not relative_path or not relative_path.endswith(".py"):
+                    continue
+
+                if tool == "Read":
+                    files_read.add(relative_path)
+                    if relative_path not in read_timestamps:
+                        read_timestamps[relative_path] = sequence
+                elif tool in ("Edit", "Write", "MultiEdit"):
+                    files_edited.add(relative_path)
+                    if relative_path not in edit_timestamps:
+                        edit_timestamps[relative_path] = sequence
+
+        return files_read, files_edited, read_timestamps, edit_timestamps
+
     def get_affected_dependents(self, changed_files: set[str]) -> list[str]:
         """Identify files that depend on the changed files (potential blind spots).
 

@@ -59,12 +59,31 @@ def _warn_if_not_in_path() -> None:
     default=False,
     help="Install hooks globally (~/.claude) or locally (./.claude)",
 )
-def install(global_: bool) -> None:
-    """Install slopometry hooks into Claude Code settings to automatically track all sessions and tool usage."""
+@click.option(
+    "--target",
+    type=click.Choice(["claude-code", "opencode"]),
+    default="claude-code",
+    help="Target tool to install hooks for (default: claude-code)",
+)
+def install(global_: bool, target: str) -> None:
+    """Install slopometry hooks to automatically track all sessions and tool usage."""
     from slopometry.core.settings import get_default_config_dir, get_default_data_dir
     from slopometry.solo.services.hook_service import HookService
 
     hook_service = HookService()
+
+    if target == "opencode":
+        success, message = hook_service.install_opencode()
+        if success:
+            for line in message.split("\n"):
+                console.print(f"[green]{line}[/green]")
+            console.print("[cyan]All OpenCode sessions will now be automatically tracked[/cyan]")
+            console.print(f"[dim]Data: {get_default_data_dir()}[/dim]")
+            _warn_if_not_in_path()
+        else:
+            console.print(f"[red]{message}[/red]")
+        return
+
     success, message = hook_service.install_hooks(global_)
 
     if success:
@@ -85,12 +104,22 @@ def install(global_: bool) -> None:
     default=False,
     help="Remove hooks globally (~/.claude) or locally (./.claude)",
 )
-def uninstall(global_: bool) -> None:
-    """Remove slopometry hooks from Claude Code settings to completely stop automatic session tracking."""
+@click.option(
+    "--target",
+    type=click.Choice(["claude-code", "opencode"]),
+    default="claude-code",
+    help="Target tool to remove hooks from (default: claude-code)",
+)
+def uninstall(global_: bool, target: str) -> None:
+    """Remove slopometry hooks to completely stop automatic session tracking."""
     from slopometry.solo.services.hook_service import HookService
 
     hook_service = HookService()
-    success, message = hook_service.uninstall_hooks(global_)
+
+    if target == "opencode":
+        success, message = hook_service.uninstall_opencode()
+    else:
+        success, message = hook_service.uninstall_hooks(global_)
 
     if success:
         console.print(f"[green]{message}[/green]")
@@ -100,21 +129,36 @@ def uninstall(global_: bool) -> None:
 
 @solo.command("ls")
 @click.option("--limit", default=None, type=int, help="Number of recent sessions to show")
-def list_sessions(limit: int) -> None:
-    """List recent Claude Code sessions."""
+@click.option("--all", "show_all", is_flag=True, help="Show sessions from all projects (default: current project only)")
+@click.option("--pager/--no-pager", default=True, help="Use pager for long output (like less)")
+def list_sessions(limit: int, show_all: bool, pager: bool) -> None:
+    """List recent sessions (filtered to current project by default)."""
     from slopometry.display.formatters import create_sessions_table
     from slopometry.solo.services.session_service import SessionService
 
     session_service = SessionService()
-    sessions_data = session_service.get_sessions_for_display(limit=limit)
+
+    working_directory = None
+    if not show_all:
+        working_directory = str(Path.cwd().resolve())
+
+    sessions_data = session_service.get_sessions_for_display(limit=limit, working_directory=working_directory)
 
     if not sessions_data:
-        console.print("[yellow]No sessions found[/yellow]")
-        console.print("[dim]Run 'slopometry install' to start tracking Claude Code sessions[/dim]")
+        if working_directory:
+            console.print(f"[yellow]No sessions found for {working_directory}[/yellow]")
+            console.print("[dim]Use --all to show sessions from all projects[/dim]")
+        else:
+            console.print("[yellow]No sessions found[/yellow]")
+            console.print("[dim]Run 'slopometry install' to start tracking sessions[/dim]")
         return
 
     table = create_sessions_table(sessions_data)
-    console.print(table)
+    if pager:
+        with console.pager(styles=True):
+            console.print(table)
+    else:
+        console.print(table)
 
 
 @solo.command()
@@ -138,7 +182,10 @@ def show(session_id: str, smell_details: bool, file_details: bool, pager: bool) 
         console.print(f"[red]No data found for session {session_id}[/red]")
         return
 
+    from slopometry.core.database import EventDatabase
+
     baseline, assessment = _compute_session_baseline(stats)
+    source = EventDatabase().get_session_source(session_id)
 
     def _display() -> None:
         assert stats is not None
@@ -149,6 +196,7 @@ def show(session_id: str, smell_details: bool, file_details: bool, pager: bool) 
             assessment,
             show_smell_files=smell_details,
             show_file_details=file_details,
+            source=source,
         )
 
         elapsed = time.perf_counter() - start_time
@@ -226,6 +274,10 @@ def latest(smell_details: bool, file_details: bool, pager: bool) -> None:
 
         baseline, assessment = _compute_session_baseline(stats)
 
+        from slopometry.core.database import EventDatabase
+
+        source = EventDatabase().get_session_source(most_recent)
+
         def _display() -> None:
             assert stats is not None and most_recent is not None
             display_session_summary(
@@ -235,6 +287,7 @@ def latest(smell_details: bool, file_details: bool, pager: bool) -> None:
                 assessment,
                 show_smell_files=smell_details,
                 show_file_details=file_details,
+                source=source,
             )
 
             elapsed = time.perf_counter() - start_time
@@ -555,42 +608,62 @@ def save_transcript(session_id: str | None, output_dir: str, yes: bool) -> None:
             console.print(f"[red]No data found for session {session_id}[/red]")
             return
 
-    if not stats.transcript_path:
-        console.print(f"[red]No transcript path found for session {session_id}[/red]")
-        console.print("[yellow]This may be an older session before transcript tracking was added[/yellow]")
-        return
+    import json
 
-    transcript_path = Path(stats.transcript_path)
-    if not transcript_path.exists():
-        console.print(f"[red]Transcript file not found: {transcript_path}[/red]")
-        return
+    from slopometry.core.database import EventDatabase
+    from slopometry.core.models import AgentTool, SessionMetadata
 
     output_path_dir = Path(output_dir)
     session_dir = output_path_dir / ".slopometry" / session_id
     session_dir.mkdir(parents=True, exist_ok=True)
 
-    transcript_output = session_dir / "transcript.jsonl"
-    try:
-        shutil.copy2(transcript_path, transcript_output)
-        console.print(f"[green]✓[/green] Saved transcript to: {transcript_output}")
-    except Exception as e:
-        console.print(f"[red]Failed to copy transcript: {e}[/red]")
-        return
+    db = EventDatabase()
+    source = db.get_session_source(session_id)
+    is_opencode = source == "opencode"
 
-    plan_names = _find_plan_names_from_transcript(transcript_path)
-    if plan_names:
-        plans_dir = session_dir / "plans"
-        plans_dir.mkdir(exist_ok=True)
-        for plan_name in plan_names:
-            plan_source = Path.home() / ".claude" / "plans" / plan_name
-            if plan_source.exists():
-                shutil.copy2(plan_source, plans_dir / plan_name)
-                console.print(f"[green]✓[/green] Saved plan: {plan_name}")
+    if is_opencode:
+        # OpenCode: extract transcript from the Stop event metadata (fetched via SDK at session end)
+        transcript_data = db.get_opencode_transcript(session_id)
+        if transcript_data:
+            transcript_output = session_dir / "transcript.json"
+            transcript_output.write_text(json.dumps(transcript_data, indent=2))
+            console.print(
+                f"[green]✓[/green] Saved transcript ({len(transcript_data)} messages) to: {transcript_output}"
+            )
+        else:
+            console.print("[yellow]No transcript found in stop event (session may still be running)[/yellow]")
+    else:
+        # Claude Code: copy the JSONL transcript file from disk
+        if not stats.transcript_path:
+            console.print(f"[red]No transcript path found for session {session_id}[/red]")
+            console.print("[yellow]This may be an older session before transcript tracking was added[/yellow]")
+            return
 
-    # Save final todos from session statistics (Claude Code empties todo files on completion)
+        transcript_path = Path(stats.transcript_path)
+        if not transcript_path.exists():
+            console.print(f"[red]Transcript file not found: {transcript_path}[/red]")
+            return
+
+        transcript_output = session_dir / "transcript.jsonl"
+        try:
+            shutil.copy2(transcript_path, transcript_output)
+            console.print(f"[green]✓[/green] Saved transcript to: {transcript_output}")
+        except Exception as e:
+            console.print(f"[red]Failed to copy transcript: {e}[/red]")
+            return
+
+        plan_names = _find_plan_names_from_transcript(transcript_path)
+        if plan_names:
+            plans_dir = session_dir / "plans"
+            plans_dir.mkdir(exist_ok=True)
+            for plan_name in plan_names:
+                plan_source = Path.home() / ".claude" / "plans" / plan_name
+                if plan_source.exists():
+                    shutil.copy2(plan_source, plans_dir / plan_name)
+                    console.print(f"[green]✓[/green] Saved plan: {plan_name}")
+
+    # Save final todos from session statistics
     if stats.plan_evolution and stats.plan_evolution.final_todos:
-        import json
-
         todos_file = session_dir / "final_todos.json"
         todos_data = [
             {"content": todo.content, "status": todo.status, "activeForm": todo.activeForm}
@@ -600,24 +673,82 @@ def save_transcript(session_id: str | None, output_dir: str, yes: bool) -> None:
         console.print(f"[green]✓[/green] Saved {len(todos_data)} todos to: final_todos.json")
 
     # Save structured session metadata
-    from slopometry.core.models import AgentTool, SessionMetadata
-    from slopometry.core.transcript_token_analyzer import extract_transcript_metadata
-
-    transcript_meta = extract_transcript_metadata(transcript_path)
     token_usage = stats.plan_evolution.token_usage if stats.plan_evolution else None
 
-    metadata = SessionMetadata(
-        session_id=stats.session_id,
-        agent_tool=AgentTool.CLAUDE_CODE,
-        agent_version=transcript_meta.agent_version,
-        model=transcript_meta.model,
-        start_time=stats.start_time,
-        end_time=stats.end_time,
-        total_events=stats.total_events,
-        working_directory=stats.working_directory,
-        git_branch=transcript_meta.git_branch,
-        token_usage=token_usage,
-    )
+    if is_opencode:
+        # OpenCode: extract model info and version from event metadata
+        model_id = None
+        opencode_version = None
+        with db._get_db_connection() as conn:
+            import sqlite3
+
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                """
+                SELECT metadata FROM hook_events
+                WHERE session_id = ? AND event_type = 'MessageUpdated' AND source = 'opencode'
+                ORDER BY sequence_number ASC LIMIT 1
+                """,
+                (session_id,),
+            ).fetchone()
+            if row:
+                try:
+                    meta = json.loads(row["metadata"])
+                    model_id = meta.get("model_id")
+                except (json.JSONDecodeError, ValueError):
+                    pass
+
+            # Extract opencode_version from Stop event metadata
+            stop_row = conn.execute(
+                """
+                SELECT metadata FROM hook_events
+                WHERE session_id = ? AND event_type = 'Stop' AND source = 'opencode'
+                ORDER BY sequence_number DESC LIMIT 1
+                """,
+                (session_id,),
+            ).fetchone()
+            if stop_row:
+                try:
+                    stop_meta = json.loads(stop_row["metadata"])
+                    opencode_version = stop_meta.get("opencode_version")
+                except (json.JSONDecodeError, ValueError):
+                    pass
+
+        metadata = SessionMetadata(
+            session_id=stats.session_id,
+            agent_tool=AgentTool.OPENCODE,
+            agent_version=opencode_version,
+            model=model_id,
+            start_time=stats.start_time,
+            end_time=stats.end_time,
+            total_events=stats.total_events,
+            working_directory=stats.working_directory,
+            git_branch=stats.initial_git_state.current_branch if stats.initial_git_state else None,
+            token_usage=token_usage,
+        )
+    else:
+        from slopometry.core.transcript_token_analyzer import extract_transcript_metadata
+
+        if not stats.transcript_path:
+            console.print(
+                "[yellow]Warning: No transcript path for Claude Code session, skipping metadata extraction[/yellow]"
+            )
+            return
+
+        transcript_meta = extract_transcript_metadata(Path(stats.transcript_path))
+
+        metadata = SessionMetadata(
+            session_id=stats.session_id,
+            agent_tool=AgentTool.CLAUDE_CODE,
+            agent_version=transcript_meta.agent_version,
+            model=transcript_meta.model,
+            start_time=stats.start_time,
+            end_time=stats.end_time,
+            total_events=stats.total_events,
+            working_directory=stats.working_directory,
+            git_branch=transcript_meta.git_branch,
+            token_usage=token_usage,
+        )
 
     metadata_file = session_dir / "session_metadata.json"
     metadata_file.write_text(metadata.model_dump_json(indent=2))

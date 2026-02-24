@@ -5,13 +5,15 @@ A tool that lurks in the shadows, tracks and analyzes Claude Code sessions provi
 ![slopometry-logo](assets/slopometry-logo.jpg)  
 
 
-**NEWS:** 
+**NEWS:**
 
-**January 2026: BREAKING CHANGE - replaced `radon`, which is abandoned for 5+ years with `rust-code-analysis` that is only abandoned for 3+ years. 
+* **February 2026: OpenCode 1.2.10+ now supported for solo features, including stop hook feedback! See [plugin doc](plugins/opencode/README.md).**
+
+* **January 2026: BREAKING CHANGE - replaced `radon`, which is abandoned for 5+ years with `rust-code-analysis` that is only abandoned for 3+ years.**
 This allows us to support various unserious languages for analysis in the future (like c++ and typescript) but requires installation from wheels due to rust bindings.
 Bindings are pre-built for MacOS and Linux with Python 3.13, 3.14 and the free-threaded variants with a `t`.
 
-**December 2025: for microsoft employees we now support the Galen metric (Python only for now).**
+* **December 2025: for microsoft employees we now support the Galen metric (Python only for now).**
 
 Set `SLOPOMETRY_ENABLE_WORKING_AT_MICROSOFT=true slopometry latest` or edit your .env to get encouraging messages approved by HR!
 
