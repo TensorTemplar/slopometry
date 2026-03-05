@@ -473,6 +473,72 @@ class TestBuildArtifactFiltering:
             assert key_before == key_after, "*.egg-info directory should be ignored"
 
 
+class TestGetModifiedSourceFilePathsFiltering:
+    """Tests for get_modified_source_file_paths() ignore filtering."""
+
+    def test_get_modified_source_file_paths__excludes_venv_files(self):
+        """Verify .venv Python files are excluded from modified source files."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            _init_git_repo(tmppath)
+
+            # Create source file and venv file, commit both as tracked
+            (tmppath / "src").mkdir()
+            (tmppath / "src" / "app.py").write_text("def app(): pass")
+            (tmppath / ".venv").mkdir()
+            (tmppath / ".venv" / "lib.py").write_text("def lib(): pass")
+            _commit_all(tmppath)
+
+            # Modify both files
+            (tmppath / "src" / "app.py").write_text("def app(): return 1")
+            (tmppath / ".venv" / "lib.py").write_text("def lib(): return 1")
+
+            calculator = WorkingTreeStateCalculator(str(tmppath))
+            modified = calculator.get_modified_source_file_paths()
+
+            assert "src/app.py" in modified
+            assert ".venv/lib.py" not in modified
+
+    def test_get_modified_source_file_paths__excludes_site_packages_files(self):
+        """Verify site-packages Python files are excluded from modified source files."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            _init_git_repo(tmppath)
+
+            (tmppath / "app.py").write_text("def app(): pass")
+            (tmppath / "site-packages").mkdir()
+            (tmppath / "site-packages" / "pkg.py").write_text("def pkg(): pass")
+            _commit_all(tmppath)
+
+            # Modify both
+            (tmppath / "app.py").write_text("def app(): return 1")
+            (tmppath / "site-packages" / "pkg.py").write_text("def pkg(): return 1")
+
+            calculator = WorkingTreeStateCalculator(str(tmppath))
+            modified = calculator.get_modified_source_file_paths()
+
+            assert "app.py" in modified
+            assert "site-packages/pkg.py" not in modified
+
+    def test_get_modified_source_file_paths__returns_relative_string_paths(self):
+        """Verify return type is set[str] with relative paths."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            _init_git_repo(tmppath)
+            (tmppath / "test.py").write_text("def foo(): pass")
+            _commit_all(tmppath)
+
+            (tmppath / "test.py").write_text("def foo(): return 1")
+
+            calculator = WorkingTreeStateCalculator(str(tmppath))
+            modified = calculator.get_modified_source_file_paths()
+
+            assert isinstance(modified, set)
+            for path in modified:
+                assert isinstance(path, str)
+                assert not Path(path).is_absolute()
+
+
 def test_feedback_cache__slopometry_dir_visibility_does_not_affect_key():
     """Verify cache key is stable whether .slopometry/ is in gitignore or not.
 
