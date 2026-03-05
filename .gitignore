@@ -48,3 +48,6 @@ slopometry.db
 # Testing and coverage
 .pytest_cache/
 .hypothesis/
+.coverage
+coverage.xml
+htmlcov/

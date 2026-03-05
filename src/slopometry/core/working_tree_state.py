@@ -121,6 +121,19 @@ class WorkingTreeStateCalculator:
 
         return list(files)
 
+    def get_modified_source_file_paths(self) -> set[str]:
+        """Get relative paths of modified source files, filtered by ignore patterns.
+
+        Combines git diff detection with should_ignore_path filtering to return
+        only legitimate source file changes. This is the public API for callers
+        that need relative-path strings (e.g., for smell scoping and cache keys).
+
+        Returns:
+            Set of relative path strings for modified source files
+        """
+        absolute_paths = self._get_modified_source_files_from_git()
+        return {str(p.relative_to(self.working_directory)) for p in absolute_paths}
+
     def _get_modified_python_files_from_git(self) -> list[Path]:
         """Get Python files with uncommitted changes.
 

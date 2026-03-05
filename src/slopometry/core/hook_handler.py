@@ -255,59 +255,6 @@ def _handle_hook_internal(
         return 0
 
 
-def get_modified_python_files(working_directory: str | None) -> set[str]:
-    """Get modified Python files from git working tree.
-
-    Uses `git diff --name-only` to get uncommitted changes (both staged and unstaged).
-    This is more reliable than transcript-based context coverage for detecting
-    which files the user has actually modified.
-
-    Args:
-        working_directory: Path to git repository
-
-    Returns:
-        Set of relative paths to modified Python files
-
-    Raises:
-        ValueError: If working_directory is None or doesn't exist
-        RuntimeError: If git commands fail
-    """
-    if not working_directory:
-        raise ValueError("working_directory is required for git diff")
-
-    import subprocess
-
-    working_dir = Path(working_directory)
-    if not working_dir.exists():
-        raise ValueError(f"working_directory does not exist: {working_directory}")
-
-    modified_files: set[str] = set()
-
-    result = subprocess.run(
-        ["git", "diff", "--name-only", "--", "*.py"],
-        cwd=working_dir,
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"git diff failed: {result.stderr}")
-    modified_files.update(line.strip() for line in result.stdout.strip().split("\n") if line.strip())
-
-    result = subprocess.run(
-        ["git", "diff", "--cached", "--name-only", "--", "*.py"],
-        cwd=working_dir,
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"git diff --cached failed: {result.stderr}")
-    modified_files.update(line.strip() for line in result.stdout.strip().split("\n") if line.strip())
-
-    return modified_files
-
-
 def _get_feedback_cache_path(working_directory: str) -> Path:
     """Get path to the feedback cache file for a working directory."""
     cache_dir = Path(working_directory) / ".slopometry"
@@ -414,9 +361,10 @@ def handle_stop_event(session_id: str, parsed_input: "StopInput | SubagentStopIn
 
     # Get edited files from git (more reliable than transcript-based context coverage)
     try:
-        edited_files = get_modified_python_files(stats.working_directory)
-    except (ValueError, RuntimeError) as e:
-        logger.debug(f"Failed to get modified Python files: {e}")
+        wt_calculator = WorkingTreeStateCalculator(stats.working_directory, languages=None)
+        edited_files = wt_calculator.get_modified_source_file_paths()
+    except (ValueError, OSError) as e:
+        logger.debug(f"Failed to get modified source files: {e}")
         edited_files = set()
 
     # Smell feedback is stable (based on code state, not session activity)
