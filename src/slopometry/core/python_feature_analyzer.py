@@ -9,10 +9,11 @@ import time
 import tokenize
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from slopometry.core.models.smell import SmellField
+from slopometry.core.models.smell import SMELL_REGISTRY, SmellField
 from slopometry.core.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -105,6 +106,11 @@ class FeatureStats(BaseModel):
         files_field="sys_path_manipulation_files",
         guidance="sys.path mutations bypass the package system — restructure package boundaries and use absolute imports from installed packages instead",
     )
+    relative_import_count: int = SmellField(
+        label="Relative Imports",
+        files_field="relative_import_files",
+        guidance="Prefer absolute imports for clarity and refactor-safety; relative imports create implicit coupling to package structure",
+    )
 
     total_loc: int = Field(default=0, description="Total lines of code")
     code_loc: int = Field(default=0, description="Non-blank, non-comment lines (for QPE file filtering)")
@@ -123,6 +129,7 @@ class FeatureStats(BaseModel):
     deep_inheritance_files: set[str] = Field(default_factory=set)
     passthrough_wrapper_files: set[str] = Field(default_factory=set)
     sys_path_manipulation_files: set[str] = Field(default_factory=set)
+    relative_import_files: set[str] = Field(default_factory=set)
 
 
 def _count_loc(content: str) -> tuple[int, int]:
@@ -159,6 +166,23 @@ def _analyze_single_file_features(file_path: Path) -> FeatureStats | None:
     total_loc, code_loc = _count_loc(content)
     path_str = str(file_path)
 
+    # 4 smells come from non-AST analysis; rest from FeatureVisitor
+    non_ast_counts: dict[str, int] = {
+        "orphan_comment_count": orphan_comments,
+        "untracked_todo_count": untracked_todos,
+        "type_ignore_count": type_ignores,
+        "nonempty_init_count": nonempty_init,
+    }
+
+    smell_kwargs: dict[str, Any] = {}
+    for defn in SMELL_REGISTRY.values():
+        if defn.count_field in non_ast_counts:
+            count = non_ast_counts[defn.count_field]
+        else:
+            count = getattr(ast_stats, defn.count_field)
+        smell_kwargs[defn.count_field] = count
+        smell_kwargs[defn.files_field] = {path_str} if count > 0 else set()
+
     return FeatureStats(
         functions_count=ast_stats.functions_count,
         classes_count=ast_stats.classes_count,
@@ -171,36 +195,9 @@ def _analyze_single_file_features(file_path: Path) -> FeatureStats | None:
         any_type_count=ast_stats.any_type_count,
         str_type_count=ast_stats.str_type_count,
         deprecations_count=ast_stats.deprecations_count,
-        orphan_comment_count=orphan_comments,
-        untracked_todo_count=untracked_todos,
-        inline_import_count=ast_stats.inline_import_count,
-        dict_get_with_default_count=ast_stats.dict_get_with_default_count,
-        hasattr_getattr_count=ast_stats.hasattr_getattr_count,
-        nonempty_init_count=nonempty_init,
-        test_skip_count=ast_stats.test_skip_count,
-        swallowed_exception_count=ast_stats.swallowed_exception_count,
-        type_ignore_count=type_ignores,
-        dynamic_execution_count=ast_stats.dynamic_execution_count,
-        single_method_class_count=ast_stats.single_method_class_count,
-        deep_inheritance_count=ast_stats.deep_inheritance_count,
-        passthrough_wrapper_count=ast_stats.passthrough_wrapper_count,
-        sys_path_manipulation_count=ast_stats.sys_path_manipulation_count,
         total_loc=total_loc,
         code_loc=code_loc,
-        orphan_comment_files={path_str} if orphan_comments > 0 else set(),
-        untracked_todo_files={path_str} if untracked_todos > 0 else set(),
-        inline_import_files={path_str} if ast_stats.inline_import_count > 0 else set(),
-        dict_get_with_default_files={path_str} if ast_stats.dict_get_with_default_count > 0 else set(),
-        hasattr_getattr_files={path_str} if ast_stats.hasattr_getattr_count > 0 else set(),
-        nonempty_init_files={path_str} if nonempty_init > 0 else set(),
-        test_skip_files={path_str} if ast_stats.test_skip_count > 0 else set(),
-        swallowed_exception_files={path_str} if ast_stats.swallowed_exception_count > 0 else set(),
-        type_ignore_files={path_str} if type_ignores > 0 else set(),
-        dynamic_execution_files={path_str} if ast_stats.dynamic_execution_count > 0 else set(),
-        single_method_class_files={path_str} if ast_stats.single_method_class_count > 0 else set(),
-        deep_inheritance_files={path_str} if ast_stats.deep_inheritance_count > 0 else set(),
-        passthrough_wrapper_files={path_str} if ast_stats.passthrough_wrapper_count > 0 else set(),
-        sys_path_manipulation_files={path_str} if ast_stats.sys_path_manipulation_count > 0 else set(),
+        **smell_kwargs,
     )
 
 
@@ -339,155 +336,13 @@ class PythonFeatureAnalyzer:
 
         return results
 
-    def _analyze_file(self, file_path: Path) -> FeatureStats:
-        """Analyze a single Python file."""
-        try:
-            content = file_path.read_text(encoding="utf-8")
-            tree = ast.parse(content, filename=str(file_path))
-        except Exception as e:
-            logger.debug(f"Skipping unparseable file {file_path}: {e}")
-            return FeatureStats()
-
-        visitor = FeatureVisitor()
-        visitor.visit(tree)
-        ast_stats = visitor.stats
-
-        is_test_file = file_path.name.startswith("test_") or "/tests/" in str(file_path)
-        orphan_comments, untracked_todos, type_ignores = self._analyze_comments(content, is_test_file)
-        nonempty_init = 1 if self._is_nonempty_init(file_path, tree) else 0
-        total_loc, code_loc = _count_loc(content)
-        path_str = str(file_path)
-
-        return FeatureStats(
-            functions_count=ast_stats.functions_count,
-            classes_count=ast_stats.classes_count,
-            docstrings_count=ast_stats.docstrings_count,
-            args_count=ast_stats.args_count,
-            annotated_args_count=ast_stats.annotated_args_count,
-            returns_count=ast_stats.returns_count,
-            annotated_returns_count=ast_stats.annotated_returns_count,
-            total_type_references=ast_stats.total_type_references,
-            any_type_count=ast_stats.any_type_count,
-            str_type_count=ast_stats.str_type_count,
-            deprecations_count=ast_stats.deprecations_count,
-            orphan_comment_count=orphan_comments,
-            untracked_todo_count=untracked_todos,
-            inline_import_count=ast_stats.inline_import_count,
-            dict_get_with_default_count=ast_stats.dict_get_with_default_count,
-            hasattr_getattr_count=ast_stats.hasattr_getattr_count,
-            nonempty_init_count=nonempty_init,
-            test_skip_count=ast_stats.test_skip_count,
-            swallowed_exception_count=ast_stats.swallowed_exception_count,
-            type_ignore_count=type_ignores,
-            dynamic_execution_count=ast_stats.dynamic_execution_count,
-            single_method_class_count=ast_stats.single_method_class_count,
-            deep_inheritance_count=ast_stats.deep_inheritance_count,
-            passthrough_wrapper_count=ast_stats.passthrough_wrapper_count,
-            sys_path_manipulation_count=ast_stats.sys_path_manipulation_count,
-            total_loc=total_loc,
-            code_loc=code_loc,
-            orphan_comment_files={path_str} if orphan_comments > 0 else set(),
-            untracked_todo_files={path_str} if untracked_todos > 0 else set(),
-            inline_import_files={path_str} if ast_stats.inline_import_count > 0 else set(),
-            dict_get_with_default_files={path_str} if ast_stats.dict_get_with_default_count > 0 else set(),
-            hasattr_getattr_files={path_str} if ast_stats.hasattr_getattr_count > 0 else set(),
-            nonempty_init_files={path_str} if nonempty_init > 0 else set(),
-            test_skip_files={path_str} if ast_stats.test_skip_count > 0 else set(),
-            swallowed_exception_files={path_str} if ast_stats.swallowed_exception_count > 0 else set(),
-            type_ignore_files={path_str} if type_ignores > 0 else set(),
-            dynamic_execution_files={path_str} if ast_stats.dynamic_execution_count > 0 else set(),
-            single_method_class_files={path_str} if ast_stats.single_method_class_count > 0 else set(),
-            deep_inheritance_files={path_str} if ast_stats.deep_inheritance_count > 0 else set(),
-            passthrough_wrapper_files={path_str} if ast_stats.passthrough_wrapper_count > 0 else set(),
-            sys_path_manipulation_files={path_str} if ast_stats.sys_path_manipulation_count > 0 else set(),
-        )
-
-    def _is_nonempty_init(self, file_path: Path, tree: ast.Module) -> bool:
-        """Check if file is __init__.py with implementation code (beyond imports/__all__).
-
-        Acceptable content in __init__.py:
-        - Imports (Import, ImportFrom)
-        - __all__ assignment
-        - Module docstring
-        - Pass statements
-
-        Implementation code (flagged as smell):
-        - Function definitions
-        - Class definitions
-        - Other assignments (except __all__)
-        - Other expressions
-        """
-        if file_path.name != "__init__.py":
-            return False
-
-        for node in tree.body:
-            if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
-                if isinstance(node.value.value, str):
-                    continue
-
-            if isinstance(node, ast.Import | ast.ImportFrom):
-                continue
-
-            if isinstance(node, ast.Pass):
-                continue
-
-            if isinstance(node, ast.Assign):
-                if any(isinstance(target, ast.Name) and target.id == "__all__" for target in node.targets):
-                    continue
-
-            return True
-
-        return False
-
-    def _analyze_comments(self, content: str, is_test_file: bool = False) -> tuple[int, int, int]:
-        """Analyze comments in source code using tokenize.
-
-        Args:
-            content: Source code content
-            is_test_file: If True, skip orphan comment detection (tests need explanatory comments)
-
-        Returns:
-            Tuple of (orphan_comment_count, untracked_todo_count, type_ignore_count)
-        """
-        orphan_comments = 0
-        untracked_todos = 0
-        type_ignores = 0
-
-        todo_pattern = re.compile(r"\b(TODO|FIXME|XXX|HACK)\b", re.IGNORECASE)
-        url_pattern = re.compile(r"https?://")
-        ticket_pattern = re.compile(r"([A-Z]+-\d+|#\d+)")
-        justification_pattern = re.compile(
-            r"#\s*(NOTE|REASON|WARNING|WORKAROUND|IMPORTANT|CAVEAT|HACK|NB|PERF|SAFETY|COMPAT):",
-            re.IGNORECASE,
-        )
-        type_ignore_pattern = re.compile(r"#\s*type:\s*ignore")
-
-        try:
-            tokens = tokenize.generate_tokens(io.StringIO(content).readline)
-            for tok in tokens:
-                if tok.type == tokenize.COMMENT:
-                    comment_text = tok.string
-
-                    is_todo = bool(todo_pattern.search(comment_text))
-                    has_url = bool(url_pattern.search(comment_text))
-                    is_justification = bool(justification_pattern.search(comment_text))
-                    is_type_ignore = bool(type_ignore_pattern.search(comment_text))
-
-                    if is_type_ignore:
-                        type_ignores += 1
-                    elif is_todo:
-                        has_ticket = bool(ticket_pattern.search(comment_text))
-                        if not has_ticket and not has_url:
-                            untracked_todos += 1
-                    elif not has_url and not is_justification and not is_test_file:
-                        orphan_comments += 1
-        except tokenize.TokenError as e:
-            logger.debug(f"Tokenize error during comment analysis: {e}")
-
-        return orphan_comments, untracked_todos, type_ignores
-
     def _merge_stats(self, s1: FeatureStats, s2: FeatureStats) -> FeatureStats:
         """Merge two stats objects."""
+        smell_kwargs: dict[str, Any] = {}
+        for defn in SMELL_REGISTRY.values():
+            smell_kwargs[defn.count_field] = getattr(s1, defn.count_field) + getattr(s2, defn.count_field)
+            smell_kwargs[defn.files_field] = getattr(s1, defn.files_field) | getattr(s2, defn.files_field)
+
         return FeatureStats(
             functions_count=s1.functions_count + s2.functions_count,
             classes_count=s1.classes_count + s2.classes_count,
@@ -500,36 +355,9 @@ class PythonFeatureAnalyzer:
             any_type_count=s1.any_type_count + s2.any_type_count,
             str_type_count=s1.str_type_count + s2.str_type_count,
             deprecations_count=s1.deprecations_count + s2.deprecations_count,
-            orphan_comment_count=s1.orphan_comment_count + s2.orphan_comment_count,
-            untracked_todo_count=s1.untracked_todo_count + s2.untracked_todo_count,
-            inline_import_count=s1.inline_import_count + s2.inline_import_count,
-            dict_get_with_default_count=s1.dict_get_with_default_count + s2.dict_get_with_default_count,
-            hasattr_getattr_count=s1.hasattr_getattr_count + s2.hasattr_getattr_count,
-            nonempty_init_count=s1.nonempty_init_count + s2.nonempty_init_count,
-            test_skip_count=s1.test_skip_count + s2.test_skip_count,
-            swallowed_exception_count=s1.swallowed_exception_count + s2.swallowed_exception_count,
-            type_ignore_count=s1.type_ignore_count + s2.type_ignore_count,
-            dynamic_execution_count=s1.dynamic_execution_count + s2.dynamic_execution_count,
-            single_method_class_count=s1.single_method_class_count + s2.single_method_class_count,
-            deep_inheritance_count=s1.deep_inheritance_count + s2.deep_inheritance_count,
-            passthrough_wrapper_count=s1.passthrough_wrapper_count + s2.passthrough_wrapper_count,
-            sys_path_manipulation_count=s1.sys_path_manipulation_count + s2.sys_path_manipulation_count,
             total_loc=s1.total_loc + s2.total_loc,
             code_loc=s1.code_loc + s2.code_loc,
-            orphan_comment_files=s1.orphan_comment_files | s2.orphan_comment_files,
-            untracked_todo_files=s1.untracked_todo_files | s2.untracked_todo_files,
-            inline_import_files=s1.inline_import_files | s2.inline_import_files,
-            dict_get_with_default_files=s1.dict_get_with_default_files | s2.dict_get_with_default_files,
-            hasattr_getattr_files=s1.hasattr_getattr_files | s2.hasattr_getattr_files,
-            nonempty_init_files=s1.nonempty_init_files | s2.nonempty_init_files,
-            test_skip_files=s1.test_skip_files | s2.test_skip_files,
-            swallowed_exception_files=s1.swallowed_exception_files | s2.swallowed_exception_files,
-            type_ignore_files=s1.type_ignore_files | s2.type_ignore_files,
-            dynamic_execution_files=s1.dynamic_execution_files | s2.dynamic_execution_files,
-            single_method_class_files=s1.single_method_class_files | s2.single_method_class_files,
-            deep_inheritance_files=s1.deep_inheritance_files | s2.deep_inheritance_files,
-            passthrough_wrapper_files=s1.passthrough_wrapper_files | s2.passthrough_wrapper_files,
-            sys_path_manipulation_files=s1.sys_path_manipulation_files | s2.sys_path_manipulation_files,
+            **smell_kwargs,
         )
 
 
@@ -561,6 +389,7 @@ class FeatureVisitor(ast.NodeVisitor):
         self.deep_inheritances = 0
         self.passthrough_wrappers = 0
         self.sys_path_manipulations = 0
+        self.relative_imports = 0
 
     @property
     def stats(self) -> FeatureStats:
@@ -586,6 +415,7 @@ class FeatureVisitor(ast.NodeVisitor):
             deep_inheritance_count=self.deep_inheritances,
             passthrough_wrapper_count=self.passthrough_wrappers,
             sys_path_manipulation_count=self.sys_path_manipulations,
+            relative_import_count=self.relative_imports,
         )
 
     def _collect_type_names(self, node: ast.AST | None) -> None:
@@ -928,12 +758,17 @@ class FeatureVisitor(ast.NodeVisitor):
         """Check if a statement has no observable side effects.
 
         Inert statements: pass, continue, break, simple assignments,
-        augmented assignments (+=, etc.), and type annotations.
+        augmented assignments (+=, etc.), type annotations, and bare
+        constants (Ellipsis, string literals).
         """
         if isinstance(stmt, ast.Pass | ast.Continue | ast.Break):
             return True
         if isinstance(stmt, ast.Assign | ast.AugAssign | ast.AnnAssign):
             return True
+        if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant):
+            value = stmt.value.value
+            if value is ... or isinstance(value, str):
+                return True
         return False
 
     def visit_Import(self, node: ast.Import) -> None:
@@ -943,9 +778,11 @@ class FeatureVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
-        """Track inline imports (not at module level, not in TYPE_CHECKING)."""
+        """Track inline imports and relative imports."""
         if self._scope_depth > 0 and not self._in_type_checking_block:
             self.inline_imports += 1
+        if node.level > 0:
+            self.relative_imports += 1
         self.generic_visit(node)
 
     def _is_type_checking_guard(self, node: ast.If) -> bool:

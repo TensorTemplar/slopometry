@@ -156,6 +156,15 @@ SMELL_REGISTRY: dict[str, SmellDefinition] = {
         count_field="sys_path_manipulation_count",
         files_field="sys_path_manipulation_files",
     ),
+    "relative_import": SmellDefinition(
+        internal_name="relative_import",
+        label="Relative Imports",
+        category=SmellCategory.PYTHON,
+        weight=0.03,
+        guidance="Prefer absolute imports for clarity and refactor-safety; relative imports create implicit coupling to package structure",
+        count_field="relative_import_count",
+        files_field="relative_import_files",
+    ),
 }
 
 

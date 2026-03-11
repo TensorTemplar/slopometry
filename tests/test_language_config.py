@@ -12,6 +12,7 @@ from slopometry.core.language_config import (
     get_combined_git_patterns,
     get_combined_ignore_dirs,
     get_language_config,
+    is_source_file,
     should_ignore_path,
 )
 from slopometry.core.models.hook import ProjectLanguage
@@ -142,6 +143,40 @@ class TestShouldIgnorePath:
         """Verify language-specific ignore works."""
         # Python-specific ignores should work when Python is specified
         assert should_ignore_path("__pycache__/foo.py", [ProjectLanguage.PYTHON])
+
+
+class TestIsSourceFile:
+    """Tests for is_source_file function."""
+
+    def test_is_source_file__python_file(self):
+        """Verify .py files are recognized as source."""
+        assert is_source_file("src/module.py")
+
+    def test_is_source_file__rust_file(self):
+        """Verify .rs files are recognized as source."""
+        assert is_source_file("src/main.rs")
+
+    def test_is_source_file__env_file_excluded(self):
+        """Verify .env files are NOT source files."""
+        assert not is_source_file(".env")
+        assert not is_source_file(".env.local")
+
+    def test_is_source_file__markdown_excluded(self):
+        """Verify .md files are NOT source files."""
+        assert not is_source_file("README.md")
+        assert not is_source_file("docs/guide.md")
+
+    def test_is_source_file__config_files_excluded(self):
+        """Verify common config files are NOT source files."""
+        assert not is_source_file("pyproject.toml")
+        assert not is_source_file("Cargo.toml")
+        assert not is_source_file(".gitignore")
+        assert not is_source_file("uv.lock")
+
+    def test_is_source_file__specific_language(self):
+        """Verify language-specific filtering works."""
+        assert is_source_file("module.py", [ProjectLanguage.PYTHON])
+        assert not is_source_file("main.rs", [ProjectLanguage.PYTHON])
 
 
 class TestLanguageConfigFrozen:

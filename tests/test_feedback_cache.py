@@ -600,3 +600,43 @@ def test_feedback_cache__gitignore_modification_does_not_invalidate():
         key_after = _compute_feedback_cache_key(str(tmppath), set(), feedback_hash)
 
         assert key_before == key_after, ".gitignore modifications should not invalidate cache"
+
+
+def test_feedback_cache__env_file_changes_dont_invalidate():
+    """Verify .env file changes don't cause cache invalidation."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmppath = Path(tmpdir)
+        _init_git_repo(tmppath)
+        (tmppath / "test.py").write_text("def foo(): pass")
+        (tmppath / ".env").write_text("SECRET=old")
+        _commit_all(tmppath)
+
+        feedback_hash = "feedbackhash1234"
+        key_before = _compute_feedback_cache_key(str(tmppath), set(), feedback_hash)
+
+        # Modify .env (tracked but non-source)
+        (tmppath / ".env").write_text("SECRET=new")
+
+        key_after = _compute_feedback_cache_key(str(tmppath), set(), feedback_hash)
+
+        assert key_before == key_after, ".env changes should not invalidate cache"
+
+
+def test_feedback_cache__markdown_changes_dont_invalidate():
+    """Verify .md file changes don't cause cache invalidation."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmppath = Path(tmpdir)
+        _init_git_repo(tmppath)
+        (tmppath / "test.py").write_text("def foo(): pass")
+        (tmppath / "README.md").write_text("# Old readme")
+        _commit_all(tmppath)
+
+        feedback_hash = "feedbackhash1234"
+        key_before = _compute_feedback_cache_key(str(tmppath), set(), feedback_hash)
+
+        # Modify markdown (tracked but non-source)
+        (tmppath / "README.md").write_text("# New readme with changes")
+
+        key_after = _compute_feedback_cache_key(str(tmppath), set(), feedback_hash)
+
+        assert key_before == key_after, ".md changes should not invalidate cache"

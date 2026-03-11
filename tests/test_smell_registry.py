@@ -15,7 +15,7 @@ from slopometry.core.models.smell import (
 class TestSmellRegistry:
     """Tests for SMELL_REGISTRY completeness and consistency."""
 
-    def test_smell_registry__has_all_14_smells(self) -> None:
+    def test_smell_registry__has_all_15_smells(self) -> None:
         """Verify all expected smells are in the registry."""
         expected_smells = {
             "orphan_comment",
@@ -33,6 +33,7 @@ class TestSmellRegistry:
             "deep_inheritance",
             "passthrough_wrapper",
             "sys_path_manipulation",
+            "relative_import",
         }
         assert set(SMELL_REGISTRY.keys()) == expected_smells
 
@@ -72,6 +73,7 @@ class TestSmellRegistry:
             "deep_inheritance",
             "passthrough_wrapper",
             "sys_path_manipulation",
+            "relative_import",
         }
         for name in python_smells:
             assert SMELL_REGISTRY[name].category == SmellCategory.PYTHON
@@ -98,7 +100,7 @@ class TestSmellHelpers:
     def test_get_smells_by_category__returns_python_smells(self) -> None:
         """Verify get_smells_by_category returns all PYTHON smells."""
         python = get_smells_by_category(SmellCategory.PYTHON)
-        assert len(python) == 8  # 4 original + 3 abstraction smells + sys_path_manipulation
+        assert len(python) == 9  # 4 original + 3 abstraction smells + sys_path_manipulation + relative_import
         assert all(d.category == SmellCategory.PYTHON for d in python)
 
     def test_get_smells_by_category__sorted_by_weight_descending(self) -> None:
@@ -173,7 +175,7 @@ class TestExtendedComplexityMetricsSmellMethods:
     def test_get_smells__returns_all_smell_data(self, metrics_with_smells: ExtendedComplexityMetrics) -> None:
         """Verify get_smells returns SmellData for all smells."""
         smells = metrics_with_smells.get_smells()
-        assert len(smells) == 14  # 10 original + 3 abstraction smells + sys_path_manipulation
+        assert len(smells) == 15  # 10 original + 3 abstraction smells + sys_path_manipulation + relative_import
         assert all(isinstance(s, SmellData) for s in smells)
 
     def test_get_smells__includes_correct_counts(self, metrics_with_smells: ExtendedComplexityMetrics) -> None:
@@ -223,7 +225,7 @@ class TestComplexityDeltaSmellChanges:
             test_skip_change=0,
         )
         changes = delta.get_smell_changes()
-        assert len(changes) == 14  # 10 original + 3 abstraction smells + sys_path_manipulation
+        assert len(changes) == 15  # 10 original + 3 abstraction smells + sys_path_manipulation + relative_import
         assert changes["orphan_comment"] == 2
         assert changes["swallowed_exception"] == -1
         assert changes["test_skip"] == 0

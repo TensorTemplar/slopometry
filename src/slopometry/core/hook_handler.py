@@ -367,15 +367,25 @@ def handle_stop_event(session_id: str, parsed_input: "StopInput | SubagentStopIn
         logger.debug(f"Failed to get modified source files: {e}")
         edited_files = set()
 
-    # Smell feedback is stable (based on code state, not session activity)
+    # Smell feedback: split into code-based (stable) and context-derived (unstable)
+    # Context-derived smells (e.g., unread_related_tests) change with every transcript
+    # read and must NOT be included in the cache hash to avoid repeated triggers
     if current_metrics:
         scoped_smells = scope_smells_for_session(
             current_metrics, delta, edited_files, stats.working_directory, stats.context_coverage
         )
-        smell_feedback, has_smells, _ = format_code_smell_feedback(scoped_smells, session_id, stats.working_directory)
-        if has_smells:
-            feedback_parts.append(smell_feedback)
-            cache_stable_parts.append(smell_feedback)
+
+        code_smells = [s for s in scoped_smells if s.name != "unread_related_tests"]
+        context_smells = [s for s in scoped_smells if s.name == "unread_related_tests"]
+
+        code_feedback, has_code_smells, _ = format_code_smell_feedback(code_smells, session_id)
+        if has_code_smells:
+            feedback_parts.append(code_feedback)
+            cache_stable_parts.append(code_feedback)
+
+        context_smell_feedback, has_context_smells, _ = format_code_smell_feedback(context_smells, session_id)
+        if has_context_smells:
+            feedback_parts.append(context_smell_feedback)
 
     # Context coverage - informational but NOT stable (changes with every Read/Glob/Grep)
     # Excluded from cache hash to avoid invalidation on tool calls
@@ -656,14 +666,12 @@ def scope_smells_for_session(
 def format_code_smell_feedback(
     scoped_smells: list[ScopedSmell],
     session_id: str | None = None,
-    working_directory: str | None = None,
 ) -> tuple[str, bool, bool]:
     """Format pre-classified smell data into feedback output.
 
     Args:
         scoped_smells: Pre-classified smells from scope_smells_for_session
         session_id: Session ID for generating the smell-details command
-        working_directory: Path to working directory (unused, kept for caller compatibility)
 
     Returns:
         Tuple of (formatted feedback string, has_smells, has_blocking_smells)

@@ -168,6 +168,24 @@ def get_combined_ignore_dirs(languages: list[ProjectLanguage] | None = None) -> 
     return ignore_dirs
 
 
+def is_source_file(file_path: Path | str, languages: list[ProjectLanguage] | None = None) -> bool:
+    """Check if a file path matches a supported source extension.
+
+    Args:
+        file_path: Path to check
+        languages: List of languages to match against, or None for all supported
+
+    Returns:
+        True if the file has a recognized source extension
+    """
+    if languages is None:
+        configs = get_all_supported_configs()
+    else:
+        configs = [get_language_config(lang) for lang in languages]
+
+    return any(config.matches_extension(file_path) for config in configs)
+
+
 def should_ignore_path(file_path: Path | str, languages: list[ProjectLanguage] | None = None) -> bool:
     """Check if a file path should be ignored based on language configs.
 
