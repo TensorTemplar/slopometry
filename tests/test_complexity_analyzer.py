@@ -169,6 +169,10 @@ def test_analyze_extended_complexity(mock_path):
         mock_feature_stats.deep_inheritance_files = []
         mock_feature_stats.passthrough_wrapper_count = 0
         mock_feature_stats.passthrough_wrapper_files = []
+        mock_feature_stats.sys_path_manipulation_count = 0
+        mock_feature_stats.sys_path_manipulation_files = []
+        mock_feature_stats.relative_import_count = 0
+        mock_feature_stats.relative_import_files = []
         mock_feature_stats.total_loc = 100
         mock_feature_stats.code_loc = 80
         mock_features.analyze_directory.return_value = mock_feature_stats

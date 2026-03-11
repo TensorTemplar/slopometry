@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 from slopometry.core.git_tracker import GitTracker
 from slopometry.core.language_config import (
     get_combined_git_patterns,
+    is_source_file,
     should_ignore_path,
 )
 from slopometry.core.models.hook import ProjectLanguage
@@ -113,8 +114,10 @@ class WorkingTreeStateCalculator:
                 for line in result1.stdout.splitlines() + result2.stdout.splitlines():
                     if line.strip():
                         rel_path = line.strip()
-                        # Filter out files in ignored directories (build artifacts, caches)
-                        if not should_ignore_path(rel_path, self.languages):
+                        # Filter out non-source files and ignored directories
+                        if is_source_file(rel_path, self.languages) and not should_ignore_path(
+                            rel_path, self.languages
+                        ):
                             files.add(self.working_directory / rel_path)
             except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError):
                 continue

@@ -8,7 +8,12 @@ from pathlib import Path
 
 import pytest
 
-from slopometry.core.python_feature_analyzer import FeatureStats, FeatureVisitor, PythonFeatureAnalyzer
+from slopometry.core.python_feature_analyzer import (
+    FeatureStats,
+    FeatureVisitor,
+    PythonFeatureAnalyzer,
+    _analyze_comments_standalone,
+)
 
 # Frozen commit for baseline testing against this repository
 FROZEN_COMMIT = "0b6215b"
@@ -362,8 +367,7 @@ def foo():
     x = 1  # Another orphan comment
     return x
 """
-        analyzer = PythonFeatureAnalyzer()
-        orphan_count, untracked_todos, _ = analyzer._analyze_comments(code)
+        orphan_count, untracked_todos, _ = _analyze_comments_standalone(code)
 
         assert orphan_count == 2
         assert untracked_todos == 0
@@ -378,8 +382,7 @@ def foo():
     # HACK: workaround for issue
     pass
 """
-        analyzer = PythonFeatureAnalyzer()
-        orphan_count, untracked_todos, _ = analyzer._analyze_comments(code)
+        orphan_count, untracked_todos, _ = _analyze_comments_standalone(code)
 
         assert orphan_count == 0
         # All are untracked since they have no ticket refs or URLs
@@ -393,8 +396,7 @@ def foo():
     # Reference: http://python.org/pep-8
     pass
 """
-        analyzer = PythonFeatureAnalyzer()
-        orphan_count, untracked_todos, _ = analyzer._analyze_comments(code)
+        orphan_count, untracked_todos, _ = _analyze_comments_standalone(code)
 
         assert orphan_count == 0
         assert untracked_todos == 0
@@ -407,8 +409,7 @@ def foo():
     # FIXME: broken
     pass
 """
-        analyzer = PythonFeatureAnalyzer()
-        orphan_count, untracked_todos, _ = analyzer._analyze_comments(code)
+        orphan_count, untracked_todos, _ = _analyze_comments_standalone(code)
 
         assert untracked_todos == 2
 
@@ -420,8 +421,7 @@ def foo():
     # FIXME ABC-456: fix the bug
     pass
 """
-        analyzer = PythonFeatureAnalyzer()
-        orphan_count, untracked_todos, _ = analyzer._analyze_comments(code)
+        orphan_count, untracked_todos, _ = _analyze_comments_standalone(code)
 
         assert untracked_todos == 0
 
@@ -433,8 +433,7 @@ def foo():
     # FIXME #456 fix the bug
     pass
 """
-        analyzer = PythonFeatureAnalyzer()
-        orphan_count, untracked_todos, _ = analyzer._analyze_comments(code)
+        orphan_count, untracked_todos, _ = _analyze_comments_standalone(code)
 
         assert untracked_todos == 0
 
@@ -446,8 +445,7 @@ def foo():
     # FIXME: tracked at http://jira.example.com/PROJ-456
     pass
 """
-        analyzer = PythonFeatureAnalyzer()
-        orphan_count, untracked_todos, _ = analyzer._analyze_comments(code)
+        orphan_count, untracked_todos, _ = _analyze_comments_standalone(code)
 
         assert untracked_todos == 0
 
@@ -462,8 +460,7 @@ def foo():
     # See https://example.com (has URL, not orphan)
     pass
 """
-        analyzer = PythonFeatureAnalyzer()
-        orphan_count, untracked_todos, _ = analyzer._analyze_comments(code)
+        orphan_count, untracked_todos, _ = _analyze_comments_standalone(code)
 
         assert orphan_count == 2  # Module comment + "Regular comment"
         assert untracked_todos == 1  # Only "TODO: untracked todo"
@@ -587,6 +584,80 @@ def outer():
         visitor.visit(tree)
 
         # inner function has scope_depth=2 (outer=1, inner=2)
+        assert visitor.inline_imports == 1
+
+
+class TestRelativeImportDetection:
+    """Tests for relative import detection (from . / from .. patterns)."""
+
+    def test_visit_import_from__detects_relative_import(self) -> None:
+        """from . import utils is a relative import (level=1)."""
+        code = """
+from . import utils
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.relative_imports == 1
+
+    def test_visit_import_from__detects_parent_relative_import(self) -> None:
+        """from .. import config is a relative import (level=2)."""
+        code = """
+from .. import config
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.relative_imports == 1
+
+    def test_visit_import_from__detects_deep_relative_import(self) -> None:
+        """from ...pkg import mod is a relative import (level=3)."""
+        code = """
+from ...pkg import mod
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.relative_imports == 1
+
+    def test_visit_import_from__ignores_absolute_import(self) -> None:
+        """from os.path import join is an absolute import (level=0)."""
+        code = """
+from os.path import join
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.relative_imports == 0
+
+    def test_visit_import_from__counts_multiple_relative_imports(self) -> None:
+        """Multiple relative imports are each counted."""
+        code = """
+from . import a
+from .. import b
+from .sub import c
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.relative_imports == 3
+
+    def test_visit_import_from__relative_import_inside_function_counts_both(self) -> None:
+        """A relative import inside a function counts as both relative and inline."""
+        code = """
+def foo():
+    from . import utils
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.relative_imports == 1
         assert visitor.inline_imports == 1
 
 
@@ -874,6 +945,107 @@ except Exception:
 
         assert visitor.swallowed_exceptions == 0
 
+    def test_visit_try__detects_ellipsis_in_except(self) -> None:
+        """except: ... (Ellipsis) is semantically identical to pass and should be flagged."""
+        code = """
+try:
+    risky()
+except Exception:
+    ...
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.swallowed_exceptions == 1
+
+    def test_visit_try__detects_bare_string_in_except(self) -> None:
+        """except with only a bare string literal has no side effect."""
+        code = """
+try:
+    risky()
+except Exception:
+    "this error is intentionally ignored"
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.swallowed_exceptions == 1
+
+    def test_visit_try__detects_ellipsis_with_assignment_in_except(self) -> None:
+        """except with assignment and ellipsis is all inert."""
+        code = """
+try:
+    risky()
+except Exception:
+    ignored = True
+    ...
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.swallowed_exceptions == 1
+
+    def test_visit_try__ignores_except_with_if_statement(self) -> None:
+        """ast.If is not inert, so except with only an if block is not flagged."""
+        code = """
+try:
+    risky()
+except Exception:
+    if flag:
+        pass
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.swallowed_exceptions == 0
+
+    def test_visit_try__ignores_except_with_for_loop(self) -> None:
+        """ast.For is not inert, so except with a for loop is not flagged."""
+        code = """
+try:
+    risky()
+except Exception:
+    for x in errors:
+        pass
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.swallowed_exceptions == 0
+
+    def test_visit_try__ignores_except_with_del(self) -> None:
+        """ast.Delete is not inert, so except with del is not flagged."""
+        code = """
+try:
+    risky()
+except Exception:
+    del error_ref
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.swallowed_exceptions == 0
+
+    def test_visit_try__ignores_except_with_warnings_warn(self) -> None:
+        """warnings.warn() is a function call and should not be flagged."""
+        code = """
+try:
+    risky()
+except Exception:
+    warnings.warn("Something failed")
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+
+        assert visitor.swallowed_exceptions == 0
+
 
 class TestTypeIgnoreDetection:
     """Tests for type: ignore comment detection."""
@@ -884,8 +1056,7 @@ class TestTypeIgnoreDetection:
 def foo(x):  # type: ignore
     return x
 """
-        analyzer = PythonFeatureAnalyzer()
-        _, _, type_ignores = analyzer._analyze_comments(code)
+        _, _, type_ignores = _analyze_comments_standalone(code)
 
         assert type_ignores == 1
 
@@ -894,8 +1065,7 @@ def foo(x):  # type: ignore
         code = """
 y = untyped_func()  # type: ignore[no-untyped-call]
 """
-        analyzer = PythonFeatureAnalyzer()
-        _, _, type_ignores = analyzer._analyze_comments(code)
+        _, _, type_ignores = _analyze_comments_standalone(code)
 
         assert type_ignores == 1
 
@@ -907,8 +1077,7 @@ def foo(x):  # type: ignore
 
 y = untyped_func()  # type: ignore[no-untyped-call]
 """
-        analyzer = PythonFeatureAnalyzer()
-        _, _, type_ignores = analyzer._analyze_comments(code)
+        _, _, type_ignores = _analyze_comments_standalone(code)
 
         assert type_ignores == 2
 

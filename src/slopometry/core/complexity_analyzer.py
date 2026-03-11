@@ -5,6 +5,7 @@ import os
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
+from typing import Any
 
 from slopometry.core.code_analyzer import CodeAnalyzer, _analyze_single_file
 from slopometry.core.models.complexity import (
@@ -13,6 +14,7 @@ from slopometry.core.models.complexity import (
     ExtendedComplexityMetrics,
     FileAnalysisResult,
 )
+from slopometry.core.models.smell import SMELL_REGISTRY
 from slopometry.core.python_feature_analyzer import PythonFeatureAnalyzer, _count_loc
 from slopometry.core.settings import settings
 
@@ -214,33 +216,14 @@ class ComplexityAnalyzer:
                 current_metrics.str_type_percentage - baseline_metrics.str_type_percentage
             )
 
-            delta.orphan_comment_change = current_metrics.orphan_comment_count - baseline_metrics.orphan_comment_count
-            delta.untracked_todo_change = current_metrics.untracked_todo_count - baseline_metrics.untracked_todo_count
-            delta.inline_import_change = current_metrics.inline_import_count - baseline_metrics.inline_import_count
-            delta.dict_get_with_default_change = (
-                current_metrics.dict_get_with_default_count - baseline_metrics.dict_get_with_default_count
-            )
-            delta.hasattr_getattr_change = (
-                current_metrics.hasattr_getattr_count - baseline_metrics.hasattr_getattr_count
-            )
-            delta.nonempty_init_change = current_metrics.nonempty_init_count - baseline_metrics.nonempty_init_count
-            delta.test_skip_change = current_metrics.test_skip_count - baseline_metrics.test_skip_count
-            delta.swallowed_exception_change = (
-                current_metrics.swallowed_exception_count - baseline_metrics.swallowed_exception_count
-            )
-            delta.type_ignore_change = current_metrics.type_ignore_count - baseline_metrics.type_ignore_count
-            delta.dynamic_execution_change = (
-                current_metrics.dynamic_execution_count - baseline_metrics.dynamic_execution_count
-            )
-            delta.single_method_class_change = (
-                current_metrics.single_method_class_count - baseline_metrics.single_method_class_count
-            )
-            delta.deep_inheritance_change = (
-                current_metrics.deep_inheritance_count - baseline_metrics.deep_inheritance_count
-            )
-            delta.passthrough_wrapper_change = (
-                current_metrics.passthrough_wrapper_count - baseline_metrics.passthrough_wrapper_count
-            )
+            for name in SMELL_REGISTRY:
+                count_field = f"{name}_count"
+                change_field = f"{name}_change"
+                setattr(
+                    delta,
+                    change_field,
+                    getattr(current_metrics, count_field) - getattr(baseline_metrics, count_field),
+                )
 
         return delta
 
@@ -261,7 +244,8 @@ class ComplexityAnalyzer:
                 _, code_loc = _count_loc(content)
                 relative_path = self._get_relative_path(file_path, target_dir)
                 files_by_loc[relative_path] = code_loc
-            except (OSError, UnicodeDecodeError):
+            except (OSError, UnicodeDecodeError) as e:
+                logger.warning(f"Skipping unreadable file {file_path}: {e}")
                 continue
         return files_by_loc
 
@@ -433,6 +417,13 @@ class ComplexityAnalyzer:
         any_type_percentage = (feature_stats.any_type_count / total_type_refs * 100.0) if total_type_refs > 0 else 0.0
         str_type_percentage = (feature_stats.str_type_count / total_type_refs * 100.0) if total_type_refs > 0 else 0.0
 
+        smell_kwargs: dict[str, Any] = {}
+        for defn in SMELL_REGISTRY.values():
+            smell_kwargs[defn.count_field] = getattr(feature_stats, defn.count_field)
+            smell_kwargs[defn.files_field] = sorted(
+                [self._get_relative_path(p, target_dir) for p in getattr(feature_stats, defn.files_field)]
+            )
+
         return ExtendedComplexityMetrics(
             total_complexity=total_complexity,
             average_complexity=average_complexity,
@@ -461,58 +452,11 @@ class ComplexityAnalyzer:
             files_by_complexity=files_by_complexity,
             files_by_effort=files_by_effort,
             files_with_parse_errors=files_with_parse_errors,
-            orphan_comment_count=feature_stats.orphan_comment_count,
-            untracked_todo_count=feature_stats.untracked_todo_count,
-            inline_import_count=feature_stats.inline_import_count,
-            dict_get_with_default_count=feature_stats.dict_get_with_default_count,
-            hasattr_getattr_count=feature_stats.hasattr_getattr_count,
-            nonempty_init_count=feature_stats.nonempty_init_count,
-            test_skip_count=feature_stats.test_skip_count,
-            swallowed_exception_count=feature_stats.swallowed_exception_count,
-            type_ignore_count=feature_stats.type_ignore_count,
-            dynamic_execution_count=feature_stats.dynamic_execution_count,
-            orphan_comment_files=sorted(
-                [self._get_relative_path(p, target_dir) for p in feature_stats.orphan_comment_files]
-            ),
-            untracked_todo_files=sorted(
-                [self._get_relative_path(p, target_dir) for p in feature_stats.untracked_todo_files]
-            ),
-            inline_import_files=sorted(
-                [self._get_relative_path(p, target_dir) for p in feature_stats.inline_import_files]
-            ),
-            dict_get_with_default_files=sorted(
-                [self._get_relative_path(p, target_dir) for p in feature_stats.dict_get_with_default_files]
-            ),
-            hasattr_getattr_files=sorted(
-                [self._get_relative_path(p, target_dir) for p in feature_stats.hasattr_getattr_files]
-            ),
-            nonempty_init_files=sorted(
-                [self._get_relative_path(p, target_dir) for p in feature_stats.nonempty_init_files]
-            ),
-            test_skip_files=sorted([self._get_relative_path(p, target_dir) for p in feature_stats.test_skip_files]),
-            swallowed_exception_files=sorted(
-                [self._get_relative_path(p, target_dir) for p in feature_stats.swallowed_exception_files]
-            ),
-            type_ignore_files=sorted([self._get_relative_path(p, target_dir) for p in feature_stats.type_ignore_files]),
-            dynamic_execution_files=sorted(
-                [self._get_relative_path(p, target_dir) for p in feature_stats.dynamic_execution_files]
-            ),
-            single_method_class_count=feature_stats.single_method_class_count,
-            deep_inheritance_count=feature_stats.deep_inheritance_count,
-            passthrough_wrapper_count=feature_stats.passthrough_wrapper_count,
-            single_method_class_files=sorted(
-                [self._get_relative_path(p, target_dir) for p in feature_stats.single_method_class_files]
-            ),
-            deep_inheritance_files=sorted(
-                [self._get_relative_path(p, target_dir) for p in feature_stats.deep_inheritance_files]
-            ),
-            passthrough_wrapper_files=sorted(
-                [self._get_relative_path(p, target_dir) for p in feature_stats.passthrough_wrapper_files]
-            ),
             total_loc=feature_stats.total_loc,
             code_loc=feature_stats.code_loc,
             files_by_loc={
                 self._get_relative_path(p, target_dir): loc
                 for p, loc in self._build_files_by_loc(python_files, target_dir).items()
             },
+            **smell_kwargs,
         )

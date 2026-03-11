@@ -55,6 +55,7 @@ class SmellCounts(BaseModel):
     deep_inheritance: int = 0
     passthrough_wrapper: int = 0
     sys_path_manipulation: int = 0
+    relative_import: int = 0
 
 
 class ComplexityMetrics(BaseModel):
@@ -131,25 +132,13 @@ class ComplexityDelta(BaseModel):
     deep_inheritance_change: int = 0
     passthrough_wrapper_change: int = 0
     sys_path_manipulation_change: int = 0
+    relative_import_change: int = 0
 
     def get_smell_changes(self) -> dict[str, int]:
         """Return smell name to change value mapping for direct access."""
-        return {
-            "orphan_comment": self.orphan_comment_change,
-            "untracked_todo": self.untracked_todo_change,
-            "inline_import": self.inline_import_change,
-            "dict_get_with_default": self.dict_get_with_default_change,
-            "hasattr_getattr": self.hasattr_getattr_change,
-            "nonempty_init": self.nonempty_init_change,
-            "test_skip": self.test_skip_change,
-            "swallowed_exception": self.swallowed_exception_change,
-            "type_ignore": self.type_ignore_change,
-            "dynamic_execution": self.dynamic_execution_change,
-            "single_method_class": self.single_method_class_change,
-            "deep_inheritance": self.deep_inheritance_change,
-            "passthrough_wrapper": self.passthrough_wrapper_change,
-            "sys_path_manipulation": self.sys_path_manipulation_change,
-        }
+        from slopometry.core.models.smell import SMELL_REGISTRY
+
+        return {name: getattr(self, f"{name}_change") for name in SMELL_REGISTRY}
 
 
 class ExtendedComplexityMetrics(ComplexityMetrics):
@@ -246,6 +235,10 @@ class ExtendedComplexityMetrics(ComplexityMetrics):
         default=0,
         description="sys.path mutations bypass the package system — restructure package boundaries and use absolute imports from installed packages instead",
     )
+    relative_import_count: int = Field(
+        default=0,
+        description="Prefer absolute imports for clarity and refactor-safety; relative imports create implicit coupling to package structure",
+    )
 
     # LOC metrics (for file filtering in QPE)
     total_loc: int = Field(default=0, description="Total lines of code across all files")
@@ -270,6 +263,7 @@ class ExtendedComplexityMetrics(ComplexityMetrics):
     )
     passthrough_wrapper_files: list[str] = Field(default_factory=list, description="Files with pass-through wrappers")
     sys_path_manipulation_files: list[str] = Field(default_factory=list, description="Files with sys.path mutations")
+    relative_import_files: list[str] = Field(default_factory=list, description="Files with relative imports")
 
     def get_smell_counts(self) -> SmellCounts:
         """Return smell counts as a typed model for QPE and display."""
@@ -277,80 +271,15 @@ class ExtendedComplexityMetrics(ComplexityMetrics):
 
     def get_smells(self) -> list["SmellData"]:
         """Return all smell data as structured objects with direct field access."""
-        # Import here to avoid circular imports at runtime
-        from slopometry.core.models.smell import SmellData
+        from slopometry.core.models.smell import SMELL_REGISTRY, SmellData
 
         return [
             SmellData(
-                name="orphan_comment",
-                count=self.orphan_comment_count,
-                files=self.orphan_comment_files,
-            ),
-            SmellData(
-                name="untracked_todo",
-                count=self.untracked_todo_count,
-                files=self.untracked_todo_files,
-            ),
-            SmellData(
-                name="swallowed_exception",
-                count=self.swallowed_exception_count,
-                files=self.swallowed_exception_files,
-            ),
-            SmellData(
-                name="test_skip",
-                count=self.test_skip_count,
-                files=self.test_skip_files,
-            ),
-            SmellData(
-                name="type_ignore",
-                count=self.type_ignore_count,
-                files=self.type_ignore_files,
-            ),
-            SmellData(
-                name="dynamic_execution",
-                count=self.dynamic_execution_count,
-                files=self.dynamic_execution_files,
-            ),
-            SmellData(
-                name="inline_import",
-                count=self.inline_import_count,
-                files=self.inline_import_files,
-            ),
-            SmellData(
-                name="dict_get_with_default",
-                count=self.dict_get_with_default_count,
-                files=self.dict_get_with_default_files,
-            ),
-            SmellData(
-                name="hasattr_getattr",
-                count=self.hasattr_getattr_count,
-                files=self.hasattr_getattr_files,
-            ),
-            SmellData(
-                name="nonempty_init",
-                count=self.nonempty_init_count,
-                files=self.nonempty_init_files,
-            ),
-            SmellData(
-                name="single_method_class",
-                count=self.single_method_class_count,
-                files=self.single_method_class_files,
-            ),
-            SmellData(
-                name="deep_inheritance",
-                count=self.deep_inheritance_count,
-                files=self.deep_inheritance_files,
-            ),
-            SmellData(
-                name="passthrough_wrapper",
-                count=self.passthrough_wrapper_count,
-                files=self.passthrough_wrapper_files,
-            ),
-            SmellData(
-                name="sys_path_manipulation",
-                count=self.sys_path_manipulation_count,
-                files=self.sys_path_manipulation_files,
-            ),
+                name=defn.internal_name,
+                count=getattr(self, defn.count_field),
+                files=getattr(self, defn.files_field),
+            )
+            for defn in SMELL_REGISTRY.values()
         ]
 
     def get_smell_files(self) -> dict[str, list[str]]:
