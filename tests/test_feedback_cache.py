@@ -1,16 +1,14 @@
 """Tests for feedback cache functionality to prevent repeated feedback display."""
 
-import hashlib
-import json
 import subprocess
 import tempfile
 import time
 from pathlib import Path
 
 from slopometry.core.hook_handler import (
-    _compute_feedback_cache_key,
+    _compute_working_tree_cache_key,
     _get_feedback_cache_path,
-    _is_feedback_cached,
+    _load_feedback_cache,
     _save_feedback_cache,
 )
 from slopometry.core.working_tree_state import WorkingTreeStateCalculator
@@ -38,31 +36,23 @@ def _commit_all(path: Path, message: str = "commit") -> None:
     subprocess.run(["git", "commit", "-m", message], cwd=path, capture_output=True)
 
 
-class TestFeedbackCacheKeyComputation:
-    """Tests for _compute_feedback_cache_key function."""
+class TestWorkingTreeCacheKeyComputation:
+    """Tests for _compute_working_tree_cache_key function."""
 
-    def test_compute_feedback_cache_key__same_feedback_different_sessions_same_key(self):
-        """Verify that identical feedback with different session_ids produces same cache key.
-
-        This is the primary bug fix - session_id should not affect the cache key.
-        """
+    def test_compute_working_tree_cache_key__stable_across_calls(self):
+        """Verify repeated calls with same state produce same cache key."""
         with tempfile.TemporaryDirectory() as tmpdir:
             tmppath = Path(tmpdir)
             _init_git_repo(tmppath)
             (tmppath / "test.py").write_text("def foo(): pass")
             _commit_all(tmppath)
 
-            # Same feedback content
-            feedback_content = "Code smells detected: orphan comments"
-            feedback_hash = hashlib.blake2b(feedback_content.encode(), digest_size=8).hexdigest()
+            key1 = _compute_working_tree_cache_key(str(tmppath))
+            key2 = _compute_working_tree_cache_key(str(tmppath))
 
-            # Compute cache key
-            key1 = _compute_feedback_cache_key(str(tmppath), set(), feedback_hash)
-            key2 = _compute_feedback_cache_key(str(tmppath), set(), feedback_hash)
+            assert key1 == key2, "Same state should produce same cache key"
 
-            assert key1 == key2, "Same feedback should produce same cache key"
-
-    def test_compute_feedback_cache_key__uv_lock_changes_dont_invalidate(self):
+    def test_compute_working_tree_cache_key__uv_lock_changes_dont_invalidate(self):
         """Verify non-Python file changes (uv.lock) don't cause cache key changes."""
         with tempfile.TemporaryDirectory() as tmpdir:
             tmppath = Path(tmpdir)
@@ -70,17 +60,16 @@ class TestFeedbackCacheKeyComputation:
             (tmppath / "test.py").write_text("def foo(): pass")
             _commit_all(tmppath)
 
-            feedback_hash = "feedbackhash1234"
-            key_before = _compute_feedback_cache_key(str(tmppath), set(), feedback_hash)
+            key_before = _compute_working_tree_cache_key(str(tmppath))
 
             # Modify uv.lock (non-Python file)
             (tmppath / "uv.lock").write_text("some lock content")
 
-            key_after = _compute_feedback_cache_key(str(tmppath), set(), feedback_hash)
+            key_after = _compute_working_tree_cache_key(str(tmppath))
 
             assert key_before == key_after, "uv.lock changes should not invalidate cache"
 
-    def test_compute_feedback_cache_key__pycache_changes_dont_invalidate(self):
+    def test_compute_working_tree_cache_key__pycache_changes_dont_invalidate(self):
         """Verify __pycache__/*.pyc files don't affect the cache key."""
         with tempfile.TemporaryDirectory() as tmpdir:
             tmppath = Path(tmpdir)
@@ -88,19 +77,18 @@ class TestFeedbackCacheKeyComputation:
             (tmppath / "test.py").write_text("def foo(): pass")
             _commit_all(tmppath)
 
-            feedback_hash = "feedbackhash1234"
-            key_before = _compute_feedback_cache_key(str(tmppath), set(), feedback_hash)
+            key_before = _compute_working_tree_cache_key(str(tmppath))
 
             # Create __pycache__ with .pyc file
             pycache = tmppath / "__pycache__"
             pycache.mkdir()
             (pycache / "test.cpython-312.pyc").write_bytes(b"\x00\x00\x00\x00")
 
-            key_after = _compute_feedback_cache_key(str(tmppath), set(), feedback_hash)
+            key_after = _compute_working_tree_cache_key(str(tmppath))
 
             assert key_before == key_after, "__pycache__ should not invalidate cache"
 
-    def test_compute_feedback_cache_key__compiled_extensions_dont_invalidate(self):
+    def test_compute_working_tree_cache_key__compiled_extensions_dont_invalidate(self):
         """Verify compiled extensions (.so, .pyd) don't affect the cache key."""
         with tempfile.TemporaryDirectory() as tmpdir:
             tmppath = Path(tmpdir)
@@ -108,18 +96,17 @@ class TestFeedbackCacheKeyComputation:
             (tmppath / "test.py").write_text("def foo(): pass")
             _commit_all(tmppath)
 
-            feedback_hash = "feedbackhash1234"
-            key_before = _compute_feedback_cache_key(str(tmppath), set(), feedback_hash)
+            key_before = _compute_working_tree_cache_key(str(tmppath))
 
             # Create compiled extension files
             (tmppath / "module.so").write_bytes(b"\x7fELF")
             (tmppath / "module.pyd").write_bytes(b"MZ")
 
-            key_after = _compute_feedback_cache_key(str(tmppath), set(), feedback_hash)
+            key_after = _compute_working_tree_cache_key(str(tmppath))
 
             assert key_before == key_after, "Compiled extensions should not invalidate cache"
 
-    def test_compute_feedback_cache_key__python_content_changes_invalidate(self):
+    def test_compute_working_tree_cache_key__python_content_changes_invalidate(self):
         """Verify actual Python code changes invalidate the cache."""
         with tempfile.TemporaryDirectory() as tmpdir:
             tmppath = Path(tmpdir)
@@ -127,17 +114,16 @@ class TestFeedbackCacheKeyComputation:
             (tmppath / "test.py").write_text("def foo(): pass")
             _commit_all(tmppath)
 
-            feedback_hash = "feedbackhash1234"
-            key_before = _compute_feedback_cache_key(str(tmppath), set(), feedback_hash)
+            key_before = _compute_working_tree_cache_key(str(tmppath))
 
             # Modify Python file content
             (tmppath / "test.py").write_text("def foo(): return 42")
 
-            key_after = _compute_feedback_cache_key(str(tmppath), set(), feedback_hash)
+            key_after = _compute_working_tree_cache_key(str(tmppath))
 
             assert key_before != key_after, "Python content changes should invalidate cache"
 
-    def test_compute_feedback_cache_key__empty_edited_files_stable_key(self):
+    def test_compute_working_tree_cache_key__stable_when_no_modifications(self):
         """Verify cache key is stable when no Python files are modified."""
         with tempfile.TemporaryDirectory() as tmpdir:
             tmppath = Path(tmpdir)
@@ -145,12 +131,9 @@ class TestFeedbackCacheKeyComputation:
             (tmppath / "test.py").write_text("def foo(): pass")
             _commit_all(tmppath)
 
-            feedback_hash = "feedbackhash1234"
-
-            # Multiple calls with empty edited_files
-            key1 = _compute_feedback_cache_key(str(tmppath), set(), feedback_hash)
-            key2 = _compute_feedback_cache_key(str(tmppath), set(), feedback_hash)
-            key3 = _compute_feedback_cache_key(str(tmppath), set(), feedback_hash)
+            key1 = _compute_working_tree_cache_key(str(tmppath))
+            key2 = _compute_working_tree_cache_key(str(tmppath))
+            key3 = _compute_working_tree_cache_key(str(tmppath))
 
             assert key1 == key2 == key3, "Cache key should be stable"
 
@@ -211,10 +194,10 @@ class TestWorkingTreeHashContentBased:
 
 
 class TestFeedbackCachePersistence:
-    """Tests for feedback cache persistence."""
+    """Tests for feedback cache persistence using FeedbackCacheState."""
 
-    def test_feedback_cache__persists_across_sessions(self):
-        """Verify cache file persists and works across multiple calls."""
+    def test_feedback_cache__persists_and_loads_correctly(self):
+        """Verify cache file persists with file hashes and loads correctly."""
         with tempfile.TemporaryDirectory() as tmpdir:
             tmppath = Path(tmpdir)
             _init_git_repo(tmppath)
@@ -222,24 +205,26 @@ class TestFeedbackCachePersistence:
             _commit_all(tmppath)
 
             cache_key = "test_cache_key_123"
+            file_hashes = {"src/app.py": "abcdef1234567890"}
 
-            # First call - should not be cached
-            assert not _is_feedback_cached(str(tmppath), cache_key)
+            # First load - should return None
+            assert _load_feedback_cache(str(tmppath)) is None
 
             # Save to cache
-            _save_feedback_cache(str(tmppath), cache_key)
+            _save_feedback_cache(str(tmppath), cache_key, file_hashes)
 
-            # Second call - should be cached
-            assert _is_feedback_cached(str(tmppath), cache_key)
+            # Second load - should return state
+            loaded = _load_feedback_cache(str(tmppath))
+            assert loaded is not None
+            assert loaded.last_key == cache_key
+            assert loaded.file_hashes == file_hashes
 
             # Verify cache file exists
             cache_path = _get_feedback_cache_path(str(tmppath))
             assert cache_path.exists()
-            cache_data = json.loads(cache_path.read_text())
-            assert cache_data["last_key"] == cache_key
 
-    def test_feedback_cache__different_key_not_cached(self):
-        """Verify that a different cache key is not considered cached."""
+    def test_feedback_cache__different_key_detected(self):
+        """Verify that a different cache key is detected as a change."""
         with tempfile.TemporaryDirectory() as tmpdir:
             tmppath = Path(tmpdir)
             _init_git_repo(tmppath)
@@ -247,10 +232,34 @@ class TestFeedbackCachePersistence:
             _commit_all(tmppath)
 
             # Save one key
-            _save_feedback_cache(str(tmppath), "key1")
+            _save_feedback_cache(str(tmppath), "key1", {})
 
-            # Check different key - should not be cached
-            assert not _is_feedback_cached(str(tmppath), "key2")
+            # Load and check — key mismatch means working tree changed
+            loaded = _load_feedback_cache(str(tmppath))
+            assert loaded is not None
+            assert loaded.last_key != "key2"
+
+    def test_feedback_cache__file_hashes_enable_change_detection(self):
+        """Verify saved file hashes allow detecting which files changed."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            _init_git_repo(tmppath)
+            (tmppath / "test.py").write_text("def foo(): pass")
+            _commit_all(tmppath)
+
+            # Save cache with file hashes
+            file_hashes = {"app.py": "hash1", "utils.py": "hash2"}
+            _save_feedback_cache(str(tmppath), "cache_key", file_hashes)
+
+            loaded = _load_feedback_cache(str(tmppath))
+            assert loaded is not None
+            assert loaded.file_hashes == file_hashes
+
+            # Use file hashes with WorkingTreeStateCalculator.get_files_changed_since
+            calculator = WorkingTreeStateCalculator(str(tmppath))
+            changed = calculator.get_files_changed_since(loaded.file_hashes)
+            # No actual git changes, so nothing should be "changed"
+            assert changed == set()
 
 
 class TestModifiedPythonFilesDetection:
@@ -364,8 +373,7 @@ class TestSubmoduleHandling:
             )
             _commit_all(main_repo, "add submodule")
 
-            feedback_hash = "feedbackhash1234"
-            key_before = _compute_feedback_cache_key(str(main_repo), set(), feedback_hash)
+            key_before = _compute_working_tree_cache_key(str(main_repo))
 
             # Update submodule (creates a change in main repo's git status)
             subprocess.run(
@@ -374,7 +382,7 @@ class TestSubmoduleHandling:
                 capture_output=True,
             )
 
-            key_after = _compute_feedback_cache_key(str(main_repo), set(), feedback_hash)
+            key_after = _compute_working_tree_cache_key(str(main_repo))
 
             assert key_before == key_after, "Submodule changes should not invalidate cache"
 
@@ -382,12 +390,11 @@ class TestSubmoduleHandling:
 class TestNewUntrackedFiles:
     """Tests for new untracked Python file handling."""
 
-    def test_feedback_cache__new_untracked_python_files_invalidate(self):
-        """Verify that new Python files (even untracked) invalidate cache.
+    def test_feedback_cache__new_untracked_python_files_dont_invalidate(self):
+        """Verify that new untracked Python files don't invalidate cache.
 
-        Note: New untracked files won't appear in git diff, but they will be
-        detected by git ls-files if not gitignored. The behavior here depends
-        on whether git considers them "changed" - typically they won't be.
+        New untracked files won't appear in git diff, so the working tree
+        cache key remains unchanged. Only tracked file changes matter.
         """
         with tempfile.TemporaryDirectory() as tmpdir:
             tmppath = Path(tmpdir)
@@ -395,16 +402,13 @@ class TestNewUntrackedFiles:
             (tmppath / "existing.py").write_text("def existing(): pass")
             _commit_all(tmppath)
 
-            feedback_hash = "feedbackhash1234"
-            key_before = _compute_feedback_cache_key(str(tmppath), set(), feedback_hash)
+            key_before = _compute_working_tree_cache_key(str(tmppath))
 
             # Add new untracked Python file
             (tmppath / "new_file.py").write_text("def new(): pass")
 
-            key_after = _compute_feedback_cache_key(str(tmppath), set(), feedback_hash)
+            key_after = _compute_working_tree_cache_key(str(tmppath))
 
-            # New untracked files don't show in git diff, so key should be same
-            # This is expected behavior - only tracked file changes matter
             assert key_before == key_after, "Untracked files don't appear in git diff"
 
 
@@ -420,14 +424,13 @@ class TestBuildArtifactFiltering:
             (tmppath / "src" / "module.py").write_text("def foo(): pass")
             _commit_all(tmppath)
 
-            feedback_hash = "feedbackhash1234"
-            key_before = _compute_feedback_cache_key(str(tmppath), set(), feedback_hash)
+            key_before = _compute_working_tree_cache_key(str(tmppath))
 
             # Create dist directory with Python file (shouldn't affect cache)
             (tmppath / "dist").mkdir()
             (tmppath / "dist" / "generated.py").write_text("# Generated")
 
-            key_after = _compute_feedback_cache_key(str(tmppath), set(), feedback_hash)
+            key_after = _compute_working_tree_cache_key(str(tmppath))
 
             assert key_before == key_after, "dist/ directory should be ignored"
 
@@ -440,15 +443,14 @@ class TestBuildArtifactFiltering:
             (tmppath / "src" / "module.py").write_text("def foo(): pass")
             _commit_all(tmppath)
 
-            feedback_hash = "feedbackhash1234"
-            key_before = _compute_feedback_cache_key(str(tmppath), set(), feedback_hash)
+            key_before = _compute_working_tree_cache_key(str(tmppath))
 
             # Create build directory with Python file (shouldn't affect cache)
             (tmppath / "build").mkdir()
             (tmppath / "build" / "lib").mkdir()
             (tmppath / "build" / "lib" / "module.py").write_text("# Built")
 
-            key_after = _compute_feedback_cache_key(str(tmppath), set(), feedback_hash)
+            key_after = _compute_working_tree_cache_key(str(tmppath))
 
             assert key_before == key_after, "build/ directory should be ignored"
 
@@ -461,14 +463,13 @@ class TestBuildArtifactFiltering:
             (tmppath / "src" / "module.py").write_text("def foo(): pass")
             _commit_all(tmppath)
 
-            feedback_hash = "feedbackhash1234"
-            key_before = _compute_feedback_cache_key(str(tmppath), set(), feedback_hash)
+            key_before = _compute_working_tree_cache_key(str(tmppath))
 
             # Create egg-info directory (shouldn't affect cache)
             (tmppath / "package.egg-info").mkdir()
             (tmppath / "package.egg-info" / "PKG-INFO").write_text("Name: package")
 
-            key_after = _compute_feedback_cache_key(str(tmppath), set(), feedback_hash)
+            key_after = _compute_working_tree_cache_key(str(tmppath))
 
             assert key_before == key_after, "*.egg-info directory should be ignored"
 
@@ -542,12 +543,7 @@ class TestGetModifiedSourceFilePathsFiltering:
 def test_feedback_cache__slopometry_dir_visibility_does_not_affect_key():
     """Verify cache key is stable whether .slopometry/ is in gitignore or not.
 
-    This is the critical test: the cache key should remain stable when:
-    1. .slopometry/ is NOT in gitignore (shows as untracked)
-    2. .slopometry/ IS in gitignore (hidden from git)
-    3. .gitignore is modified but not committed
-
-    The key only depends on: commit SHA, Python file content, edited files, and feedback hash.
+    The key only depends on: commit SHA and source file content hashes.
     """
     with tempfile.TemporaryDirectory() as tmpdir:
         tmppath = Path(tmpdir)
@@ -561,21 +557,19 @@ def test_feedback_cache__slopometry_dir_visibility_does_not_affect_key():
         # Modify Python file (uncommitted)
         (tmppath / "test.py").write_text("def foo(): return 1")
 
-        feedback_hash = "test_feedback_hash"
-
         # Scenario 1: .slopometry NOT in gitignore
-        key1 = _compute_feedback_cache_key(str(tmppath), {"test.py"}, feedback_hash)
+        key1 = _compute_working_tree_cache_key(str(tmppath))
 
         # Save cache (creates .slopometry/ directory)
-        _save_feedback_cache(str(tmppath), key1)
+        _save_feedback_cache(str(tmppath), key1, {"test.py": "somehash"})
 
         # Scenario 2: Add .slopometry to gitignore (uncommitted)
         (tmppath / ".gitignore").write_text("__pycache__/\n.slopometry/\n")
-        key2 = _compute_feedback_cache_key(str(tmppath), {"test.py"}, feedback_hash)
+        key2 = _compute_working_tree_cache_key(str(tmppath))
 
         # Scenario 3: Remove .slopometry from gitignore
         (tmppath / ".gitignore").write_text("__pycache__/\n")
-        key3 = _compute_feedback_cache_key(str(tmppath), {"test.py"}, feedback_hash)
+        key3 = _compute_working_tree_cache_key(str(tmppath))
 
         assert key1 == key2, "Adding .slopometry to gitignore should not change cache key"
         assert key2 == key3, "Removing .slopometry from gitignore should not change cache key"
@@ -591,13 +585,12 @@ def test_feedback_cache__gitignore_modification_does_not_invalidate():
         (tmppath / ".gitignore").write_text("*.pyc\n")
         _commit_all(tmppath)
 
-        feedback_hash = "feedbackhash1234"
-        key_before = _compute_feedback_cache_key(str(tmppath), set(), feedback_hash)
+        key_before = _compute_working_tree_cache_key(str(tmppath))
 
         # Modify .gitignore (uncommitted)
         (tmppath / ".gitignore").write_text("*.pyc\n.slopometry/\n__pycache__/\n")
 
-        key_after = _compute_feedback_cache_key(str(tmppath), set(), feedback_hash)
+        key_after = _compute_working_tree_cache_key(str(tmppath))
 
         assert key_before == key_after, ".gitignore modifications should not invalidate cache"
 
@@ -611,13 +604,12 @@ def test_feedback_cache__env_file_changes_dont_invalidate():
         (tmppath / ".env").write_text("SECRET=old")
         _commit_all(tmppath)
 
-        feedback_hash = "feedbackhash1234"
-        key_before = _compute_feedback_cache_key(str(tmppath), set(), feedback_hash)
+        key_before = _compute_working_tree_cache_key(str(tmppath))
 
         # Modify .env (tracked but non-source)
         (tmppath / ".env").write_text("SECRET=new")
 
-        key_after = _compute_feedback_cache_key(str(tmppath), set(), feedback_hash)
+        key_after = _compute_working_tree_cache_key(str(tmppath))
 
         assert key_before == key_after, ".env changes should not invalidate cache"
 
@@ -631,12 +623,11 @@ def test_feedback_cache__markdown_changes_dont_invalidate():
         (tmppath / "README.md").write_text("# Old readme")
         _commit_all(tmppath)
 
-        feedback_hash = "feedbackhash1234"
-        key_before = _compute_feedback_cache_key(str(tmppath), set(), feedback_hash)
+        key_before = _compute_working_tree_cache_key(str(tmppath))
 
         # Modify markdown (tracked but non-source)
         (tmppath / "README.md").write_text("# New readme with changes")
 
-        key_after = _compute_feedback_cache_key(str(tmppath), set(), feedback_hash)
+        key_after = _compute_working_tree_cache_key(str(tmppath))
 
         assert key_before == key_after, ".md changes should not invalidate cache"

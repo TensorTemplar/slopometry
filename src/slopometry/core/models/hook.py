@@ -122,6 +122,21 @@ class GitState(BaseModel):
     commit_sha: str | None = None
 
 
+class FeedbackCacheState(BaseModel):
+    """Persisted state of the feedback cache for change-based firing.
+
+    Stored in .slopometry/feedback_cache.json. The hook only fires when
+    the working tree state changes since the last time feedback was shown.
+    Per-file content hashes enable computing which specific files changed.
+    """
+
+    last_key: str = Field(description="Cache key from last fire: commit_sha:working_tree_hash")
+    file_hashes: dict[str, str] = Field(
+        default_factory=dict,
+        description="Per-file content hashes (rel_path -> BLAKE2b hex) at time of last fire",
+    )
+
+
 class HookEvent(BaseModel):
     """Represents a single hook invocation event."""
 

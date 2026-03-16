@@ -13,6 +13,7 @@ from slopometry.core.git_tracker import GitTracker
 from slopometry.core.lock import SlopometryLock
 from slopometry.core.models.complexity import ComplexityDelta, ExtendedComplexityMetrics
 from slopometry.core.models.hook import (
+    FeedbackCacheState,
     HookEvent,
     HookEventType,
     HookInputUnion,
@@ -262,23 +263,18 @@ def _get_feedback_cache_path(working_directory: str) -> Path:
     return cache_dir / "feedback_cache.json"
 
 
-def _compute_feedback_cache_key(working_directory: str, edited_files: set[str], feedback_hash: str) -> str:
-    """Compute a cache key for the current state.
+def _compute_working_tree_cache_key(working_directory: str) -> str:
+    """Compute a cache key based solely on working tree state.
 
-    Uses language-aware change detection to avoid cache invalidation from
-    non-source file changes (like uv.lock, submodules, build artifacts, etc.).
-
-    The languages parameter defaults to None (all supported languages).
-    Currently only Python is supported; future languages will be auto-detected
-    via LanguageDetector when added to the registry.
+    The cache key depends only on the git commit and source file contents,
+    making it stable across sessions and independent of smell analysis output.
+    This ensures the hook fires exactly once per code state change.
 
     Args:
         working_directory: Path to the working directory
-        edited_files: Set of edited file paths
-        feedback_hash: Hash of the feedback content
 
     Returns:
-        Cache key string
+        Cache key string (BLAKE2b hex digest)
     """
     tracker = GitTracker(Path(working_directory))
     git_state = tracker.get_git_state()
@@ -288,42 +284,38 @@ def _compute_feedback_cache_key(working_directory: str, edited_files: set[str], 
     has_source_changes = bool(wt_calculator._get_modified_source_files_from_git())
     working_tree_hash = wt_calculator.calculate_working_tree_hash(commit_sha) if has_source_changes else "clean"
 
-    files_key = ",".join(sorted(edited_files))
-    key_parts = f"{commit_sha}:{working_tree_hash}:{files_key}:{feedback_hash}"
+    key_parts = f"{commit_sha}:{working_tree_hash}"
     return hashlib.blake2b(key_parts.encode(), digest_size=8).hexdigest()
 
 
-def _is_feedback_cached(working_directory: str, cache_key: str) -> bool:
-    """Check if the feedback for this state was already shown.
-
-    Args:
-        working_directory: Path to the working directory
-        cache_key: Cache key to check
+def _load_feedback_cache(working_directory: str) -> FeedbackCacheState | None:
+    """Load the feedback cache state from disk.
 
     Returns:
-        True if feedback was already shown for this state
+        FeedbackCacheState if cache exists and is valid, None otherwise
     """
     cache_path = _get_feedback_cache_path(working_directory)
     if not cache_path.exists():
-        return False
+        return None
 
     try:
-        cache_data = json.loads(cache_path.read_text())
-        return cache_data.get("last_key") == cache_key
-    except (json.JSONDecodeError, OSError):
-        return False
+        return FeedbackCacheState.model_validate_json(cache_path.read_text())
+    except (json.JSONDecodeError, OSError, ValueError):
+        return None
 
 
-def _save_feedback_cache(working_directory: str, cache_key: str) -> None:
-    """Save the feedback cache key.
+def _save_feedback_cache(working_directory: str, cache_key: str, file_hashes: dict[str, str]) -> None:
+    """Save the feedback cache state with per-file content hashes.
 
     Args:
         working_directory: Path to the working directory
-        cache_key: Cache key to save
+        cache_key: Working tree cache key
+        file_hashes: Per-file content hashes at the time of this cache save
     """
     cache_path = _get_feedback_cache_path(working_directory)
     try:
-        cache_path.write_text(json.dumps({"last_key": cache_key}))
+        state = FeedbackCacheState(last_key=cache_key, file_hashes=file_hashes)
+        cache_path.write_text(state.model_dump_json())
     except OSError as e:
         logger.debug(f"Failed to save feedback cache: {e}")
 
@@ -356,16 +348,26 @@ def handle_stop_event(session_id: str, parsed_input: "StopInput | SubagentStopIn
 
     current_metrics, delta = db.calculate_extended_complexity_metrics(stats.working_directory)
 
-    feedback_parts: list[str] = []
-    cache_stable_parts: list[str] = []
+    # Determine which files changed since the last time feedback was shown.
+    # Uses per-file content hashes from the feedback cache to filter out
+    # pre-existing uncommitted changes that haven't changed.
+    wt_calculator = WorkingTreeStateCalculator(stats.working_directory, languages=None)
+    cached_state = _load_feedback_cache(stats.working_directory)
 
-    # Get edited files from git (more reliable than transcript-based context coverage)
-    try:
-        wt_calculator = WorkingTreeStateCalculator(stats.working_directory, languages=None)
+    # Early exit: if working tree state hasn't changed since last feedback, skip
+    cache_key = _compute_working_tree_cache_key(stats.working_directory)
+    if cached_state is not None and cached_state.last_key == cache_key:
+        return 0
+
+    current_file_hashes = wt_calculator.get_source_file_content_hashes()
+
+    if cached_state is not None:
+        edited_files = wt_calculator.get_files_changed_since(cached_state.file_hashes)
+    else:
+        # No cache yet (first run) — treat all modified source files as edited
         edited_files = wt_calculator.get_modified_source_file_paths()
-    except (ValueError, OSError) as e:
-        logger.debug(f"Failed to get modified source files: {e}")
-        edited_files = set()
+
+    feedback_parts: list[str] = []
 
     # Smell feedback: split into code-based (stable) and context-derived (unstable)
     # Context-derived smells (e.g., unread_related_tests) change with every transcript
@@ -381,14 +383,12 @@ def handle_stop_event(session_id: str, parsed_input: "StopInput | SubagentStopIn
         code_feedback, has_code_smells, _ = format_code_smell_feedback(code_smells, session_id)
         if has_code_smells:
             feedback_parts.append(code_feedback)
-            cache_stable_parts.append(code_feedback)
 
         context_smell_feedback, has_context_smells, _ = format_code_smell_feedback(context_smells, session_id)
         if has_context_smells:
             feedback_parts.append(context_smell_feedback)
 
     # Context coverage - informational but NOT stable (changes with every Read/Glob/Grep)
-    # Excluded from cache hash to avoid invalidation on tool calls
     if settings.enable_complexity_feedback and stats.context_coverage and stats.context_coverage.has_gaps:
         context_feedback = format_context_coverage_feedback(stats.context_coverage)
         if context_feedback:
@@ -399,24 +399,16 @@ def handle_stop_event(session_id: str, parsed_input: "StopInput | SubagentStopIn
         if dev_guidelines:
             feedback_parts.append(f"\n**Project Development Guidelines:**\n{dev_guidelines}")
 
+    # Save cache with current file hashes regardless of whether feedback is shown.
+    # This ensures the next stop event compares against this point in time.
+    _save_feedback_cache(stats.working_directory, cache_key, current_file_hashes)
+
     if feedback_parts:
         feedback = "\n\n".join(feedback_parts)
-
-        # Cache key uses only code-based smell feedback — context coverage
-        # changes with every tool call and would invalidate cache
-        cache_content = "\n\n".join(cache_stable_parts) if cache_stable_parts else ""
-        feedback_hash = hashlib.blake2b(cache_content.encode(), digest_size=8).hexdigest()
 
         feedback += (
             f"\n\n---\n**Session**: `{session_id}` | Details: `slopometry solo show {session_id} --smell-details`"
         )
-
-        cache_key = _compute_feedback_cache_key(stats.working_directory, edited_files, feedback_hash)
-
-        if _is_feedback_cached(stats.working_directory, cache_key):
-            return 0
-
-        _save_feedback_cache(stats.working_directory, cache_key)
 
         hook_output = {"decision": "block", "reason": feedback}
         print(json.dumps(hook_output))
