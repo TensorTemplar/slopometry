@@ -331,7 +331,7 @@ class PythonFeatureAnalyzer:
                     results.append(result)
                 except Exception as e:
                     file_path = futures[future]
-                    logger.warning(f"Failed to analyze features for {file_path}: {e}")
+                    logger.debug(f"Failed to analyze features for {file_path}: {e}")
                     results.append(None)
 
         return results

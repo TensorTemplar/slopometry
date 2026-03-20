@@ -205,7 +205,7 @@ class WorkingTreeStateCalculator:
             if result.returncode == 0:
                 return result.stdout.strip()
         except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError) as e:
-            logger.warning(f"Failed to get current commit SHA: {e}")
+            logger.debug(f"Failed to get current commit SHA: {e}")
         return None
 
     def has_uncommitted_changes(self) -> bool:
@@ -225,5 +225,5 @@ class WorkingTreeStateCalculator:
             if result.returncode == 0:
                 return bool(result.stdout.strip())
         except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError) as e:
-            logger.warning(f"Failed to check for uncommitted changes: {e}")
+            logger.debug(f"Failed to check for uncommitted changes: {e}")
         return False

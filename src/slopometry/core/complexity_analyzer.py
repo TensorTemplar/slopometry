@@ -245,7 +245,7 @@ class ComplexityAnalyzer:
                 relative_path = self._get_relative_path(file_path, target_dir)
                 files_by_loc[relative_path] = code_loc
             except (OSError, UnicodeDecodeError) as e:
-                logger.warning(f"Skipping unreadable file {file_path}: {e}")
+                logger.debug(f"Skipping unreadable file {file_path}: {e}")
                 continue
         return files_by_loc
 
@@ -294,7 +294,7 @@ class ComplexityAnalyzer:
                     results.append(result)
                 except Exception as e:
                     file_path = futures[future]
-                    logger.warning(f"Failed to analyze {file_path}: {e}")
+                    logger.debug(f"Failed to analyze {file_path}: {e}")
                     results.append(
                         FileAnalysisResult(
                             path=str(file_path),
