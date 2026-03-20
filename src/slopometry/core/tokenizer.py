@@ -59,7 +59,7 @@ def count_file_tokens(file_path: Path) -> int | TokenCountError:
         content = file_path.read_text(encoding="utf-8")
         return count_tokens(content)
     except Exception as e:
-        logger.warning("Failed to read file for token counting %s: %s", file_path, e)
+        logger.debug("Failed to read file for token counting %s: %s", file_path, e)
         return TokenCountError(message=str(e), path=str(file_path))
 
 

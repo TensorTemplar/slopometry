@@ -82,7 +82,7 @@ class CompactEventAnalyzer:
                                 compact_events.append(compact_event)
 
         except OSError as e:
-            logger.warning(f"Failed to read transcript file {transcript_path}: {e}")
+            logger.debug(f"Failed to read transcript file {transcript_path}: {e}")
 
         return compact_events
 
@@ -110,13 +110,13 @@ class CompactEventAnalyzer:
 
         timestamp_str = boundary.timestamp or summary.timestamp
         if not timestamp_str:
-            logger.warning(f"Compact event at line {line_number} missing timestamp, skipping")
+            logger.debug(f"Compact event at line {line_number} missing timestamp, skipping")
             return None
 
         try:
             timestamp = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
         except ValueError:
-            logger.warning(f"Compact event at line {line_number} has invalid timestamp '{timestamp_str}', skipping")
+            logger.debug(f"Compact event at line {line_number} has invalid timestamp '{timestamp_str}', skipping")
             return None
 
         return CompactEvent(
@@ -179,7 +179,7 @@ def _transcript_matches_project(transcript_path: Path, working_directory: Path) 
                 return False
             return Path(cwd).resolve() == working_directory
     except (OSError, json.JSONDecodeError) as e:
-        logger.warning(f"Failed to read transcript {transcript_path} for project matching: {e}")
+        logger.debug(f"Failed to read transcript {transcript_path} for project matching: {e}")
         return False
 
 
@@ -217,7 +217,7 @@ def find_compact_instructions(transcript_path: Path, compact_line_number: int, l
                 continue
 
     except OSError as e:
-        logger.warning(f"Failed to read transcript {transcript_path} for compact instructions: {e}")
+        logger.debug(f"Failed to read transcript {transcript_path} for compact instructions: {e}")
 
     return None
 

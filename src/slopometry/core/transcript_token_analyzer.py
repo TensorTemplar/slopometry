@@ -66,10 +66,10 @@ def extract_transcript_metadata(transcript_path: Path) -> TranscriptMetadata:
                 if agent_version is not None and model is not None and git_branch is not None:
                     break
     except OSError as e:
-        logger.warning(f"Failed to read transcript for metadata: {e}")
+        logger.debug(f"Failed to read transcript for metadata: {e}")
 
     if skipped_lines:
-        logger.warning(f"Skipped {skipped_lines} unparseable line(s) in metadata extraction from {transcript_path}")
+        logger.debug(f"Skipped {skipped_lines} unparseable line(s) in metadata extraction from {transcript_path}")
 
     return TranscriptMetadata(agent_version=agent_version, model=model, git_branch=git_branch)
 
@@ -144,10 +144,10 @@ class TranscriptTokenAnalyzer:
                     self._process_event(event, usage)
 
         except OSError as e:
-            logger.warning(f"Failed to read transcript file {transcript_path}: {e}")
+            logger.debug(f"Failed to read transcript file {transcript_path}: {e}")
 
         if skipped_lines:
-            logger.warning(f"Skipped {skipped_lines} unparseable line(s) in {transcript_path}")
+            logger.debug(f"Skipped {skipped_lines} unparseable line(s) in {transcript_path}")
 
         usage.final_context_input_tokens = self._latest_raw_input_tokens
         usage.subagent_tokens = usage.explore_subagent_tokens + usage.non_explore_subagent_tokens

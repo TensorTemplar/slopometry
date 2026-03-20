@@ -117,7 +117,7 @@ class CodeAnalyzer:
                 tokens=count_file_tokens(file_path),
             )
         except Exception as e:
-            logger.warning("Failed to analyze %s: %s", file_path, e)
+            logger.debug("Failed to analyze %s: %s", file_path, e)
             return FileAnalysisResult(
                 path=str(file_path),
                 complexity=0,

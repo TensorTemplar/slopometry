@@ -33,6 +33,54 @@ class WorkingTreeStateCalculator:
         self.working_directory = Path(working_directory).resolve()
         self.languages = languages
 
+    def get_source_file_content_hashes(self) -> dict[str, str]:
+        """Get per-file content hashes for all modified source files.
+
+        Returns a mapping of relative path to BLAKE2b content hash for each
+        source file that git reports as modified (staged + unstaged).
+        Filters by language config and ignore patterns.
+
+        Returns:
+            Dict mapping relative path strings to 16-char hex BLAKE2b hashes
+        """
+        modified_source_files = self._get_modified_source_files_from_git()
+        result: dict[str, str] = {}
+
+        for source_file in sorted(modified_source_files):
+            try:
+                content_hash = hashlib.blake2b(source_file.read_bytes(), digest_size=8).hexdigest()
+                rel_path = str(source_file.relative_to(self.working_directory))
+                result[rel_path] = content_hash
+            except (OSError, ValueError):
+                continue
+
+        return result
+
+    def get_files_changed_since(self, previous_hashes: dict[str, str]) -> set[str]:
+        """Compute source files that changed since a previous state.
+
+        Compares current modified source files against a previous set of
+        content hashes (e.g., from the last time the hook fired). A file
+        is considered changed if it:
+        - Is currently modified AND was not modified previously (new dirty file)
+        - Is currently modified AND has a different content hash than previously
+
+        Args:
+            previous_hashes: File content hashes from the previous state
+
+        Returns:
+            Set of relative path strings for files that changed
+        """
+        current_hashes = self.get_source_file_content_hashes()
+        changed: set[str] = set()
+
+        for rel_path, current_hash in current_hashes.items():
+            previous_hash = previous_hashes.get(rel_path)
+            if previous_hash is None or previous_hash != current_hash:
+                changed.add(rel_path)
+
+        return changed
+
     def calculate_working_tree_hash(self, commit_sha: str) -> str:
         """Calculate a hash representing the current working tree state.
 
@@ -48,21 +96,12 @@ class WorkingTreeStateCalculator:
         Returns:
             Unique hash representing current working tree state
         """
-        modified_source_files = self._get_modified_source_files_from_git()
+        file_hashes = self.get_source_file_content_hashes()
 
         hash_components = [commit_sha]
-
-        for source_file in sorted(modified_source_files):
-            try:
-                # Use content hash, not mtime - filters out touch/checkout false positives
-                # BLAKE2b with digest_size=8 gives 16 hex chars, fast on arm64/amd64
-                content_hash = hashlib.blake2b(source_file.read_bytes(), digest_size=8).hexdigest()
-                rel_path = source_file.relative_to(self.working_directory)
-                hash_components.append(f"{rel_path}:{content_hash}")
-            except (OSError, ValueError):
-                continue
-
-        hash_components.append(f"file_count:{len(modified_source_files)}")
+        for rel_path in sorted(file_hashes):
+            hash_components.append(f"{rel_path}:{file_hashes[rel_path]}")
+        hash_components.append(f"file_count:{len(file_hashes)}")
 
         combined = "|".join(hash_components)
         return hashlib.blake2b(combined.encode("utf-8"), digest_size=8).hexdigest()
@@ -166,7 +205,7 @@ class WorkingTreeStateCalculator:
             if result.returncode == 0:
                 return result.stdout.strip()
         except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError) as e:
-            logger.warning(f"Failed to get current commit SHA: {e}")
+            logger.debug(f"Failed to get current commit SHA: {e}")
         return None
 
     def has_uncommitted_changes(self) -> bool:
@@ -186,5 +225,5 @@ class WorkingTreeStateCalculator:
             if result.returncode == 0:
                 return bool(result.stdout.strip())
         except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError) as e:
-            logger.warning(f"Failed to check for uncommitted changes: {e}")
+            logger.debug(f"Failed to check for uncommitted changes: {e}")
         return False

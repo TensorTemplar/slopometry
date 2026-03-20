@@ -1,11 +1,20 @@
 """Current (uncommitted) impact analysis service."""
 
+from __future__ import annotations
+
 import logging
 import shutil
+import subprocess
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from slopometry.core.git_tracker import GitTracker
 
 from slopometry.core.complexity_analyzer import ComplexityAnalyzer
+from slopometry.core.context_coverage_analyzer import ContextCoverageAnalyzer
+from slopometry.core.git_tracker import GitOperationError
 from slopometry.core.database import EventDatabase
 from slopometry.core.models.baseline import CurrentChangesAnalysis, GalenMetrics, QPEScore, RepoBaseline, SmellAdvantage
 from slopometry.core.models.complexity import ComplexityDelta, ExtendedComplexityMetrics
@@ -67,8 +76,6 @@ class CurrentImpactService:
 
         assessment = self.impact_calculator.calculate_impact(current_delta, baseline)
 
-        from slopometry.core.context_coverage_analyzer import ContextCoverageAnalyzer
-
         coverage_analyzer = ContextCoverageAnalyzer(repo_path)
         blind_spots = coverage_analyzer.get_affected_dependents(set(changed_files))
 
@@ -121,12 +128,19 @@ class CurrentImpactService:
             smell_advantages=smell_advantages,
         )
 
+    # Maximum number of commits to walk back when searching for code changes
+    MAX_COMMIT_WALKBACK = 10
+
     def analyze_previous_commit(
         self,
         repo_path: Path,
         baseline: RepoBaseline,
     ) -> CurrentChangesAnalysis | None:
-        """Analyze the previous commit (HEAD) against its parent (HEAD~1).
+        """Analyze the most recent commit with code file changes.
+
+        Walks back from HEAD looking for a commit pair where Python/Rust files
+        changed (up to MAX_COMMIT_WALKBACK commits). This handles cases where
+        recent commits only touched non-code files (e.g., pyproject.toml, docs).
 
         Used as fallback when there are no uncommitted changes.
 
@@ -135,9 +149,9 @@ class CurrentImpactService:
             baseline: Pre-computed repository baseline
 
         Returns:
-            CurrentChangesAnalysis or None if analysis fails
+            CurrentChangesAnalysis or None if no code changes found
         """
-        from slopometry.core.git_tracker import GitOperationError, GitTracker
+        from slopometry.core.git_tracker import GitTracker
 
         repo_path = repo_path.resolve()
         git_tracker = GitTracker(repo_path)
@@ -146,40 +160,78 @@ class CurrentImpactService:
         if not git_tracker.has_previous_commit():
             return None
 
-        head_sha = git_tracker._get_current_commit_sha()
-        if not head_sha:
-            return None
+        for offset in range(self.MAX_COMMIT_WALKBACK):
+            child_ref = f"HEAD~{offset}"
+            parent_ref = f"HEAD~{offset + 1}"
 
-        import subprocess
-
-        try:
-            result = subprocess.run(
-                ["git", "rev-parse", "HEAD~1"],
-                cwd=repo_path,
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            if result.returncode != 0:
-                logger.debug(f"git rev-parse HEAD~1 failed: {result.stderr.strip()}")
+            try:
+                child_result = subprocess.run(
+                    ["git", "rev-parse", child_ref],
+                    cwd=repo_path,
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                parent_result = subprocess.run(
+                    ["git", "rev-parse", parent_ref],
+                    cwd=repo_path,
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                if child_result.returncode != 0 or parent_result.returncode != 0:
+                    logger.debug(f"git rev-parse failed at offset {offset}, stopping walkback")
+                    return None
+                child_sha = child_result.stdout.strip()
+                parent_sha = parent_result.stdout.strip()
+            except Exception as e:
+                logger.debug(f"Failed to resolve commit at offset {offset}: {e}")
                 return None
-            parent_sha = result.stdout.strip()
-        except Exception as e:
-            logger.debug(f"Failed to get parent commit SHA: {e}")
-            return None
 
-        try:
-            changed_files = git_tracker.get_changed_python_files(parent_sha, head_sha)
-        except GitOperationError as e:
-            logger.debug(f"Failed to get changed files between {parent_sha[:8]} and {head_sha[:8]}: {e}")
-            return None
+            try:
+                changed_files = git_tracker.get_changed_python_files(parent_sha, child_sha)
+            except GitOperationError as e:
+                logger.debug(f"Failed to get changed files between {parent_sha[:8]} and {child_sha[:8]}: {e}")
+                return None
 
-        if not changed_files:
-            return None
+            if not changed_files:
+                logger.debug(f"No code file changes in {child_sha[:8]}, walking back")
+                continue
 
+            return self._analyze_commit_pair(
+                repo_path, analyzer, git_tracker, baseline, parent_sha, child_sha, changed_files
+            )
+
+        logger.debug(f"No code changes found in last {self.MAX_COMMIT_WALKBACK} commits")
+        return None
+
+    def _analyze_commit_pair(
+        self,
+        repo_path: Path,
+        analyzer: ComplexityAnalyzer,
+        git_tracker: GitTracker,
+        baseline: RepoBaseline,
+        parent_sha: str,
+        child_sha: str,
+        changed_files: list[str],
+    ) -> CurrentChangesAnalysis | None:
+        """Analyze complexity between two commits.
+
+        Args:
+            repo_path: Path to the repository
+            analyzer: Complexity analyzer instance
+            git_tracker: Git tracker instance
+            baseline: Pre-computed repository baseline
+            parent_sha: Parent commit SHA
+            child_sha: Child commit SHA
+            changed_files: List of changed code file paths
+
+        Returns:
+            CurrentChangesAnalysis or None if extraction/analysis fails
+        """
         try:
             with git_tracker.extract_files_from_commit_ctx(parent_sha) as parent_dir:
-                with git_tracker.extract_files_from_commit_ctx(head_sha) as head_dir:
+                with git_tracker.extract_files_from_commit_ctx(child_sha) as head_dir:
                     if not parent_dir or not head_dir:
                         logger.debug(
                             f"Failed to extract files from commits: parent_dir={parent_dir}, head_dir={head_dir}"
@@ -189,13 +241,11 @@ class CurrentImpactService:
                     parent_metrics = analyzer.analyze_extended_complexity(parent_dir)
                     head_metrics = analyzer.analyze_extended_complexity(head_dir)
         except GitOperationError as e:
-            logger.debug(f"Failed to extract or analyze commits {parent_sha[:8]}..{head_sha[:8]}: {e}")
+            logger.debug(f"Failed to extract or analyze commits {parent_sha[:8]}..{child_sha[:8]}: {e}")
             return None
 
         current_delta, smell_advantages, _, _ = self._compute_delta(parent_metrics, head_metrics)
         assessment = self.impact_calculator.calculate_impact(current_delta, baseline)
-
-        from slopometry.core.context_coverage_analyzer import ContextCoverageAnalyzer
 
         coverage_analyzer = ContextCoverageAnalyzer(repo_path)
         blind_spots = coverage_analyzer.get_affected_dependents(set(changed_files))
@@ -217,7 +267,7 @@ class CurrentImpactService:
             repository_path=str(repo_path),
             analysis_timestamp=datetime.now(),
             source=AnalysisSource.PREVIOUS_COMMIT,
-            analyzed_commit_sha=head_sha[:8],
+            analyzed_commit_sha=child_sha[:8],
             base_commit_sha=parent_sha[:8],
             changed_files=changed_files,
             current_metrics=head_metrics,
@@ -225,7 +275,7 @@ class CurrentImpactService:
             assessment=assessment,
             baseline=baseline,
             blind_spots=blind_spots,
-            filtered_coverage=None,  # Coverage not meaningful for committed changes
+            filtered_coverage=None,
             blind_spot_tokens=blind_spot_tokens,
             changed_files_tokens=changed_files_tokens,
             complete_picture_context_size=complete_picture_context_size,

@@ -70,7 +70,7 @@ class LanguageDetector:
             return [line for line in result.stdout.strip().split("\n") if line]
 
         except subprocess.TimeoutExpired:
-            logger.warning("Language detection timed out for %s", self.repo_path)
+            logger.debug("Language detection timed out for %s", self.repo_path)
             return []
         except FileNotFoundError:
             logger.debug("git not found, cannot detect languages in %s", self.repo_path)

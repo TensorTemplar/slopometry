@@ -39,7 +39,7 @@ class FeatureStats(BaseModel):
     orphan_comment_count: int = SmellField(
         label="Orphan Comments",
         files_field="orphan_comment_files",
-        guidance="Make sure inline code comments add meaningful information about non-obvious design tradeoffs or explain tech debt or performance implications. Consider if these could be docstrings or field descriptors instead",
+        guidance="Make sure inline code comments add meaningful information about non-obvious design tradeoffs or explain tech debt or performance implications. Consider if these could be docstrings or field descriptors instead. Prefix with `# NOTE:`, `# REASON:`, `# PERF:`, `# SAFETY:`, `# WORKAROUND:`, `# CAVEAT:`, `# COMPAT:`, or `# IMPORTANT:` to mark intentional design decisions (these are excluded from the count)",
     )
     untracked_todo_count: int = SmellField(
         label="Untracked TODOs",
@@ -166,7 +166,6 @@ def _analyze_single_file_features(file_path: Path) -> FeatureStats | None:
     total_loc, code_loc = _count_loc(content)
     path_str = str(file_path)
 
-    # 4 smells come from non-AST analysis; rest from FeatureVisitor
     non_ast_counts: dict[str, int] = {
         "orphan_comment_count": orphan_comments,
         "untracked_todo_count": untracked_todos,
@@ -331,7 +330,7 @@ class PythonFeatureAnalyzer:
                     results.append(result)
                 except Exception as e:
                     file_path = futures[future]
-                    logger.warning(f"Failed to analyze features for {file_path}: {e}")
+                    logger.debug(f"Failed to analyze features for {file_path}: {e}")
                     results.append(None)
 
         return results
