@@ -2,7 +2,11 @@
 
 import shutil
 import sys
+import warnings
 from importlib.metadata import version
+
+# REASON: analyzed repos may contain invalid escape sequences that emit SyntaxWarnings during AST parsing
+warnings.filterwarnings("ignore", category=SyntaxWarning)
 
 import click
 
