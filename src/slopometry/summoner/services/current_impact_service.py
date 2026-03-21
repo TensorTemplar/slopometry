@@ -14,8 +14,8 @@ if TYPE_CHECKING:
 
 from slopometry.core.complexity_analyzer import ComplexityAnalyzer
 from slopometry.core.context_coverage_analyzer import ContextCoverageAnalyzer
-from slopometry.core.git_tracker import GitOperationError
 from slopometry.core.database import EventDatabase
+from slopometry.core.git_tracker import GitOperationError
 from slopometry.core.models.baseline import CurrentChangesAnalysis, GalenMetrics, QPEScore, RepoBaseline, SmellAdvantage
 from slopometry.core.models.complexity import ComplexityDelta, ExtendedComplexityMetrics
 from slopometry.core.models.hook import AnalysisSource
@@ -128,7 +128,6 @@ class CurrentImpactService:
             smell_advantages=smell_advantages,
         )
 
-    # Maximum number of commits to walk back when searching for code changes
     MAX_COMMIT_WALKBACK = 10
 
     def analyze_previous_commit(
