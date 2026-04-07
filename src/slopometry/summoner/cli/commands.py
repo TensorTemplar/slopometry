@@ -521,14 +521,40 @@ def current_impact(
             except Exception as e:
                 logger.debug(f"Coverage analysis failed (optional): {e}")
 
+        behavioral_trends = None
+        try:
+            from slopometry.core.database import EventDatabase
+            from slopometry.core.models.session import BehavioralPatternTrend, BehavioralPatternTrends
+
+            db = EventDatabase()
+            history = db.get_behavioral_pattern_history(str(repo_path.resolve()), limit=10)
+            if history:
+                n = len(history)
+                behavioral_trends = BehavioralPatternTrends(
+                    ownership_dodging=BehavioralPatternTrend(
+                        avg_rate=sum(h["ownership_dodging_rate"] for h in history) / n,
+                        num_sessions=n,
+                    ),
+                    simple_workaround=BehavioralPatternTrend(
+                        avg_rate=sum(h["simple_workaround_rate"] for h in history) / n,
+                        num_sessions=n,
+                    ),
+                )
+        except Exception as e:
+            logger.debug(f"Failed to compute behavioral trends for current-impact: {e}")
+
         if output_json:
             summary = CurrentImpactSummary.from_analysis(analysis)
             print(summary.model_dump_json(indent=2))
         elif pager:
             with console.pager(styles=True):
-                display_current_impact_analysis(analysis, show_file_details=file_details)
+                display_current_impact_analysis(
+                    analysis, show_file_details=file_details, behavioral_trends=behavioral_trends
+                )
         else:
-            display_current_impact_analysis(analysis, show_file_details=file_details)
+            display_current_impact_analysis(
+                analysis, show_file_details=file_details, behavioral_trends=behavioral_trends
+            )
 
     except Exception as e:
         if output_json:

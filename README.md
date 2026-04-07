@@ -7,6 +7,8 @@ A tool that lurks in the shadows, tracks and analyzes Claude Code sessions provi
 
 **NEWS:**
 
+* **April 2026: Behavioral pattern detection.** Sessions are now scanned for ownership dodging ("pre-existing", "not introduced by") and simple workaround ("simplest", "for now", "quick fix") phrases in assistant output, reported as per-minute rates. Rates are persisted per-repo and `current-impact` shows rolling average trends. Display reordered: plans, token impact, and behavioral patterns now appear first. Also: newly written files no longer incorrectly flagged as blind spots, and single-method class detection skips data classes with only `@property` methods.
+
 * **February 2026: OpenCode 1.2.10+ now supported for solo features, including stop hook feedback! See [plugin doc](plugins/opencode/README.md).**
 
 * **January 2026: BREAKING CHANGE - replaced `radon`, which is abandoned for 5+ years with `rust-code-analysis` that is only abandoned for 3+ years.**

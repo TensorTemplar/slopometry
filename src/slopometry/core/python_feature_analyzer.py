@@ -551,10 +551,20 @@ class FeatureVisitor(ast.NodeVisitor):
             self.deep_inheritances += 1
 
         # Single-method class: only one method besides __init__
+        # Exclude data classes (classes with annotated field assignments) where a
+        # single @property is standard — e.g., Pydantic BaseModel, dataclasses.
         methods = [
             n for n in node.body if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef) and n.name != "__init__"
         ]
-        if len(methods) == 1:
+        has_data_fields = any(isinstance(n, ast.AnnAssign) for n in node.body)
+        all_properties = methods and all(
+            any(
+                isinstance(d, ast.Name) and d.id == "property" or isinstance(d, ast.Attribute) and d.attr == "property"
+                for d in m.decorator_list
+            )
+            for m in methods
+        )
+        if len(methods) == 1 and not (has_data_fields and all_properties):
             self.single_method_classes += 1
 
         self._scope_depth += 1

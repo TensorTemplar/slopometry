@@ -66,6 +66,50 @@ class TestContextCoverageAnalyzer:
         found_nodes = [k for k in graph.keys() if k.endswith(".py")]
         assert len(found_nodes) > 0
 
+    def test_analyze_transcript__write_to_new_file_counts_as_read(self, test_repo_path, tmp_path):
+        """Files first created via Write should not be blind spots or 'edited without reading'."""
+        # Create a file via Write (simulating new file creation in transcript)
+        new_file = test_repo_path / "new_module.py"
+        new_file.write_text("def hello(): pass")
+        subprocess.run(["git", "add", "new_module.py"], cwd=test_repo_path, check=True, capture_output=True)
+
+        transcript_file = tmp_path / "transcript.jsonl"
+        events = [
+            {"tool_name": "Write", "tool_input": {"file_path": str(new_file)}},
+            {"tool_name": "Edit", "tool_input": {"file_path": str(new_file)}},
+        ]
+        with open(transcript_file, "w") as f:
+            for e in events:
+                f.write(json.dumps(e) + "\n")
+
+        analyzer = ContextCoverageAnalyzer(test_repo_path)
+        coverage = analyzer.analyze_transcript(transcript_file)
+
+        cov = next((c for c in coverage.file_coverage if c.file_path == "new_module.py"), None)
+        assert cov is not None
+        assert cov.was_read_before_edit, "Write-created files should count as read"
+
+    def test_analyze_transcript__edit_without_read_still_flagged(self, test_repo_path, tmp_path):
+        """Files edited (not written) without prior read should still be flagged."""
+        existing_file = test_repo_path / "existing.py"
+        existing_file.write_text("x = 1")
+        subprocess.run(["git", "add", "existing.py"], cwd=test_repo_path, check=True, capture_output=True)
+
+        transcript_file = tmp_path / "transcript.jsonl"
+        events = [
+            {"tool_name": "Edit", "tool_input": {"file_path": str(existing_file)}},
+        ]
+        with open(transcript_file, "w") as f:
+            for e in events:
+                f.write(json.dumps(e) + "\n")
+
+        analyzer = ContextCoverageAnalyzer(test_repo_path)
+        coverage = analyzer.analyze_transcript(transcript_file)
+
+        cov = next((c for c in coverage.file_coverage if c.file_path == "existing.py"), None)
+        assert cov is not None
+        assert not cov.was_read_before_edit, "Edit without Read should still be flagged"
+
     def test_blind_spot_detection(self, test_repo_path, tmp_path):
         """Test synthetic blind spot detection."""
         # Create a simple synthetic setup in the temp repo to test logic specifically
