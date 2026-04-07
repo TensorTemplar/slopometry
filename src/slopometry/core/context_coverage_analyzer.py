@@ -154,6 +154,9 @@ class ContextCoverageAnalyzer:
                     files_edited.add(relative_path)
                     if relative_path not in edit_timestamps:
                         edit_timestamps[relative_path] = sequence
+                    if tool == "Write" and relative_path not in files_read:
+                        files_read.add(relative_path)
+                        read_timestamps[relative_path] = sequence - 1
 
         return files_read, files_edited, read_timestamps, edit_timestamps
 
@@ -288,6 +291,11 @@ class ContextCoverageAnalyzer:
                         files_edited.add(relative_path)
                         if relative_path not in edit_timestamps:
                             edit_timestamps[relative_path] = sequence
+                        # Write to unseen file = new file creation; implicitly "read".
+                        # sequence - 1 so synthetic read is strictly before the edit.
+                        if tool_name == "Write" and relative_path not in files_read:
+                            files_read.add(relative_path)
+                            read_timestamps[relative_path] = sequence - 1
 
         except (OSError, json.JSONDecodeError):
             pass

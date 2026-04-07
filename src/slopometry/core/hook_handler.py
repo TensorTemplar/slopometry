@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import select
+import subprocess
 import sys
 from pathlib import Path
 
@@ -263,6 +264,65 @@ def _get_feedback_cache_path(working_directory: str) -> Path:
     return cache_dir / "feedback_cache.json"
 
 
+def _get_current_commit_sha(working_directory: str) -> str | None:
+    """Get current commit SHA with a single git command.
+
+    This is the cheapest possible git operation (~5ms) used to short-circuit
+    the expensive _compute_working_tree_cache_key on the cache-hit path.
+
+    Args:
+        working_directory: Path to the git working directory.
+
+    Returns:
+        Commit SHA string, or None if not a git repo or git fails.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=working_directory,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError):
+        pass
+    return None
+
+
+def _has_source_modifications(working_directory: str) -> bool:
+    """Check if any source files have staged or unstaged changes.
+
+    Runs two targeted git diff commands (~10ms each) instead of the full
+    working tree state computation (8-9 git commands). Only checks .py and .rs
+    file patterns.
+
+    Args:
+        working_directory: Path to the git working directory.
+
+    Returns:
+        True if any source files are modified (staged or unstaged).
+    """
+    for diff_args in [
+        ["git", "diff", "--quiet", "--", "*.py", "*.rs"],
+        ["git", "diff", "--cached", "--quiet", "--", "*.py", "*.rs"],
+    ]:
+        try:
+            result = subprocess.run(
+                diff_args,
+                cwd=working_directory,
+                capture_output=True,
+                timeout=10,
+            )
+            if result.returncode != 0:
+                return True
+        except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError):
+            return True
+
+    return False
+
+
 def _compute_working_tree_cache_key(working_directory: str) -> str:
     """Compute a cache key based solely on working tree state.
 
@@ -304,20 +364,39 @@ def _load_feedback_cache(working_directory: str) -> FeedbackCacheState | None:
         return None
 
 
-def _save_feedback_cache(working_directory: str, cache_key: str, file_hashes: dict[str, str]) -> None:
+def _save_feedback_cache(
+    working_directory: str, cache_key: str, file_hashes: dict[str, str], commit_sha: str | None = None
+) -> None:
     """Save the feedback cache state with per-file content hashes.
 
     Args:
         working_directory: Path to the working directory
         cache_key: Working tree cache key
         file_hashes: Per-file content hashes at the time of this cache save
+        commit_sha: Current commit SHA for cheap fast-path validation on next run
     """
     cache_path = _get_feedback_cache_path(working_directory)
     try:
-        state = FeedbackCacheState(last_key=cache_key, file_hashes=file_hashes)
+        state = FeedbackCacheState(last_key=cache_key, file_hashes=file_hashes, commit_sha=commit_sha)
         cache_path.write_text(state.model_dump_json())
     except OSError as e:
         logger.debug(f"Failed to save feedback cache: {e}")
+
+
+def _has_analyzable_source_files(working_directory: str) -> bool:
+    """Check if the working directory contains any Python or Rust source files.
+
+    Delegates to GitTracker.has_analyzable_source_files() which owns all
+    git-file-listing logic.
+
+    Args:
+        working_directory: Path to the working directory to check.
+
+    Returns:
+        True if at least one .py or .rs file is found via git ls-files.
+    """
+    tracker = GitTracker(Path(working_directory))
+    return tracker.has_analyzable_source_files()
 
 
 def handle_stop_event(session_id: str, parsed_input: "StopInput | SubagentStopInput") -> int:
@@ -330,6 +409,15 @@ def handle_stop_event(session_id: str, parsed_input: "StopInput | SubagentStopIn
     Feedback is cached - if the same feedback would be shown twice without code changes,
     the second invocation returns silently.
 
+    Optimized execution order (cheapest checks first):
+      1. stop_hook_active check              (<1ms)
+      2. get_session_working_directory        (<1ms, single SQL)
+      3. cheap cache fast-path               (<20ms, 1-2 git commands)
+      4. analyzable source files gate         (<1s, git ls-files)
+      5. full cache key computation           (only on cache miss)
+      6. get_session_statistics               (only when needed)
+      7. use stats.complexity_metrics         (no redundant call)
+
     Args:
         session_id: The session ID
         parsed_input: The stop event input
@@ -341,23 +429,38 @@ def handle_stop_event(session_id: str, parsed_input: "StopInput | SubagentStopIn
         return 0
 
     db = EventDatabase()
-    stats = db.get_session_statistics(session_id)
+    working_directory = db.get_session_working_directory(session_id)
+    if not working_directory:
+        return 0
 
+    # Fast-path cache check: compare commit SHA (1 git command) + check for
+    # source modifications (1-2 git commands). Avoids the full 9-command
+    # _compute_working_tree_cache_key on the common "nothing changed" path.
+    cached_state = _load_feedback_cache(working_directory)
+    if cached_state is not None and cached_state.commit_sha is not None:
+        current_sha = _get_current_commit_sha(working_directory)
+        if current_sha == cached_state.commit_sha and not _has_source_modifications(working_directory):
+            return 0
+
+    if not _has_analyzable_source_files(working_directory):
+        return 0
+
+    # Full cache key — only reached when source files exist AND fast-path didn't match
+    cache_key = _compute_working_tree_cache_key(working_directory)
+    if cached_state is not None and cached_state.last_key == cache_key:
+        return 0
+
+    stats = db.get_session_statistics(session_id)
     if not stats:
         return 0
 
-    current_metrics, delta = db.calculate_extended_complexity_metrics(stats.working_directory)
+    current_metrics = stats.complexity_metrics
+    delta = stats.complexity_delta
 
     # Determine which files changed since the last time feedback was shown.
     # Uses per-file content hashes from the feedback cache to filter out
     # pre-existing uncommitted changes that haven't changed.
-    wt_calculator = WorkingTreeStateCalculator(stats.working_directory, languages=None)
-    cached_state = _load_feedback_cache(stats.working_directory)
-
-    # Early exit: if working tree state hasn't changed since last feedback, skip
-    cache_key = _compute_working_tree_cache_key(stats.working_directory)
-    if cached_state is not None and cached_state.last_key == cache_key:
-        return 0
+    wt_calculator = WorkingTreeStateCalculator(working_directory, languages=None)
 
     current_file_hashes = wt_calculator.get_source_file_content_hashes()
 
@@ -374,7 +477,7 @@ def handle_stop_event(session_id: str, parsed_input: "StopInput | SubagentStopIn
     # read and must NOT be included in the cache hash to avoid repeated triggers
     if current_metrics:
         scoped_smells = scope_smells_for_session(
-            current_metrics, delta, edited_files, stats.working_directory, stats.context_coverage
+            current_metrics, delta, edited_files, working_directory, stats.context_coverage
         )
 
         code_smells = [s for s in scoped_smells if s.name != "unread_related_tests"]
@@ -395,13 +498,14 @@ def handle_stop_event(session_id: str, parsed_input: "StopInput | SubagentStopIn
             feedback_parts.append(context_feedback)
 
     if settings.feedback_dev_guidelines:
-        dev_guidelines = extract_dev_guidelines_from_claude_md(stats.working_directory)
+        dev_guidelines = extract_dev_guidelines_from_claude_md(working_directory)
         if dev_guidelines:
             feedback_parts.append(f"\n**Project Development Guidelines:**\n{dev_guidelines}")
 
     # Save cache with current file hashes regardless of whether feedback is shown.
     # This ensures the next stop event compares against this point in time.
-    _save_feedback_cache(stats.working_directory, cache_key, current_file_hashes)
+    current_commit_sha = _get_current_commit_sha(working_directory)
+    _save_feedback_cache(working_directory, cache_key, current_file_hashes, commit_sha=current_commit_sha)
 
     if feedback_parts:
         feedback = "\n\n".join(feedback_parts)
@@ -747,255 +851,6 @@ def format_code_smell_feedback(
     if has_smells:
         return "\n".join(lines), True, has_blocking
     return "", False, False
-
-
-def format_complexity_metrics_only(
-    current_metrics: "ExtendedComplexityMetrics",
-    delta: "ComplexityDelta",
-    baseline_feedback: str = "",
-    context_feedback: str = "",
-) -> str:
-    """Format complexity metrics feedback (without code smells).
-
-    Args:
-        current_metrics: Current complexity metrics
-        delta: Complexity changes from previous commit
-        baseline_feedback: Optional baseline comparison feedback
-        context_feedback: Optional context coverage feedback
-
-    Returns:
-        Formatted feedback string for Claude
-    """
-    lines = []
-
-    lines.append("**Complexity Analysis Summary**")
-    lines.append("")
-
-    if delta.total_complexity_change > 0:
-        lines.append(
-            f"**Complexity increased by +{delta.total_complexity_change}** (now {current_metrics.total_complexity} total)"
-        )
-    elif delta.total_complexity_change < 0:
-        lines.append(
-            f"**Complexity decreased by {delta.total_complexity_change}** (now {current_metrics.total_complexity} total)"
-        )
-    else:
-        lines.append(f"**No net complexity change** ({current_metrics.total_complexity} total)")
-
-    if delta.files_added:
-        truncated_added = [truncate_path(f, max_width=30) for f in delta.files_added[:3]]
-        lines.append(f"**Added {len(delta.files_added)} files**: {', '.join(truncated_added)}")
-        if len(delta.files_added) > 3:
-            lines.append(f"   ... and {len(delta.files_added) - 3} more")
-
-    if delta.files_removed:
-        truncated_removed = [truncate_path(f, max_width=30) for f in delta.files_removed[:3]]
-        lines.append(f"**Removed {len(delta.files_removed)} files**: {', '.join(truncated_removed)}")
-        if len(delta.files_removed) > 3:
-            lines.append(f"   ... and {len(delta.files_removed) - 3} more")
-
-    lines.append("")
-    lines.append("**Code Quality**:")
-    lines.append(f"   * Type Hint Coverage: {current_metrics.type_hint_coverage:.1f}%")
-    lines.append(f"   * Docstring Coverage: {current_metrics.docstring_coverage:.1f}%")
-    lines.append(f"   * Any Type Usage: {current_metrics.any_type_percentage:.1f}%")
-    lines.append(f"   * str Type Usage: {current_metrics.str_type_percentage:.1f}%")
-
-    if delta.files_changed:
-        lines.append("")
-        lines.append("**Biggest complexity changes**:")
-        sorted_changes = sorted(delta.files_changed.items(), key=lambda x: abs(x[1]), reverse=True)[:3]
-        for file_path, change in sorted_changes:
-            truncated = truncate_path(file_path, max_width=50)
-            if change > 0:
-                lines.append(f"   * {truncated}: +{change}")
-            else:
-                lines.append(f"   * {truncated}: {change}")
-
-    if baseline_feedback:
-        lines.append(baseline_feedback)
-
-    if context_feedback:
-        lines.append(context_feedback)
-
-    lines.append("")
-    if delta.total_complexity_change > 20:
-        lines.append("**Consider**: Breaking down complex functions or refactoring to reduce cognitive load.")
-    elif delta.total_complexity_change > 0:
-        lines.append("**Note**: Slight complexity increase. Monitor for future refactoring opportunities.")
-    elif delta.total_complexity_change < -10:
-        lines.append("**Great work**: Complexity reduction makes the code more maintainable!")
-
-    return "\n".join(lines)
-
-
-def format_complexity_feedback(
-    current_metrics: "ExtendedComplexityMetrics",
-    delta: "ComplexityDelta",
-    baseline_feedback: str = "",
-    context_feedback: str = "",
-) -> str:
-    """Format complexity delta information for Claude consumption.
-
-    Args:
-        current_metrics: Current complexity metrics
-        delta: Complexity changes from previous commit
-        baseline_feedback: Optional baseline comparison feedback
-        context_feedback: Optional context coverage feedback
-
-    Returns:
-        Formatted feedback string for Claude
-    """
-    lines = []
-
-    lines.append("**Complexity Analysis Summary**")
-    lines.append("")
-
-    if delta.total_complexity_change > 0:
-        lines.append(
-            f"**Complexity increased by +{delta.total_complexity_change}** (now {current_metrics.total_complexity} total)"
-        )
-    elif delta.total_complexity_change < 0:
-        lines.append(
-            f"**Complexity decreased by {delta.total_complexity_change}** (now {current_metrics.total_complexity} total)"
-        )
-    else:
-        lines.append(f"**No net complexity change** ({current_metrics.total_complexity} total)")
-
-    if delta.files_added:
-        truncated_added = [truncate_path(f, max_width=30) for f in delta.files_added[:3]]
-        lines.append(f"**Added {len(delta.files_added)} files**: {', '.join(truncated_added)}")
-        if len(delta.files_added) > 3:
-            lines.append(f"   ... and {len(delta.files_added) - 3} more")
-
-    if delta.files_removed:
-        truncated_removed = [truncate_path(f, max_width=30) for f in delta.files_removed[:3]]
-        lines.append(f"**Removed {len(delta.files_removed)} files**: {', '.join(truncated_removed)}")
-        if len(delta.files_removed) > 3:
-            lines.append(f"   ... and {len(delta.files_removed) - 3} more")
-
-    lines.append("")
-    lines.append("**Code Quality**:")
-    lines.append(f"   • Type Hint Coverage: {current_metrics.type_hint_coverage:.1f}%")
-    lines.append(f"   • Docstring Coverage: {current_metrics.docstring_coverage:.1f}%")
-    lines.append(f"   • Any Type Usage: {current_metrics.any_type_percentage:.1f}%")
-    lines.append(f"   • str Type Usage: {current_metrics.str_type_percentage:.1f}%")
-
-    lines.append("")
-    lines.append("")
-    lines.append("**Code Smells**:")
-
-    def fmt_smell(label: str, count: int, change: int, files: list[str] | None = None) -> str:
-        base_msg = ""
-        if change > 0:
-            base_msg = f"   • {label}: {count} (+{change})"
-        elif change < 0:
-            base_msg = f"   • {label}: {count} ({change})"
-        else:
-            base_msg = f"   • {label}: {count}"
-
-        if files and count > 0:
-            truncated_files = [truncate_path(f, max_width=25) for f in files[:3]]
-            file_list = ", ".join(truncated_files)
-            remaining = len(files) - 3
-            if remaining > 0:
-                return f"{base_msg} [{file_list}, ... +{remaining}]"
-            return f"{base_msg} [{file_list}]"
-        return base_msg
-
-    lines.append(
-        fmt_smell(
-            "Orphan Comments - verify if redundant",
-            current_metrics.orphan_comment_count,
-            delta.orphan_comment_change,
-            current_metrics.orphan_comment_files,
-        )
-    )
-    lines.append(
-        fmt_smell(
-            "Untracked TODOs",
-            current_metrics.untracked_todo_count,
-            delta.untracked_todo_change,
-            current_metrics.untracked_todo_files,
-        )
-    )
-    lines.append(
-        fmt_smell(
-            "Inline Imports - verify if they can be moved to the top",
-            current_metrics.inline_import_count,
-            delta.inline_import_change,
-            current_metrics.inline_import_files,
-        )
-    )
-    lines.append(
-        fmt_smell(
-            ".get() with default - may indicate a silent failure",
-            current_metrics.dict_get_with_default_count,
-            delta.dict_get_with_default_change,
-            current_metrics.dict_get_with_default_files,
-        )
-    )
-    lines.append(
-        fmt_smell(
-            "Dynamic Attr inspection - may indicate a domain modeling gap, i.e. missing BaseModel",
-            current_metrics.hasattr_getattr_count,
-            delta.hasattr_getattr_change,
-            current_metrics.hasattr_getattr_files,
-        )
-    )
-    lines.append(
-        fmt_smell(
-            "Logic in __init__ - consider if redundant re-exports can be removed",
-            current_metrics.nonempty_init_count,
-            delta.nonempty_init_change,
-            current_metrics.nonempty_init_files,
-        )
-    )
-
-    if delta.files_changed:
-        lines.append("")
-        lines.append("**Biggest complexity changes**:")
-        sorted_changes = sorted(delta.files_changed.items(), key=lambda x: abs(x[1]), reverse=True)[:3]
-        for file_path, change in sorted_changes:
-            truncated = truncate_path(file_path, max_width=50)
-            if change > 0:
-                lines.append(f"   • {truncated}: +{change}")
-            else:
-                lines.append(f"   • {truncated}: {change}")
-
-    if baseline_feedback:
-        lines.append(baseline_feedback)
-
-    if context_feedback:
-        lines.append(context_feedback)
-
-    lines.append("")
-
-    smell_increases = []
-    if delta.orphan_comment_change > 0:
-        smell_increases.append("orphan comments")
-    if delta.untracked_todo_change > 0:
-        smell_increases.append("untracked TODOs")
-    if delta.inline_import_change > 0:
-        smell_increases.append("inline imports")
-    if delta.dict_get_with_default_change > 0:
-        smell_increases.append("unsafe dict.get()")
-    if delta.hasattr_getattr_change > 0:
-        smell_increases.append("dynamic attributes")
-    if delta.nonempty_init_change > 0:
-        smell_increases.append("logic in __init__.py")
-
-    if smell_increases:
-        lines.append(f"**⚠️  Quality Alert**: New code smells introduced: {', '.join(smell_increases)}.")
-        lines.append("Please review the 'Code Smells' section above and address these issues before stopping.")
-    elif delta.total_complexity_change > 20:
-        lines.append("**Consider**: Breaking down complex functions or refactoring to reduce cognitive load.")
-    elif delta.total_complexity_change > 0:
-        lines.append("**Note**: Slight complexity increase. Monitor for future refactoring opportunities.")
-    elif delta.total_complexity_change < -10:
-        lines.append("**Great work**: Complexity reduction makes the code more maintainable!")
-
-    return "\n".join(lines)
 
 
 def detect_event_type_from_parsed(parsed_input: HookInputUnion) -> HookEventType:

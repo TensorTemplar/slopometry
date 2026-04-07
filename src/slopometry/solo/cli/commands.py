@@ -10,6 +10,7 @@ from slopometry.display.console import console
 
 if TYPE_CHECKING:
     from slopometry.core.models import ImpactAssessment, RepoBaseline, SessionStatistics
+    from slopometry.core.models.session import BehavioralPatternTrends
 
 # Imports moved inside functions to optimize startup time
 
@@ -187,6 +188,9 @@ def show(session_id: str, smell_details: bool, file_details: bool, pager: bool) 
     baseline, assessment = _compute_session_baseline(stats)
     source = EventDatabase().get_session_source(session_id)
 
+    _persist_behavioral_patterns(session_id, stats)
+    behavioral_trends = _compute_behavioral_trends(session_id, stats)
+
     def _display() -> None:
         assert stats is not None
         display_session_summary(
@@ -197,6 +201,7 @@ def show(session_id: str, smell_details: bool, file_details: bool, pager: bool) 
             show_smell_files=smell_details,
             show_file_details=file_details,
             source=source,
+            behavioral_trends=behavioral_trends,
         )
 
         elapsed = time.perf_counter() - start_time
@@ -278,6 +283,9 @@ def latest(smell_details: bool, file_details: bool, pager: bool) -> None:
 
         source = EventDatabase().get_session_source(most_recent)
 
+        _persist_behavioral_patterns(most_recent, stats)
+        behavioral_trends = _compute_behavioral_trends(most_recent, stats)
+
         def _display() -> None:
             assert stats is not None and most_recent is not None
             display_session_summary(
@@ -288,6 +296,7 @@ def latest(smell_details: bool, file_details: bool, pager: bool) -> None:
                 show_smell_files=smell_details,
                 show_file_details=file_details,
                 source=source,
+                behavioral_trends=behavioral_trends,
             )
 
             elapsed = time.perf_counter() - start_time
@@ -299,6 +308,50 @@ def latest(smell_details: bool, file_details: bool, pager: bool) -> None:
                 _display()
         else:
             _display()
+
+
+def _compute_behavioral_trends(session_id: str, stats: "SessionStatistics") -> "BehavioralPatternTrends | None":
+    """Compute rolling average trends from historical behavioral pattern data."""
+    from slopometry.core.models.session import BehavioralPatternTrends
+
+    if not stats.behavioral_patterns or not stats.working_directory:
+        return None
+    try:
+        from slopometry.core.database import EventDatabase
+        from slopometry.core.models.session import BehavioralPatternTrend
+
+        db = EventDatabase()
+        repository_path = str(Path(stats.working_directory).resolve())
+        history = db.get_behavioral_pattern_history(repository_path, limit=10, exclude_session_id=session_id)
+
+        if not history:
+            return None
+
+        num_sessions = len(history)
+        avg_od_rate = sum(h["ownership_dodging_rate"] for h in history) / num_sessions
+        avg_sw_rate = sum(h["simple_workaround_rate"] for h in history) / num_sessions
+
+        return BehavioralPatternTrends(
+            ownership_dodging=BehavioralPatternTrend(avg_rate=avg_od_rate, num_sessions=num_sessions),
+            simple_workaround=BehavioralPatternTrend(avg_rate=avg_sw_rate, num_sessions=num_sessions),
+        )
+    except Exception as e:
+        logger.debug(f"Failed to compute behavioral trends: {e}")
+        return None
+
+
+def _persist_behavioral_patterns(session_id: str, stats: "SessionStatistics") -> None:
+    """Save behavioral pattern rates to the database for trend tracking."""
+    if not stats.behavioral_patterns or not stats.working_directory:
+        return
+    try:
+        from slopometry.core.database import EventDatabase
+
+        db = EventDatabase()
+        repository_path = str(Path(stats.working_directory).resolve())
+        db.save_behavioral_patterns(session_id, repository_path, stats.behavioral_patterns)
+    except Exception as e:
+        logger.debug(f"Failed to persist behavioral patterns: {e}")
 
 
 def _compute_session_baseline(

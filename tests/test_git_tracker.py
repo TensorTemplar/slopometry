@@ -517,3 +517,110 @@ def test_extract_specific_files_from_commit__handles_multiple_files(git_repo):
     finally:
         if temp_dir and temp_dir.exists():
             shutil.rmtree(temp_dir)
+
+
+# -----------------------------------------------------------------------------
+# Multi-repo parent detection tests
+# -----------------------------------------------------------------------------
+
+
+def test_is_multi_repo_parent__returns_true_for_dir_with_nested_git_repos(tmp_path):
+    """Verify multi-repo parent detection when children have .git dirs."""
+    # Simulate droidcraft_branches/ with sibling repos
+    (tmp_path / "repo_a" / ".git").mkdir(parents=True)
+    (tmp_path / "repo_b" / ".git").mkdir(parents=True)
+    (tmp_path / "repo_a" / "main.py").write_text("x = 1")
+
+    tracker = GitTracker(tmp_path)
+    assert tracker._is_multi_repo_parent() is True
+
+
+def test_is_multi_repo_parent__returns_false_for_temp_extraction_dir(tmp_path):
+    """Verify non-multi-repo dirs (e.g. temp extractions) are not flagged."""
+    # Flat dir with Python files but no nested .git
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("x = 1")
+    (tmp_path / "setup.py").write_text("x = 1")
+
+    tracker = GitTracker(tmp_path)
+    assert tracker._is_multi_repo_parent() is False
+
+
+def test_is_multi_repo_parent__returns_false_for_empty_dir(tmp_path):
+    """Verify empty dirs are not flagged as multi-repo parents."""
+    tracker = GitTracker(tmp_path)
+    assert tracker._is_multi_repo_parent() is False
+
+
+def test_find_python_files_fallback__returns_empty_for_multi_repo_parent(tmp_path):
+    """Verify fallback returns empty list for multi-repo parent dirs."""
+    (tmp_path / "repo_a" / ".git").mkdir(parents=True)
+    (tmp_path / "repo_a" / "main.py").write_text("x = 1")
+    (tmp_path / "repo_b" / ".git").mkdir(parents=True)
+    (tmp_path / "repo_b" / "lib.py").write_text("y = 2")
+
+    tracker = GitTracker(tmp_path)
+    files = tracker._find_python_files_fallback()
+
+    assert files == []
+
+
+def test_find_python_files_fallback__scans_non_multi_repo_dir(tmp_path):
+    """Verify fallback scans normally for non-multi-repo dirs."""
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("x = 1")
+    (tmp_path / "root.py").write_text("y = 2")
+
+    tracker = GitTracker(tmp_path)
+    files = tracker._find_python_files_fallback()
+
+    relative = {f.relative_to(tmp_path) for f in files}
+    assert Path("src/app.py") in relative
+    assert Path("root.py") in relative
+
+
+def test_find_rust_files_fallback__returns_empty_for_multi_repo_parent(tmp_path):
+    """Verify Rust fallback returns empty list for multi-repo parent dirs."""
+    (tmp_path / "repo_a" / ".git").mkdir(parents=True)
+    (tmp_path / "repo_a" / "src").mkdir(parents=True)
+    (tmp_path / "repo_a" / "src" / "main.rs").write_text("fn main() {}")
+
+    tracker = GitTracker(tmp_path)
+    files = tracker._find_rust_files_fallback()
+
+    assert files == []
+
+
+# -----------------------------------------------------------------------------
+# has_analyzable_source_files tests
+# -----------------------------------------------------------------------------
+
+
+def test_has_analyzable_source_files__returns_true_for_python_repo(git_repo):
+    """Returns True when git repo contains .py files."""
+    tracker = GitTracker(git_repo)
+    assert tracker.has_analyzable_source_files() is True
+
+
+def test_has_analyzable_source_files__returns_false_for_non_git_dir(tmp_path):
+    """Returns False for non-git directories (no rglob fallback)."""
+    (tmp_path / "main.py").write_text("x = 1")
+
+    tracker = GitTracker(tmp_path)
+    assert tracker.has_analyzable_source_files() is False
+
+
+def test_has_analyzable_source_files__returns_false_for_non_code_repo(tmp_path):
+    """Returns False when git repo has no .py or .rs files."""
+    env = os.environ.copy()
+    env["HOME"] = str(tmp_path)
+
+    subprocess.run(["git", "init"], cwd=tmp_path, env=env, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=tmp_path, env=env, check=True)
+    subprocess.run(["git", "config", "user.name", "T"], cwd=tmp_path, env=env, check=True)
+    (tmp_path / "README.md").write_text("# Docs only")
+    subprocess.run(["git", "add", "."], cwd=tmp_path, env=env, check=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=tmp_path, env=env, check=True)
+
+    tracker = GitTracker(tmp_path)
+    assert tracker.has_analyzable_source_files() is False

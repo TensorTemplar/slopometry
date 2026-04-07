@@ -22,7 +22,12 @@ from slopometry.core.models.display import (
 )
 from slopometry.core.models.experiment import ProgressDisplayData
 from slopometry.core.models.hook import HookEventType, ToolType
-from slopometry.core.models.session import CompactEvent, TokenUsage
+from slopometry.core.models.session import (
+    BehavioralPatterns,
+    BehavioralPatternTrends,
+    CompactEvent,
+    TokenUsage,
+)
 from slopometry.core.models.smell import SMELL_REGISTRY, SmellCategory, get_smell_label, get_smells_by_category
 from slopometry.core.models.user_story import UserStoryDisplayData
 from slopometry.core.settings import settings
@@ -166,6 +171,7 @@ def display_session_summary(
     show_smell_files: bool = False,
     show_file_details: bool = False,
     source: str | None = None,
+    behavioral_trends: BehavioralPatternTrends | None = None,
 ) -> None:
     """Display comprehensive session statistics with Rich formatting.
 
@@ -213,21 +219,12 @@ def display_session_summary(
     ):
         _display_plan_info(stats.plan_evolution)
 
-    if stats.events_by_type:
-        _display_events_by_type_table(stats.events_by_type)
-
-    if stats.tool_usage:
-        _display_tool_usage_table(stats.tool_usage)
-
-    if stats.compact_events:
-        _display_compact_events(stats.compact_events)
-
     token_usage = stats.plan_evolution.token_usage if stats.plan_evolution else None
     if token_usage or stats.compact_events:
         _display_token_impact(token_usage, stats.compact_events)
 
-    if stats.average_tool_duration_ms:
-        console.print(f"\nAverage tool duration: {stats.average_tool_duration_ms:.0f}ms")
+    if stats.behavioral_patterns and stats.behavioral_patterns.has_any:
+        _display_behavioral_patterns(stats.behavioral_patterns, trends=behavioral_trends)
 
     if stats.error_count > 0:
         console.print(f"[red]Errors: {stats.error_count}[/red]")
@@ -238,11 +235,85 @@ def display_session_summary(
     if stats.complexity_metrics and stats.complexity_metrics.total_files_analyzed > 0:
         _display_complexity_metrics(stats, galen_metrics=baseline_galen_metrics, show_smell_files=show_smell_files)
 
+    if stats.context_coverage and stats.context_coverage.files_edited:
+        _display_context_coverage(stats.context_coverage, show_file_details=show_file_details)
+
     if stats.complexity_delta:
         _display_complexity_delta(stats, baseline, assessment, show_file_details=show_file_details)
 
-    if stats.context_coverage and stats.context_coverage.files_edited:
-        _display_context_coverage(stats.context_coverage, show_file_details=show_file_details)
+    if stats.events_by_type:
+        _display_events_by_type_table(stats.events_by_type)
+
+    if stats.tool_usage:
+        _display_tool_usage_table(stats.tool_usage)
+
+    if stats.compact_events:
+        _display_compact_events(stats.compact_events)
+
+    if stats.average_tool_duration_ms:
+        console.print(f"\nAverage tool duration: {stats.average_tool_duration_ms:.0f}ms")
+
+
+def _display_behavioral_patterns(
+    patterns: BehavioralPatterns,
+    trends: BehavioralPatternTrends | None = None,
+) -> None:
+    """Display behavioral pattern detection results with optional rolling average trends."""
+    console.print("\n[bold]Behavioral Patterns[/bold]")
+
+    table = Table(show_header=True)
+    table.add_column("Pattern", style="cyan")
+    table.add_column("Count", justify="right")
+    table.add_column("Rate", justify="right")
+    if trends and trends.ownership_dodging.num_sessions > 0:
+        table.add_column("Avg", justify="right", style="dim")
+        table.add_column("Trend", justify="right")
+    table.add_column("Top Example", style="dim", max_width=60)
+
+    category_trends = [
+        (patterns.ownership_dodging, patterns.ownership_dodging_rate, trends.ownership_dodging if trends else None),
+        (patterns.simple_workaround, patterns.simple_workaround_rate, trends.simple_workaround if trends else None),
+    ]
+
+    has_trend_columns = trends and trends.ownership_dodging.num_sessions > 0
+
+    for category, rate, trend in category_trends:
+        count = category.count
+        rate_color = "red" if rate > 0.5 else "yellow" if rate > 0.1 else "green"
+        rate_str = f"[{rate_color}]{rate:.2f}/min[/{rate_color}]" if count > 0 else "[green]0.00/min[/green]"
+        count_str = f"[{rate_color}]{count}[/{rate_color}]" if count > 0 else "[green]0[/green]"
+        top_example = category.matches[0].context_snippet if category.matches else ""
+
+        if has_trend_columns and trend:
+            avg_str = f"{trend.avg_rate:.2f}/min" if trend.num_sessions > 0 else "n/a"
+            trend_label = trend.trend_label(rate) if trend.num_sessions > 0 else ""
+            table.add_row(category.category_name, count_str, rate_str, avg_str, trend_label, top_example)
+        else:
+            table.add_row(category.category_name, count_str, rate_str, top_example)
+
+    console.print(table)
+
+
+def _display_behavioral_pattern_trends(trends: BehavioralPatternTrends) -> None:
+    """Display behavioral pattern rolling averages for current-impact."""
+    n = max(trends.ownership_dodging.num_sessions, trends.simple_workaround.num_sessions)
+    console.print(f"\n[bold]Behavioral Pattern Trends[/bold] [dim](last {n} sessions)[/dim]")
+
+    table = Table(show_header=True)
+    table.add_column("Pattern", style="cyan")
+    table.add_column("Avg Rate", justify="right")
+
+    for label, trend in [
+        ("Ownership Dodging", trends.ownership_dodging),
+        ("Simple Workaround", trends.simple_workaround),
+    ]:
+        if trend.num_sessions == 0:
+            table.add_row(label, "[dim]n/a[/dim]")
+        else:
+            rate_color = "red" if trend.avg_rate > 0.5 else "yellow" if trend.avg_rate > 0.1 else "green"
+            table.add_row(label, f"[{rate_color}]{trend.avg_rate:.2f}/min[/{rate_color}]")
+
+    console.print(table)
 
 
 def _display_events_by_type_table(events_by_type: dict[HookEventType, int]) -> None:
@@ -1255,6 +1326,7 @@ def display_current_impact_analysis(
     analysis: CurrentChangesAnalysis,
     compact_events: list[CompactEvent] | None = None,
     show_file_details: bool = False,
+    behavioral_trends: BehavioralPatternTrends | None = None,
 ) -> None:
     """Display changes impact analysis with Rich formatting.
 
@@ -1360,6 +1432,11 @@ def display_current_impact_analysis(
             console.print(
                 f"\n[dim]Potential blind spots: {len(analysis.blind_spots)} files (use --file-details to list)[/dim]"
             )
+
+    if behavioral_trends and (
+        behavioral_trends.ownership_dodging.num_sessions > 0 or behavioral_trends.simple_workaround.num_sessions > 0
+    ):
+        _display_behavioral_pattern_trends(behavioral_trends)
 
     filter_set = set(analysis.changed_files) if analysis.changed_files else None
     _display_code_smells_detailed(metrics, filter_files=filter_set)

@@ -228,8 +228,57 @@ class GitTracker:
         except subprocess.SubprocessError as e:
             raise GitOperationError(f"git ls-files failed: {e}") from e
 
+    def has_analyzable_source_files(self) -> bool:
+        """Check if the working directory contains any Python or Rust source files.
+
+        Uses git ls-files for git repos (fast, respects .gitignore). For non-git
+        directories, returns False to avoid scanning massive directory trees.
+
+        Returns:
+            True if at least one .py or .rs file is found via git ls-files.
+        """
+        try:
+            result = subprocess.run(
+                ["git", "ls-files", "--cached", "--others", "--exclude-standard"],
+                cwd=self.working_dir,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode != 0:
+                return False
+
+            for line in result.stdout.splitlines():
+                if line.endswith(".py") or line.endswith(".rs"):
+                    return True
+            return False
+
+        except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError):
+            return False
+
+    def _is_multi_repo_parent(self) -> bool:
+        """Check if working_dir is a parent directory containing multiple git repos.
+
+        Detects directories like droidcraft_branches/ that contain sibling repos
+        (IsaacSim/.git, moelite/.git, etc.) to avoid catastrophic rglob scans.
+
+        Returns:
+            True if any immediate child directory contains a .git directory.
+        """
+        return any(self.working_dir.glob("*/.git"))
+
     def _find_python_files_fallback(self) -> list[Path]:
-        """Find Python files without git (for non-git directories like temp extractions)."""
+        """Find Python files without git (for non-git directories like temp extractions).
+
+        Detects multi-repo parent directories (e.g. droidcraft_branches/) by checking
+        for nested .git dirs in immediate children. If found, returns empty list to avoid
+        scanning hundreds of thousands of files across sibling repos.
+
+        Only uses rglob for genuine non-git directories like temp extraction dirs.
+        """
+        if self._is_multi_repo_parent():
+            return []
+
         ignored_dirs = {
             ".venv",
             "venv",
@@ -298,7 +347,14 @@ class GitTracker:
             raise GitOperationError(f"git ls-files failed: {e}") from e
 
     def _find_rust_files_fallback(self) -> list[Path]:
-        """Find Rust files without git (for non-git directories)."""
+        """Find Rust files without git (for non-git directories).
+
+        Detects multi-repo parent directories and returns empty list to avoid
+        scanning sibling repos. See _find_python_files_fallback for details.
+        """
+        if self._is_multi_repo_parent():
+            return []
+
         ignored_dirs = {
             "target",  # Cargo build output
             ".cargo",  # Cargo cache

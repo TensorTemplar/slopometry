@@ -1239,3 +1239,95 @@ sys.path += ["/third"]
         visitor.visit(tree)
 
         assert visitor.sys_path_manipulations == 3
+
+
+class TestSingleMethodClassDetection:
+    """Tests for single-method class smell detection."""
+
+    def test_visit_class_def__flags_single_method_class(self) -> None:
+        """A class with one non-init method and no data fields is flagged."""
+        code = """
+class Wrapper:
+    def __init__(self, value):
+        self.value = value
+
+    def execute(self):
+        return self.value
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+        assert visitor.single_method_classes == 1
+
+    def test_visit_class_def__skips_dataclass_with_single_property(self) -> None:
+        """A data class with annotated fields and one @property is NOT flagged."""
+        code = """
+class TokenUsage:
+    total_input: int = 0
+    total_output: int = 0
+
+    @property
+    def total(self) -> int:
+        return self.total_input + self.total_output
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+        assert visitor.single_method_classes == 0
+
+    def test_visit_class_def__flags_dataclass_with_single_non_property_method(self) -> None:
+        """A data class with fields but a regular (non-property) method IS flagged."""
+        code = """
+class Config:
+    name: str = ""
+
+    def reset(self):
+        self.name = ""
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+        assert visitor.single_method_classes == 1
+
+    def test_visit_class_def__skips_class_with_no_methods(self) -> None:
+        """A class with zero methods is not flagged (only exactly 1 triggers it)."""
+        code = """
+class Empty:
+    pass
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+        assert visitor.single_method_classes == 0
+
+    def test_visit_class_def__skips_class_with_multiple_methods(self) -> None:
+        """A class with 2+ methods is not flagged."""
+        code = """
+class Service:
+    def start(self): pass
+    def stop(self): pass
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+        assert visitor.single_method_classes == 0
+
+    def test_visit_class_def__skips_dataclass_with_multiple_properties(self) -> None:
+        """A data class with fields and multiple @property methods is NOT flagged."""
+        code = """
+class Metrics:
+    count: int = 0
+    total: float = 0.0
+
+    @property
+    def average(self) -> float:
+        return self.total / self.count if self.count else 0.0
+
+    @property
+    def is_empty(self) -> bool:
+        return self.count == 0
+"""
+        tree = ast.parse(code)
+        visitor = FeatureVisitor()
+        visitor.visit(tree)
+        assert visitor.single_method_classes == 0

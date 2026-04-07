@@ -16,7 +16,7 @@ from slopometry.core.models.complexity import ComplexityDelta, ExtendedComplexit
 from slopometry.core.models.display import LeaderboardEntry, SessionDisplayData
 from slopometry.core.models.experiment import ExperimentProgress, ExperimentRun, ExperimentStatus, FeatureBoundary
 from slopometry.core.models.hook import GitState, HookEvent, HookEventType, Project, ProjectSource, ToolType
-from slopometry.core.models.session import ContextCoverage, PlanEvolution, SessionStatistics
+from slopometry.core.models.session import BehavioralPatterns, ContextCoverage, PlanEvolution, SessionStatistics
 from slopometry.core.models.user_story import NextFeaturePrediction, UserStory, UserStoryEntry
 from slopometry.core.plan_analyzer import PlanAnalyzer
 from slopometry.core.settings import settings
@@ -478,6 +478,34 @@ class EventDatabase:
 
             return datetime.fromisoformat(row["start_time"]), row["total_events"]
 
+    def get_session_working_directory(self, session_id: str) -> str | None:
+        """Get the working directory for a session without computing full statistics.
+
+        This is a lightweight query used by the stop hook to enable early exits
+        (cache check, source file gate) before the expensive get_session_statistics call.
+
+        Args:
+            session_id: The session ID to look up.
+
+        Returns:
+            The working directory path string, or None if session not found.
+        """
+        with self._get_db_connection() as conn:
+            row = conn.execute(
+                """
+                SELECT working_directory
+                FROM hook_events
+                WHERE session_id = ?
+                ORDER BY sequence_number ASC
+                LIMIT 1
+                """,
+                (session_id,),
+            ).fetchone()
+
+            if not row or not row[0]:
+                return None
+            return row[0]
+
     def get_session_statistics(self, session_id: str) -> SessionStatistics | None:
         """Calculate statistics for a session using optimized SQL aggregations.
 
@@ -676,6 +704,38 @@ class EventDatabase:
             except Exception as e:
                 logger.debug(f"Failed to analyze OpenCode context coverage for session {session_id}: {e}")
 
+        behavioral_patterns = None
+        session_duration_minutes = 0.0
+        if stats_row["end_time"] and stats_row["start_time"]:
+            session_duration_minutes = (
+                datetime.fromisoformat(stats_row["end_time"]) - datetime.fromisoformat(stats_row["start_time"])
+            ).total_seconds() / 60.0
+
+        if transcript_path:
+            try:
+                from slopometry.core.behavioral_pattern_analyzer import analyze_behavioral_patterns
+
+                tp = Path(transcript_path)
+                if tp.exists():
+                    behavioral_patterns = analyze_behavioral_patterns(tp, session_duration_minutes)
+            except Exception as e:
+                logger.debug(f"Failed to analyze behavioral patterns for session {session_id}: {e}")
+        else:
+            try:
+                source = self.get_session_source(session_id)
+                if source == "opencode":
+                    oc_transcript = self.get_opencode_transcript(session_id)
+                    if oc_transcript:
+                        from slopometry.core.behavioral_pattern_analyzer import (
+                            analyze_opencode_behavioral_patterns,
+                        )
+
+                        behavioral_patterns = analyze_opencode_behavioral_patterns(
+                            oc_transcript, session_duration_minutes
+                        )
+            except Exception as e:
+                logger.debug(f"Failed to analyze OpenCode behavioral patterns for session {session_id}: {e}")
+
         return SessionStatistics(
             session_id=session_id,
             start_time=datetime.fromisoformat(stats_row["start_time"]),
@@ -697,6 +757,7 @@ class EventDatabase:
             plan_evolution=plan_evolution,
             compact_events=compact_events or [],
             context_coverage=context_coverage,
+            behavioral_patterns=behavioral_patterns,
         )
 
     def _get_session_complexity_metrics(
@@ -796,15 +857,16 @@ class EventDatabase:
                     continue
 
                 # POST_TOOL_USE events below
-                tool_input = metadata.get("tool_input") or metadata.get("args", {})
+                raw_input = metadata.get("tool_input") or metadata.get("args", {})
+                tool_input = raw_input if isinstance(raw_input, dict) else {}
                 tool_name_lower = tool_name.lower()
 
                 if tool_name_lower == "todowrite":
-                    # Skip if OpenCode TODO_UPDATED events exist (avoids duplicate)
                     if not has_todo_updated and tool_input:
                         analyzer.analyze_todo_write_event(tool_input, timestamp)
                 elif tool_name_lower == "taskcreate":
-                    tool_response = metadata.get("tool_response", {})
+                    raw_response = metadata.get("tool_response", {})
+                    tool_response = raw_response if isinstance(raw_response, dict) else {}
                     if tool_input:
                         analyzer.analyze_task_create_event(tool_input, tool_response, timestamp)
                 elif tool_name_lower == "taskupdate":
@@ -1803,6 +1865,89 @@ class EventDatabase:
                 ),
             )
             conn.commit()
+
+    def save_behavioral_patterns(
+        self,
+        session_id: str,
+        repository_path: str,
+        patterns: BehavioralPatterns,
+    ) -> None:
+        """Persist behavioral pattern rates for a session.
+
+        Uses INSERT OR IGNORE so repeated calls for the same session are idempotent.
+
+        Args:
+            session_id: The session identifier
+            repository_path: Resolved repository path for grouping
+            patterns: BehavioralPatterns with rates to persist
+        """
+
+        with self._get_db_connection() as conn:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO behavioral_pattern_history (
+                    session_id, repository_path, recorded_at,
+                    session_duration_minutes,
+                    ownership_dodging_count, ownership_dodging_rate,
+                    simple_workaround_count, simple_workaround_rate
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    session_id,
+                    repository_path,
+                    datetime.now().isoformat(),
+                    patterns.session_duration_minutes,
+                    patterns.ownership_dodging.count,
+                    patterns.ownership_dodging_rate,
+                    patterns.simple_workaround.count,
+                    patterns.simple_workaround_rate,
+                ),
+            )
+            conn.commit()
+
+    def get_behavioral_pattern_history(
+        self, repository_path: str, limit: int = 10, exclude_session_id: str | None = None
+    ) -> list[dict]:
+        """Get recent behavioral pattern rates for a repository.
+
+        Args:
+            repository_path: Repository path to query
+            limit: Maximum number of sessions to return
+            exclude_session_id: Optional session to exclude (e.g., current session)
+
+        Returns:
+            List of dicts with ownership_dodging_rate, simple_workaround_rate, session_id
+        """
+        with self._get_db_connection() as conn:
+            conn.row_factory = sqlite3.Row
+            if exclude_session_id:
+                rows = conn.execute(
+                    """
+                    SELECT session_id, ownership_dodging_rate, simple_workaround_rate,
+                           ownership_dodging_count, simple_workaround_count,
+                           session_duration_minutes
+                    FROM behavioral_pattern_history
+                    WHERE repository_path = ? AND session_id != ?
+                    ORDER BY recorded_at DESC
+                    LIMIT ?
+                    """,
+                    (repository_path, exclude_session_id, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT session_id, ownership_dodging_rate, simple_workaround_rate,
+                           ownership_dodging_count, simple_workaround_count,
+                           session_duration_minutes
+                    FROM behavioral_pattern_history
+                    WHERE repository_path = ?
+                    ORDER BY recorded_at DESC
+                    LIMIT ?
+                    """,
+                    (repository_path, limit),
+                ).fetchall()
+
+            return [dict(row) for row in rows]
 
     def save_leaderboard_entry(self, entry: LeaderboardEntry) -> None:
         """Save or update a leaderboard entry.

@@ -135,6 +135,10 @@ class FeedbackCacheState(BaseModel):
         default_factory=dict,
         description="Per-file content hashes (rel_path -> BLAKE2b hex) at time of last fire",
     )
+    commit_sha: str | None = Field(
+        default=None,
+        description="Commit SHA at time of last fire, enables cheap cache validation via single git rev-parse",
+    )
 
 
 class HookEvent(BaseModel):

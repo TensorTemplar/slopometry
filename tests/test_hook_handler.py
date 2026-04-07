@@ -11,17 +11,20 @@ import pytest
 from slopometry.core.database import SessionManager
 from slopometry.core.hook_handler import (
     _get_related_files_via_imports,
+    _has_analyzable_source_files,
     detect_event_type_from_parsed,
     extract_dev_guidelines_from_claude_md,
     format_code_smell_feedback,
     format_context_coverage_feedback,
     handle_hook,
+    handle_stop_event,
     parse_hook_input,
     scope_smells_for_session,
 )
 from slopometry.core.models.baseline import ImpactAssessment, ImpactCategory, ZScoreInterpretation
 from slopometry.core.models.complexity import ComplexityDelta, ExtendedComplexityMetrics
 from slopometry.core.models.hook import (
+    FeedbackCacheState,
     HookEventType,
     NotificationInput,
     PostToolUseInput,
@@ -1091,3 +1094,214 @@ class TestHookHandlerSmokeTests:
             result = handle_hook()
 
         assert result == 0
+
+
+class TestHasAnalyzableSourceFiles:
+    """Tests for the _has_analyzable_source_files early-exit gate."""
+
+    def test_has_analyzable_source_files__returns_true_for_python_repo(self, tmp_path):
+        """Returns True when git repo contains .py files."""
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=tmp_path, capture_output=True)
+        (tmp_path / "main.py").write_text("x = 1")
+        subprocess.run(["git", "add", "."], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=tmp_path, capture_output=True)
+
+        assert _has_analyzable_source_files(str(tmp_path)) is True
+
+    def test_has_analyzable_source_files__returns_true_for_rust_repo(self, tmp_path):
+        """Returns True when git repo contains .rs files."""
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=tmp_path, capture_output=True)
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "main.rs").write_text("fn main() {}")
+        subprocess.run(["git", "add", "."], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=tmp_path, capture_output=True)
+
+        assert _has_analyzable_source_files(str(tmp_path)) is True
+
+    def test_has_analyzable_source_files__returns_false_for_non_code_repo(self, tmp_path):
+        """Returns False when git repo has no .py or .rs files (e.g. hardware project)."""
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=tmp_path, capture_output=True)
+        (tmp_path / "schematic.kicad_sch").write_text("(kicad_sch ...)")
+        (tmp_path / "README.md").write_text("# Hardware project")
+        subprocess.run(["git", "add", "."], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=tmp_path, capture_output=True)
+
+        assert _has_analyzable_source_files(str(tmp_path)) is False
+
+    def test_has_analyzable_source_files__returns_false_for_non_git_dir(self, tmp_path):
+        """Returns False for non-git directories (no rglob fallback)."""
+        (tmp_path / "main.py").write_text("x = 1")  # Has Python, but not a git repo
+
+        assert _has_analyzable_source_files(str(tmp_path)) is False
+
+
+class TestHandleStopEventEarlyExits:
+    """Tests for handle_stop_event early exit paths."""
+
+    def test_handle_stop_event__returns_zero_when_stop_hook_active(self):
+        """Subagent stops (stop_hook_active=True) should exit immediately."""
+        parsed = SubagentStopInput(
+            session_id="test",
+            transcript_path="/tmp/t.jsonl",
+            stop_hook_active=True,
+        )
+        assert handle_stop_event("test", parsed) == 0
+
+    def test_handle_stop_event__returns_zero_when_no_working_directory(self):
+        """Returns 0 when session has no events (no working directory found)."""
+        parsed = StopInput(
+            session_id="nonexistent-session-xyz",
+            transcript_path="/tmp/t.jsonl",
+            stop_hook_active=False,
+        )
+        with patch("slopometry.core.hook_handler.EventDatabase") as mock_db_cls:
+            mock_db = mock_db_cls.return_value
+            mock_db.get_session_working_directory.return_value = None
+
+            assert handle_stop_event("nonexistent-session-xyz", parsed) == 0
+            mock_db.get_session_working_directory.assert_called_once_with("nonexistent-session-xyz")
+            # get_session_statistics should NOT have been called
+            mock_db.get_session_statistics.assert_not_called()
+
+    def test_handle_stop_event__fast_path_cache_hit_skips_expensive_computation(self):
+        """Fast-path: same commit SHA + no source modifications = instant return.
+
+        This is the critical optimization for large repos like k8s-hq where
+        _compute_working_tree_cache_key runs 9 git commands. The fast-path
+        uses only 1-2 git commands.
+        """
+        parsed = StopInput(
+            session_id="test-fast-cache",
+            transcript_path="/tmp/t.jsonl",
+            stop_hook_active=False,
+        )
+        with (
+            patch("slopometry.core.hook_handler.EventDatabase") as mock_db_cls,
+            patch("slopometry.core.hook_handler._load_feedback_cache") as mock_cache,
+            patch("slopometry.core.hook_handler._get_current_commit_sha") as mock_sha,
+            patch("slopometry.core.hook_handler._has_source_modifications") as mock_mods,
+            patch("slopometry.core.hook_handler._compute_working_tree_cache_key") as mock_full_key,
+        ):
+            mock_db = mock_db_cls.return_value
+            mock_db.get_session_working_directory.return_value = "/large/repo"
+
+            # Cache has commit_sha from previous run
+            mock_cache.return_value = FeedbackCacheState(last_key="old_key", file_hashes={}, commit_sha="abc123def")
+            mock_sha.return_value = "abc123def"  # Same commit
+            mock_mods.return_value = False  # No source modifications
+
+            assert handle_stop_event("test-fast-cache", parsed) == 0
+            # The expensive full key computation should NOT have been called
+            mock_full_key.assert_not_called()
+            mock_db.get_session_statistics.assert_not_called()
+
+    def test_handle_stop_event__falls_through_when_commit_sha_differs(self):
+        """When commit SHA changed, fast-path doesn't match, falls to full check."""
+        parsed = StopInput(
+            session_id="test-new-commit",
+            transcript_path="/tmp/t.jsonl",
+            stop_hook_active=False,
+        )
+        with (
+            patch("slopometry.core.hook_handler.EventDatabase") as mock_db_cls,
+            patch("slopometry.core.hook_handler._load_feedback_cache") as mock_cache,
+            patch("slopometry.core.hook_handler._get_current_commit_sha") as mock_sha,
+            patch("slopometry.core.hook_handler._has_analyzable_source_files") as mock_has_src,
+            patch("slopometry.core.hook_handler._compute_working_tree_cache_key"),
+        ):
+            mock_db = mock_db_cls.return_value
+            mock_db.get_session_working_directory.return_value = "/some/repo"
+
+            # Cache has old commit SHA
+            mock_cache.return_value = FeedbackCacheState(last_key="old_key", file_hashes={}, commit_sha="old_sha")
+            mock_sha.return_value = "new_sha"  # Different commit
+
+            # Make it bail at the source files check for simplicity
+            mock_has_src.return_value = False
+
+            assert handle_stop_event("test-new-commit", parsed) == 0
+            # _has_source_modifications should NOT be called (SHA mismatch short-circuits)
+            mock_has_src.assert_called_once()
+
+    def test_handle_stop_event__legacy_cache_without_commit_sha_falls_through(self):
+        """Caches from before the commit_sha field skip the fast-path gracefully."""
+        parsed = StopInput(
+            session_id="test-legacy-cache",
+            transcript_path="/tmp/t.jsonl",
+            stop_hook_active=False,
+        )
+        with (
+            patch("slopometry.core.hook_handler.EventDatabase") as mock_db_cls,
+            patch("slopometry.core.hook_handler._load_feedback_cache") as mock_cache,
+            patch("slopometry.core.hook_handler._has_analyzable_source_files") as mock_has_src,
+            patch("slopometry.core.hook_handler._compute_working_tree_cache_key"),
+        ):
+            mock_db = mock_db_cls.return_value
+            mock_db.get_session_working_directory.return_value = "/some/repo"
+
+            # Legacy cache: no commit_sha field (defaults to None)
+            mock_cache.return_value = FeedbackCacheState(last_key="old_key", file_hashes={})
+
+            # Make it bail at source files check
+            mock_has_src.return_value = False
+
+            assert handle_stop_event("test-legacy-cache", parsed) == 0
+            # Should fall through to _has_analyzable_source_files, not crash
+            mock_has_src.assert_called_once()
+
+    def test_handle_stop_event__full_cache_key_hit_after_fast_path_miss(self):
+        """When fast-path misses (source modifications) but full key matches, still returns 0."""
+        parsed = StopInput(
+            session_id="test-full-key-hit",
+            transcript_path="/tmp/t.jsonl",
+            stop_hook_active=False,
+        )
+        with (
+            patch("slopometry.core.hook_handler.EventDatabase") as mock_db_cls,
+            patch("slopometry.core.hook_handler._load_feedback_cache") as mock_cache,
+            patch("slopometry.core.hook_handler._get_current_commit_sha") as mock_sha,
+            patch("slopometry.core.hook_handler._has_source_modifications") as mock_mods,
+            patch("slopometry.core.hook_handler._has_analyzable_source_files") as mock_has_src,
+            patch("slopometry.core.hook_handler._compute_working_tree_cache_key") as mock_full_key,
+        ):
+            mock_db = mock_db_cls.return_value
+            mock_db.get_session_working_directory.return_value = "/some/repo"
+
+            mock_cache.return_value = FeedbackCacheState(last_key="full_key_abc", file_hashes={}, commit_sha="abc123")
+            mock_sha.return_value = "abc123"  # Same commit
+            mock_mods.return_value = True  # Has modifications — fast-path can't confirm
+
+            mock_has_src.return_value = True
+            mock_full_key.return_value = "full_key_abc"  # But full key matches
+
+            assert handle_stop_event("test-full-key-hit", parsed) == 0
+            mock_full_key.assert_called_once()
+            mock_db.get_session_statistics.assert_not_called()
+
+    def test_handle_stop_event__returns_zero_when_no_source_files(self):
+        """Returns 0 without computing stats when repo has no analyzable source files."""
+        parsed = StopInput(
+            session_id="test-no-source",
+            transcript_path="/tmp/t.jsonl",
+            stop_hook_active=False,
+        )
+        with (
+            patch("slopometry.core.hook_handler.EventDatabase") as mock_db_cls,
+            patch("slopometry.core.hook_handler._load_feedback_cache") as mock_cache,
+            patch("slopometry.core.hook_handler._has_analyzable_source_files") as mock_has_src,
+        ):
+            mock_db = mock_db_cls.return_value
+            mock_db.get_session_working_directory.return_value = "/some/hardware/project"
+
+            mock_cache.return_value = None  # No cache (first run)
+            mock_has_src.return_value = False  # No Python/Rust files
+
+            assert handle_stop_event("test-no-source", parsed) == 0
+            mock_db.get_session_statistics.assert_not_called()
+            mock_has_src.assert_called_once_with("/some/hardware/project")

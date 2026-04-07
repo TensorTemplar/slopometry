@@ -373,6 +373,47 @@ def test_get_session_basic_info__returns_none_for_unknown_session() -> None:
         assert result is None
 
 
+def test_get_session_working_directory__returns_first_event_working_dir() -> None:
+    """get_session_working_directory returns working_directory from the first event by sequence_number."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db = EventDatabase(db_path=Path(tmp_dir) / "test.db")
+
+        db.save_event(
+            HookEvent(
+                session_id="test-wd-session",
+                event_type=HookEventType.PRE_TOOL_USE,
+                sequence_number=1,
+                working_directory="/first/working/dir",
+                tool_name="Read",
+                tool_type=ToolType.READ,
+            )
+        )
+        db.save_event(
+            HookEvent(
+                session_id="test-wd-session",
+                event_type=HookEventType.POST_TOOL_USE,
+                sequence_number=2,
+                working_directory="/second/working/dir",
+                tool_name="Write",
+                tool_type=ToolType.WRITE,
+            )
+        )
+
+        result = db.get_session_working_directory("test-wd-session")
+
+        assert result == "/first/working/dir"
+
+
+def test_get_session_working_directory__returns_none_for_unknown_session() -> None:
+    """get_session_working_directory returns None for non-existent session."""
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        db = EventDatabase(db_path=Path(tmp_dir) / "test.db")
+
+        result = db.get_session_working_directory("nonexistent-session")
+
+        assert result is None
+
+
 def test_get_sessions_summary__returns_session_display_data() -> None:
     """get_sessions_summary returns SessionDisplayData with correct fields."""
     with tempfile.TemporaryDirectory() as tmp_dir:

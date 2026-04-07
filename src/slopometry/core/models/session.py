@@ -158,6 +158,88 @@ class SavedCompact(BaseModel):
     git_branch: str = Field(default="n/a", description="Git branch at compact time")
 
 
+class PatternMatch(BaseModel):
+    """A single behavioral pattern match found in an assistant message."""
+
+    pattern: str = Field(description="The phrase that matched (e.g., 'pre-existing')")
+    line_number: int = Field(description="Line number in transcript JSONL")
+    context_snippet: str = Field(description="Short text excerpt around the match (~120 chars)")
+    timestamp: datetime | None = Field(default=None, description="Timestamp of the assistant message")
+
+
+class BehavioralPatternCategory(BaseModel):
+    """Matches for a single behavioral pattern category."""
+
+    category_name: str = Field(description="Human-readable category name")
+    matches: list[PatternMatch] = Field(default_factory=list)
+
+    @property
+    def count(self) -> int:
+        """Number of matches in this category."""
+        return len(self.matches)
+
+
+class BehavioralPatterns(BaseModel):
+    """Behavioral patterns detected in assistant messages during a session."""
+
+    ownership_dodging: BehavioralPatternCategory = Field(
+        default_factory=lambda: BehavioralPatternCategory(category_name="Ownership Dodging")
+    )
+    simple_workaround: BehavioralPatternCategory = Field(
+        default_factory=lambda: BehavioralPatternCategory(category_name="Simple Workaround")
+    )
+    session_duration_minutes: float = Field(
+        default=0.0, description="Session duration in minutes for per-minute rate calculation"
+    )
+
+    @property
+    def ownership_dodging_rate(self) -> float:
+        """Ownership dodging occurrences per minute of session time."""
+        if self.session_duration_minutes <= 0:
+            return 0.0
+        return self.ownership_dodging.count / self.session_duration_minutes
+
+    @property
+    def simple_workaround_rate(self) -> float:
+        """Simple workaround occurrences per minute of session time."""
+        if self.session_duration_minutes <= 0:
+            return 0.0
+        return self.simple_workaround.count / self.session_duration_minutes
+
+    @property
+    def has_any(self) -> bool:
+        """Whether any behavioral patterns were detected."""
+        return self.ownership_dodging.count > 0 or self.simple_workaround.count > 0
+
+
+class BehavioralPatternTrend(BaseModel):
+    """Rolling average trend for a behavioral pattern category."""
+
+    avg_rate: float = Field(description="Average rate across recent sessions")
+    num_sessions: int = Field(description="Number of sessions in the rolling window")
+
+    def trend_label(self, current_rate: float) -> str:
+        """Return a trend indicator comparing current rate to average."""
+        if self.num_sessions == 0:
+            return ""
+        if current_rate > self.avg_rate * 1.5:
+            return "↑ above avg"
+        if current_rate < self.avg_rate * 0.5:
+            return "↓ below avg"
+        return "→ avg"
+
+
+class BehavioralPatternTrends(BaseModel):
+    """Rolling average trends for all behavioral pattern categories."""
+
+    ownership_dodging: BehavioralPatternTrend = Field(
+        default_factory=lambda: BehavioralPatternTrend(avg_rate=0.0, num_sessions=0)
+    )
+    simple_workaround: BehavioralPatternTrend = Field(
+        default_factory=lambda: BehavioralPatternTrend(avg_rate=0.0, num_sessions=0)
+    )
+
+
 class SessionStatistics(BaseModel):
     """Aggregated statistics for a Claude Code session."""
 
@@ -182,6 +264,9 @@ class SessionStatistics(BaseModel):
     transcript_path: str | None = None
     compact_events: list[CompactEvent] = Field(
         default_factory=list, description="Compacts that occurred during session"
+    )
+    behavioral_patterns: BehavioralPatterns | None = Field(
+        default=None, description="Behavioral pattern detection results (ownership dodging, workarounds)"
     )
 
 

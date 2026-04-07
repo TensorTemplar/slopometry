@@ -474,6 +474,40 @@ class Migration013AddSourceAndParentSession(Migration):
         conn.execute("CREATE INDEX IF NOT EXISTS idx_hook_events_parent_session ON hook_events(parent_session_id)")
 
 
+class Migration014AddBehavioralPatternHistory(Migration):
+    """Add table for tracking behavioral pattern rates per session."""
+
+    @property
+    def version(self) -> str:
+        return "014"
+
+    @property
+    def description(self) -> str:
+        return "Add behavioral_pattern_history table for per-session pattern rate tracking"
+
+    def up(self, conn: sqlite3.Connection) -> None:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS behavioral_pattern_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                repository_path TEXT NOT NULL,
+                recorded_at TEXT NOT NULL,
+                session_duration_minutes REAL NOT NULL,
+                ownership_dodging_count INTEGER NOT NULL DEFAULT 0,
+                ownership_dodging_rate REAL NOT NULL DEFAULT 0.0,
+                simple_workaround_count INTEGER NOT NULL DEFAULT 0,
+                simple_workaround_rate REAL NOT NULL DEFAULT 0.0,
+                UNIQUE(session_id)
+            )
+            """
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_behavioral_pattern_history_repo "
+            "ON behavioral_pattern_history(repository_path, recorded_at DESC)"
+        )
+
+
 class MigrationRunner:
     """Manages database migrations."""
 
@@ -493,6 +527,7 @@ class MigrationRunner:
             Migration011AddQPEWeightVersionColumn(),
             Migration012AddNFPObjectiveToExperimentRuns(),
             Migration013AddSourceAndParentSession(),
+            Migration014AddBehavioralPatternHistory(),
         ]
 
     @contextmanager
