@@ -10,7 +10,7 @@ from pathlib import Path
 import click
 from click.shell_completion import CompletionItem
 
-from slopometry.display.console import console
+from slopometry.display.console import console, styled_pager
 
 # Imports moved inside functions to optimize startup time
 
@@ -547,7 +547,7 @@ def current_impact(
             summary = CurrentImpactSummary.from_analysis(analysis)
             print(summary.model_dump_json(indent=2))
         elif pager:
-            with console.pager(styles=True):
+            with console.pager(pager=styled_pager, styles=True):
                 display_current_impact_analysis(
                     analysis, show_file_details=file_details, behavioral_trends=behavioral_trends
                 )

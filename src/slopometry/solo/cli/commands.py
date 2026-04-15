@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 import click
 
-from slopometry.display.console import console
+from slopometry.display.console import console, styled_pager
 
 if TYPE_CHECKING:
     from slopometry.core.models import ImpactAssessment, RepoBaseline, SessionStatistics
@@ -156,7 +156,7 @@ def list_sessions(limit: int, show_all: bool, pager: bool) -> None:
 
     table = create_sessions_table(sessions_data)
     if pager:
-        with console.pager(styles=True):
+        with console.pager(pager=styled_pager, styles=True):
             console.print(table)
     else:
         console.print(table)
@@ -209,7 +209,7 @@ def show(session_id: str, smell_details: bool, file_details: bool, pager: bool) 
             console.print(f"\n[dim]Analysis completed in {elapsed:.1f}s[/dim]")
 
     if pager:
-        with console.pager(styles=True):
+        with console.pager(pager=styled_pager, styles=True):
             _display()
     else:
         _display()
@@ -304,7 +304,7 @@ def latest(smell_details: bool, file_details: bool, pager: bool) -> None:
                 console.print(f"\n[dim]Analysis completed in {elapsed:.1f}s[/dim]")
 
         if pager:
-            with console.pager(styles=True):
+            with console.pager(pager=styled_pager, styles=True):
                 _display()
         else:
             _display()
@@ -748,10 +748,9 @@ def save_transcript(session_id: str | None, output_dir: str, yes: bool) -> None:
                 try:
                     meta = json.loads(row["metadata"])
                     model_id = meta.get("model_id")
-                except (json.JSONDecodeError, ValueError):
-                    pass
+                except (json.JSONDecodeError, ValueError) as e:
+                    logger.debug(f"Failed to parse MessageUpdated metadata for session {session_id}: {e}")
 
-            # Extract opencode_version from Stop event metadata
             stop_row = conn.execute(
                 """
                 SELECT metadata FROM hook_events
@@ -764,8 +763,8 @@ def save_transcript(session_id: str | None, output_dir: str, yes: bool) -> None:
                 try:
                     stop_meta = json.loads(stop_row["metadata"])
                     opencode_version = stop_meta.get("opencode_version")
-                except (json.JSONDecodeError, ValueError):
-                    pass
+                except (json.JSONDecodeError, ValueError) as e:
+                    logger.debug(f"Failed to parse Stop event metadata for session {session_id}: {e}")
 
         metadata = SessionMetadata(
             session_id=stats.session_id,
