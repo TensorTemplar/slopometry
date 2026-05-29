@@ -74,7 +74,12 @@ class FeatureStats(BaseModel):
     swallowed_exception_count: int = SmellField(
         label="Swallowed Exceptions",
         files_field="swallowed_exception_files",
-        guidance="Request explicit user feedback on all swallowed exceptions. Make sure to always log or print the expectation mismatch",
+        guidance="Request explicit user feedback on all swallowed exceptions. Make sure to always log or print the expectation mismatch. If a silent handler is genuinely correct, mark it `# slopometry: allow-silent`",
+    )
+    acknowledged_silent_except_count: int = SmellField(
+        label="Acknowledged Silent Excepts",
+        files_field="acknowledged_silent_except_files",
+        guidance="Silent except handlers marked `# slopometry: allow-silent`. Fine individually; an increase is blocking and must be justified per new handler",
     )
     type_ignore_count: int = SmellField(
         label="Type Ignores",
@@ -123,6 +128,7 @@ class FeatureStats(BaseModel):
     nonempty_init_files: set[str] = Field(default_factory=set)
     test_skip_files: set[str] = Field(default_factory=set)
     swallowed_exception_files: set[str] = Field(default_factory=set)
+    acknowledged_silent_except_files: set[str] = Field(default_factory=set)
     type_ignore_files: set[str] = Field(default_factory=set)
     dynamic_execution_files: set[str] = Field(default_factory=set)
     single_method_class_files: set[str] = Field(default_factory=set)
@@ -144,6 +150,24 @@ def _count_loc(content: str) -> tuple[int, int]:
     return total, code
 
 
+def _find_allow_silent_lines(content: str) -> set[int]:
+    """Return source line numbers carrying a `# slopometry: allow-silent` marker.
+
+    The marker downgrades a silent except handler from a swallowed exception to an
+    acknowledged (intentional) one. Detected via tokenize so it matches only real
+    comment tokens, not the same text inside a string literal.
+    """
+    marker_pattern = re.compile(r"#\s*slopometry:\s*allow-silent\b", re.IGNORECASE)
+    lines: set[int] = set()
+    try:
+        for tok in tokenize.generate_tokens(io.StringIO(content).readline):
+            if tok.type == tokenize.COMMENT and marker_pattern.search(tok.string):
+                lines.add(tok.start[0])
+    except tokenize.TokenError as e:
+        logger.debug(f"Tokenize error during allow-silent marker scan: {e}")
+    return lines
+
+
 def _analyze_single_file_features(file_path: Path) -> FeatureStats | None:
     """Analyze a single Python file for feature statistics.
 
@@ -156,7 +180,7 @@ def _analyze_single_file_features(file_path: Path) -> FeatureStats | None:
         logger.debug(f"Skipping unparseable file {file_path}: {e}")
         return None
 
-    visitor = FeatureVisitor()
+    visitor = FeatureVisitor(allow_silent_lines=_find_allow_silent_lines(content))
     visitor.visit(tree)
     ast_stats = visitor.stats
 
@@ -363,7 +387,16 @@ class PythonFeatureAnalyzer:
 class FeatureVisitor(ast.NodeVisitor):
     """AST visitor to collect feature usage statistics."""
 
-    def __init__(self):
+    def __init__(self, allow_silent_lines: set[int] | None = None):
+        """Initialize the visitor.
+
+        Args:
+            allow_silent_lines: Source line numbers carrying a `# slopometry: allow-silent`
+                marker. A silent except handler whose line span contains such a line is
+                counted as an acknowledged (intentional) silent handler rather than a
+                swallowed exception. Defaults to none (every silent handler is swallowed).
+        """
+        self._allow_silent_lines = allow_silent_lines or set()
         self.functions = 0
         self.classes = 0
         self.docstrings = 0
@@ -382,6 +415,7 @@ class FeatureVisitor(ast.NodeVisitor):
         self.hasattr_getattr_calls = 0
         self.test_skips = 0
         self.swallowed_exceptions = 0
+        self.acknowledged_silent_excepts = 0
         self.dynamic_executions = 0
         # Abstraction smells
         self.single_method_classes = 0
@@ -409,6 +443,7 @@ class FeatureVisitor(ast.NodeVisitor):
             hasattr_getattr_count=self.hasattr_getattr_calls,
             test_skip_count=self.test_skips,
             swallowed_exception_count=self.swallowed_exceptions,
+            acknowledged_silent_except_count=self.acknowledged_silent_excepts,
             dynamic_execution_count=self.dynamic_executions,
             single_method_class_count=self.single_method_classes,
             deep_inheritance_count=self.deep_inheritances,
@@ -741,38 +776,57 @@ class FeatureVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_Try(self, node: ast.Try) -> None:
-        """Detect swallowed exceptions (except blocks with only pass/continue/empty)."""
+        """Classify silent except handlers as swallowed or acknowledged.
+
+        A handler that does no processing of any kind (only pass/continue/break/
+        ellipsis/bare-string) is silent. A silent handler marked with a
+        `# slopometry: allow-silent` comment is counted as acknowledged (intentional);
+        an unmarked silent handler is a swallowed exception.
+        """
         for handler in node.handlers:
-            if self._is_swallowed_exception(handler):
+            if not self._is_silent_handler(handler):
+                continue
+            if self._is_marked_allow_silent(handler):
+                self.acknowledged_silent_excepts += 1
+            else:
                 self.swallowed_exceptions += 1
         self.generic_visit(node)
 
-    def _is_swallowed_exception(self, handler: ast.ExceptHandler) -> bool:
-        """Check if exception handler swallows without observable side effects.
+    def _is_marked_allow_silent(self, handler: ast.ExceptHandler) -> bool:
+        """Check whether a `# slopometry: allow-silent` marker falls within the handler.
 
-        A handler is swallowed if ALL statements are inert (pass, continue,
-        break, assignments) and NONE are observable (logging, print, raise,
-        return, function calls, yield).
+        Matches any marker line in the handler's line span (the `except` line through
+        its last body line), covering both a trailing comment on the `except` line and
+        a comment on the suppressing statement.
+        """
+        if not self._allow_silent_lines:
+            return False
+        end_lineno = handler.end_lineno if handler.end_lineno is not None else handler.lineno
+        return any(handler.lineno <= line <= end_lineno for line in self._allow_silent_lines)
+
+    def _is_silent_handler(self, handler: ast.ExceptHandler) -> bool:
+        """Check if an exception handler does no processing of any kind.
+
+        Silent means EVERY statement is inert (pass, continue, break, a bare
+        ellipsis, or a bare string literal) and none performs any processing —
+        no logging, calls, raise, return, yield, OR assignments. Assigning a
+        fallback value or incrementing a counter IS processing, so such handlers
+        are not silent.
         """
         if not handler.body:
             return True
 
-        for stmt in handler.body:
-            if not self._is_inert_statement(stmt):
-                return False
-
-        return True
+        return all(self._is_inert_statement(stmt) for stmt in handler.body)
 
     def _is_inert_statement(self, stmt: ast.stmt) -> bool:
-        """Check if a statement has no observable side effects.
+        """Check if a statement performs no processing whatsoever.
 
-        Inert statements: pass, continue, break, simple assignments,
-        augmented assignments (+=, etc.), type annotations, and bare
-        constants (Ellipsis, string literals).
+        Inert statements are limited to control-flow no-ops and bare literals:
+        pass, continue, break, a bare Ellipsis, or a bare string literal.
+        Assignments (including augmented and annotated) are NOT inert — they
+        record state or recover a fallback value, which counts as handling.
         """
         if isinstance(stmt, ast.Pass | ast.Continue | ast.Break):
-            return True
-        if isinstance(stmt, ast.Assign | ast.AugAssign | ast.AnnAssign):
             return True
         if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant):
             value = stmt.value.value

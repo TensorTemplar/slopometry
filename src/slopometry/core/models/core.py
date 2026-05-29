@@ -44,6 +44,7 @@ class SmellCounts(BaseModel):
     orphan_comment: int = 0
     untracked_todo: int = 0
     swallowed_exception: int = 0
+    acknowledged_silent_except: int = 0
     test_skip: int = 0
     type_ignore: int = 0
     dynamic_execution: int = 0
@@ -126,6 +127,7 @@ class ComplexityDelta(BaseModel):
     nonempty_init_change: int = 0
     test_skip_change: int = 0
     swallowed_exception_change: int = 0
+    acknowledged_silent_except_change: int = 0
     type_ignore_change: int = 0
     dynamic_execution_change: int = 0
     single_method_class_change: int = 0
@@ -211,6 +213,10 @@ class ExtendedComplexityMetrics(ComplexityMetrics):
         default=0,
         description="BLOCKING: You MUST present a table with columns [Location | Purpose | Justification ] for each and ask user to confirm silent failure is acceptable",
     )
+    acknowledged_silent_except_count: int = Field(
+        default=0,
+        description="Silent except handlers explicitly marked `# slopometry: allow-silent`. An increase is blocking — confirm newly-suppressed handlers are justified.",
+    )
     type_ignore_count: int = Field(
         default=0,
         description="Review type: ignore comments - consider fixing the underlying type issue",
@@ -255,6 +261,9 @@ class ExtendedComplexityMetrics(ComplexityMetrics):
     nonempty_init_files: list[str] = Field(default_factory=list, description="Files with nonempty __init__")
     test_skip_files: list[str] = Field(default_factory=list, description="Files with test skips")
     swallowed_exception_files: list[str] = Field(default_factory=list, description="Files with swallowed exceptions")
+    acknowledged_silent_except_files: list[str] = Field(
+        default_factory=list, description="Files with `# slopometry: allow-silent` handlers"
+    )
     type_ignore_files: list[str] = Field(default_factory=list, description="Files with type: ignore")
     dynamic_execution_files: list[str] = Field(default_factory=list, description="Files with eval/exec/compile")
     single_method_class_files: list[str] = Field(default_factory=list, description="Files with single-method classes")

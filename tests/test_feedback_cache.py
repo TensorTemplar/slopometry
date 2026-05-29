@@ -340,61 +340,136 @@ class TestModifiedPythonFilesDetection:
             assert modified == []
 
 
+def _add_submodule(main_repo: Path, sub_repo: Path, rel_path: str) -> None:
+    """Add sub_repo as a submodule of main_repo at rel_path.
+
+    Uses protocol.file.allow=always to permit local-path submodule URLs
+    (disabled by default on recent git).
+    """
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            str(sub_repo),
+            rel_path,
+        ],
+        cwd=main_repo,
+        capture_output=True,
+        check=True,
+    )
+    _commit_all(main_repo, "add submodule")
+
+
 class TestSubmoduleHandling:
-    """Tests for git submodule handling."""
+    """Tests that nothing inside a git submodule can invalidate the parent's cache.
 
-    def test_feedback_cache__submodule_changes_dont_invalidate(self):
-        """Verify submodule changes don't cause cache misses.
+    The stop-hook cache key must be stable against every kind of submodule
+    state change. Submodule code belongs to the submodule's own repository
+    and is not part of the parent project's source tree.
+    """
 
-        Note: This test creates a real submodule setup to verify the behavior.
-        """
+    def _build_main_with_submodule(self, tmppath: Path) -> tuple[Path, Path]:
+        """Set up a parent repo with one submodule containing a python file."""
+        main_repo = tmppath / "main"
+        main_repo.mkdir()
+        _init_git_repo(main_repo)
+        (main_repo / "main.py").write_text("def main(): pass")
+        _commit_all(main_repo)
+
+        sub_repo = tmppath / "subrepo"
+        sub_repo.mkdir()
+        _init_git_repo(sub_repo)
+        (sub_repo / "sub.py").write_text("def sub(): pass")
+        _commit_all(sub_repo)
+
+        _add_submodule(main_repo, sub_repo, "vendor/sub")
+        return main_repo, sub_repo
+
+    def test_feedback_cache__edit_inside_submodule_does_not_invalidate(self):
+        """A tracked .py edited inside a submodule must not invalidate the parent cache."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            tmppath = Path(tmpdir)
-
-            # Create main repo
-            main_repo = tmppath / "main"
-            main_repo.mkdir()
-            _init_git_repo(main_repo)
-            (main_repo / "main.py").write_text("def main(): pass")
-            _commit_all(main_repo)
-
-            # Create submodule repo
-            sub_repo = tmppath / "subrepo"
-            sub_repo.mkdir()
-            _init_git_repo(sub_repo)
-            (sub_repo / "sub.py").write_text("def sub(): pass")
-            _commit_all(sub_repo)
-
-            # Add submodule to main repo
-            subprocess.run(
-                ["git", "submodule", "add", str(sub_repo), "vendor/sub"],
-                cwd=main_repo,
-                capture_output=True,
-            )
-            _commit_all(main_repo, "add submodule")
+            main_repo, _sub = self._build_main_with_submodule(Path(tmpdir))
 
             key_before = _compute_working_tree_cache_key(str(main_repo))
 
-            # Update submodule (creates a change in main repo's git status)
+            (main_repo / "vendor" / "sub" / "sub.py").write_text("def sub(): return 99")
+
+            key_after = _compute_working_tree_cache_key(str(main_repo))
+            assert key_before == key_after
+
+    def test_feedback_cache__submodule_head_move_does_not_invalidate(self):
+        """A submodule HEAD pointer move (dirty gitlink) must not invalidate the parent cache."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            main_repo, _sub = self._build_main_with_submodule(Path(tmpdir))
+            sub_checkout = main_repo / "vendor" / "sub"
+            # git submodule add creates a worktree whose config does not inherit the
+            # source repo's local settings; set identity AND disable signing so the
+            # commit below can be authored on machines with commit.gpgsign=true.
+            for key, value in (
+                ("user.email", "test@example.com"),
+                ("user.name", "Test User"),
+                ("commit.gpgsign", "false"),
+            ):
+                subprocess.run(
+                    ["git", "config", "--local", key, value],
+                    cwd=sub_checkout,
+                    capture_output=True,
+                    check=True,
+                )
+
+            key_before = _compute_working_tree_cache_key(str(main_repo))
+
             subprocess.run(
-                ["git", "-C", "vendor/sub", "fetch", "--all"],
-                cwd=main_repo,
+                ["git", "commit", "--allow-empty", "-m", "bump"],
+                cwd=sub_checkout,
                 capture_output=True,
+                check=True,
             )
 
             key_after = _compute_working_tree_cache_key(str(main_repo))
+            assert key_before == key_after
 
-            assert key_before == key_after, "Submodule changes should not invalidate cache"
+    def test_feedback_cache__submodule_recurse_config_does_not_invalidate(self):
+        """submodule.recurse=true on the parent must not leak submodule diffs into cache."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            main_repo, _sub = self._build_main_with_submodule(Path(tmpdir))
+            subprocess.run(
+                ["git", "config", "--local", "submodule.recurse", "true"],
+                cwd=main_repo,
+                capture_output=True,
+                check=True,
+            )
+
+            key_before = _compute_working_tree_cache_key(str(main_repo))
+            (main_repo / "vendor" / "sub" / "sub.py").write_text("def sub(): return 1")
+            key_after = _compute_working_tree_cache_key(str(main_repo))
+
+            assert key_before == key_after
+
+    def test_feedback_cache__parent_edit_still_invalidates_with_submodule(self):
+        """Sanity: real parent-source edits must still invalidate when submodules exist."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            main_repo, _sub = self._build_main_with_submodule(Path(tmpdir))
+
+            key_before = _compute_working_tree_cache_key(str(main_repo))
+            (main_repo / "main.py").write_text("def main(): return 42")
+            key_after = _compute_working_tree_cache_key(str(main_repo))
+
+            assert key_before != key_after
 
 
 class TestNewUntrackedFiles:
     """Tests for new untracked Python file handling."""
 
-    def test_feedback_cache__new_untracked_python_files_dont_invalidate(self):
-        """Verify that new untracked Python files don't invalidate cache.
+    def test_feedback_cache__new_untracked_python_files_invalidate(self):
+        """Verify that a new untracked Python file DOES invalidate the cache.
 
-        New untracked files won't appear in git diff, so the working tree
-        cache key remains unchanged. Only tracked file changes matter.
+        Creating a source file is a code change. The content key is built from
+        `git ls-files --cached --others`, which includes untracked (non-ignored)
+        source files, so the key changes and the hook fires.
         """
         with tempfile.TemporaryDirectory() as tmpdir:
             tmppath = Path(tmpdir)
@@ -409,7 +484,110 @@ class TestNewUntrackedFiles:
 
             key_after = _compute_working_tree_cache_key(str(tmppath))
 
-            assert key_before == key_after, "Untracked files don't appear in git diff"
+            assert key_before != key_after, "A new untracked source file is a code change"
+
+    def test_feedback_cache__new_untracked_non_source_file_does_not_invalidate(self):
+        """A new untracked non-source file (docs/config) must not invalidate the cache."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            _init_git_repo(tmppath)
+            (tmppath / "existing.py").write_text("def existing(): pass")
+            _commit_all(tmppath)
+
+            key_before = _compute_working_tree_cache_key(str(tmppath))
+            (tmppath / "NOTES.md").write_text("# scratch notes")
+            key_after = _compute_working_tree_cache_key(str(tmppath))
+
+            assert key_before == key_after, "Untracked non-source files are not code changes"
+
+
+class TestCommitInvariance:
+    """Tests that the firing key is a pure function of source *content*.
+
+    Committing, switching branches, pulling, or otherwise moving HEAD does not
+    change source bytes, so it must not change the key. This is the core fix for
+    the hook firing on commits and other non-source git activity.
+    """
+
+    def test_compute_working_tree_cache_key__commit_of_identical_source_does_not_change_key(self):
+        """Committing already-written code must not change the key (no re-fire)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            _init_git_repo(tmppath)
+            (tmppath / "app.py").write_text("def app(): pass")
+            _commit_all(tmppath)
+
+            # Edit the file (uncommitted) — this is a real change
+            (tmppath / "app.py").write_text("def app(): return 42")
+            key_dirty = _compute_working_tree_cache_key(str(tmppath))
+
+            # Commit that exact content — bytes are unchanged, only HEAD moves
+            _commit_all(tmppath, "commit the edit")
+            key_committed = _compute_working_tree_cache_key(str(tmppath))
+
+            assert key_dirty == key_committed, "Committing identical source must not change the key"
+
+    def test_compute_working_tree_cache_key__docs_only_commit_does_not_change_key(self):
+        """A commit that touches only non-source files must not change the key."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            _init_git_repo(tmppath)
+            (tmppath / "app.py").write_text("def app(): pass")
+            (tmppath / "README.md").write_text("# old")
+            _commit_all(tmppath)
+
+            key_before = _compute_working_tree_cache_key(str(tmppath))
+
+            (tmppath / "README.md").write_text("# new and improved")
+            _commit_all(tmppath, "docs only")
+
+            key_after = _compute_working_tree_cache_key(str(tmppath))
+
+            assert key_before == key_after, "A docs-only commit must not change the key"
+
+    def test_compute_working_tree_cache_key__branch_switch_to_identical_source_does_not_change_key(self):
+        """Switching to a branch with identical source content must not change the key."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            _init_git_repo(tmppath)
+            (tmppath / "app.py").write_text("def app(): pass")
+            _commit_all(tmppath)
+
+            key_main = _compute_working_tree_cache_key(str(tmppath))
+
+            # Capture the default branch name (git init may produce main or master)
+            original_branch = subprocess.run(
+                ["git", "branch", "--show-current"], cwd=tmppath, capture_output=True, text=True, check=True
+            ).stdout.strip()
+
+            # Create a branch with a non-source-only difference, then switch back
+            subprocess.run(["git", "checkout", "-q", "-b", "feature"], cwd=tmppath, capture_output=True, check=True)
+            (tmppath / "CHANGELOG.md").write_text("- nothing")
+            _commit_all(tmppath, "docs on feature")
+
+            subprocess.run(["git", "checkout", "-q", original_branch], cwd=tmppath, capture_output=True, check=True)
+            key_back = _compute_working_tree_cache_key(str(tmppath))
+
+            assert key_main == key_back, "Branch metadata changes must not change the key"
+
+    def test_compute_working_tree_cache_key__committed_source_edit_then_revert_round_trips_key(self):
+        """Editing+committing then reverting the source returns to the original key."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            _init_git_repo(tmppath)
+            (tmppath / "app.py").write_text("def app(): pass")
+            _commit_all(tmppath)
+            key_original = _compute_working_tree_cache_key(str(tmppath))
+
+            (tmppath / "app.py").write_text("def app(): return 1")
+            _commit_all(tmppath, "change")
+            key_changed = _compute_working_tree_cache_key(str(tmppath))
+
+            (tmppath / "app.py").write_text("def app(): pass")
+            key_reverted = _compute_working_tree_cache_key(str(tmppath))
+
+            assert key_original != key_changed, "Real source change must change the key"
+            assert key_original == key_reverted, "Reverting source content returns to the original key"
 
 
 class TestBuildArtifactFiltering:

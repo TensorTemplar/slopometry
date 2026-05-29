@@ -1,6 +1,5 @@
 """Hook handler script invoked by Claude Code for each event."""
 
-import hashlib
 import json
 import logging
 import os
@@ -291,22 +290,38 @@ def _get_current_commit_sha(working_directory: str) -> str | None:
     return None
 
 
-def _has_source_modifications(working_directory: str) -> bool:
-    """Check if any source files have staged or unstaged changes.
+def _has_source_changes(working_directory: str) -> bool:
+    """Check whether the working tree has any in-scope source delta vs the committed state.
 
-    Runs two targeted git diff commands (~10ms each) instead of the full
-    working tree state computation (8-9 git commands). Only checks .py and .rs
-    file patterns.
+    Used by the fast-path: when the commit SHA is unchanged and this returns False,
+    the source content is provably identical to the last fire and the hook can stay
+    silent without recomputing the full content key.
+
+    Covers two kinds of change so that the fast-path never suppresses a genuine fire:
+      1. Tracked modifications — `git diff --quiet -- *.py *.rs` (staged + unstaged),
+         cheapest first. Only when git reports a diff do we enumerate via
+         `_get_modified_source_files_from_git` to drop false positives from ignored
+         dirs (`__pycache__/*.py`, `.venv/site-packages/*.py`, …) and submodules.
+      2. Untracked source files — `git ls-files --others` (filtered). A brand-new
+         `.py`/`.rs` file is invisible to `git diff`, so without this check the
+         fast-path would silently swallow the fire for newly created source.
+
+    Submodule contents are excluded everywhere (--ignore-submodules=all on diffs;
+    `git ls-files` never descends into submodules), so dirty submodules, HEAD pointer
+    moves, and user git configs (submodule.recurse, diff.submodule=log) cannot trip it.
 
     Args:
         working_directory: Path to the git working directory.
 
     Returns:
-        True if any source files are modified (staged or unstaged).
+        True if any non-ignored source files are modified or newly added.
     """
+    wt = WorkingTreeStateCalculator(working_directory, languages=None)
+
+    any_diff = False
     for diff_args in [
-        ["git", "diff", "--quiet", "--", "*.py", "*.rs"],
-        ["git", "diff", "--cached", "--quiet", "--", "*.py", "*.rs"],
+        ["git", "diff", "--quiet", "--ignore-submodules=all", "--", "*.py", "*.rs"],
+        ["git", "diff", "--cached", "--quiet", "--ignore-submodules=all", "--", "*.py", "*.rs"],
     ]:
         try:
             result = subprocess.run(
@@ -316,19 +331,26 @@ def _has_source_modifications(working_directory: str) -> bool:
                 timeout=10,
             )
             if result.returncode != 0:
-                return True
+                any_diff = True
+                break
         except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError):
             return True
 
-    return False
+    if any_diff and wt._get_modified_source_files_from_git():
+        return True
+
+    return bool(wt.get_untracked_source_files())
 
 
 def _compute_working_tree_cache_key(working_directory: str) -> str:
-    """Compute a cache key based solely on working tree state.
+    """Compute a commit-invariant cache key from working-tree source content.
 
-    The cache key depends only on the git commit and source file contents,
-    making it stable across sessions and independent of smell analysis output.
-    This ensures the hook fires exactly once per code state change.
+    The key is a digest over the current content of every non-ignored,
+    non-submodule .py/.rs file in the working tree (tracked + untracked). It
+    deliberately does NOT include the commit SHA: committing already-written
+    code, switching branches, pulling, rebasing, or merging does not change
+    source *content* and must not re-fire the hook. The key changes iff source
+    bytes change — including the addition of a new untracked source file.
 
     Args:
         working_directory: Path to the working directory
@@ -336,16 +358,8 @@ def _compute_working_tree_cache_key(working_directory: str) -> str:
     Returns:
         Cache key string (BLAKE2b hex digest)
     """
-    tracker = GitTracker(Path(working_directory))
-    git_state = tracker.get_git_state()
-    commit_sha = git_state.commit_sha or "unknown"
-
     wt_calculator = WorkingTreeStateCalculator(working_directory, languages=None)
-    has_source_changes = bool(wt_calculator._get_modified_source_files_from_git())
-    working_tree_hash = wt_calculator.calculate_working_tree_hash(commit_sha) if has_source_changes else "clean"
-
-    key_parts = f"{commit_sha}:{working_tree_hash}"
-    return hashlib.blake2b(key_parts.encode(), digest_size=8).hexdigest()
+    return wt_calculator.calculate_source_content_key()
 
 
 def _load_feedback_cache(working_directory: str) -> FeedbackCacheState | None:
@@ -399,6 +413,32 @@ def _has_analyzable_source_files(working_directory: str) -> bool:
     return tracker.has_analyzable_source_files()
 
 
+def _resolve_working_directory(stored_wd: str | None) -> str | None:
+    """Resolve the effective working_directory for a stop event.
+
+    `stored_wd` is the working_directory recorded on the FIRST event of the
+    session. If the user renamed or moved the repo since that event, the
+    stored path no longer points to the live repo — falling through to it
+    would read/write the cache at a stale location and every Stop would
+    invalidate against an absent cache. Fall back to `os.getcwd()` (the
+    hook subprocess inherits Claude Code's cwd, which is the live project
+    root) whenever the stored path is set but doesn't resolve to an
+    existing directory.
+
+    `stored_wd is None` means the session has no recorded events at all
+    (unknown session_id); callers should bail in that case, so we
+    propagate the None rather than substituting cwd.
+    """
+    if stored_wd is None:
+        return None
+    if Path(stored_wd).is_dir():
+        return stored_wd
+    cwd = os.getcwd()
+    if Path(cwd).is_dir():
+        return cwd
+    return stored_wd
+
+
 def handle_stop_event(session_id: str, parsed_input: "StopInput | SubagentStopInput") -> int:
     """Handle Stop events with code smell feedback and optional complexity analysis.
 
@@ -409,12 +449,16 @@ def handle_stop_event(session_id: str, parsed_input: "StopInput | SubagentStopIn
     Feedback is cached - if the same feedback would be shown twice without code changes,
     the second invocation returns silently.
 
+    The firing key is a commit-invariant digest of working-tree source content
+    (see _compute_working_tree_cache_key): it fires only when .py/.rs bytes change,
+    never on commits, branch switches, pulls, or non-source churn.
+
     Optimized execution order (cheapest checks first):
       1. stop_hook_active check              (<1ms)
       2. get_session_working_directory        (<1ms, single SQL)
-      3. cheap cache fast-path               (<20ms, 1-2 git commands)
-      4. analyzable source files gate         (<1s, git ls-files)
-      5. full cache key computation           (only on cache miss)
+      3. cheap cache fast-path               (commit SHA hint + source-delta probe)
+      4. analyzable source files gate         (git ls-files)
+      5. full content key computation         (only on fast-path miss)
       6. get_session_statistics               (only when needed)
       7. use stats.complexity_metrics         (no redundant call)
 
@@ -429,17 +473,20 @@ def handle_stop_event(session_id: str, parsed_input: "StopInput | SubagentStopIn
         return 0
 
     db = EventDatabase()
-    working_directory = db.get_session_working_directory(session_id)
+    working_directory = _resolve_working_directory(db.get_session_working_directory(session_id))
     if not working_directory:
         return 0
 
-    # Fast-path cache check: compare commit SHA (1 git command) + check for
-    # source modifications (1-2 git commands). Avoids the full 9-command
-    # _compute_working_tree_cache_key on the common "nothing changed" path.
+    # Fast-path cache check: when the commit SHA is unchanged AND the source tree
+    # has no delta (no tracked modifications, no new untracked source files), the
+    # content key is provably identical to the last fire — skip the full key
+    # computation. commit_sha here is only a cheap hint; it is NOT part of the key,
+    # so a bare commit of unchanged content takes the full-key path below and
+    # correctly matches last_key (silent) instead of re-firing.
     cached_state = _load_feedback_cache(working_directory)
     if cached_state is not None and cached_state.commit_sha is not None:
         current_sha = _get_current_commit_sha(working_directory)
-        if current_sha == cached_state.commit_sha and not _has_source_modifications(working_directory):
+        if current_sha == cached_state.commit_sha and not _has_source_changes(working_directory):
             return 0
 
     if not _has_analyzable_source_files(working_directory):
@@ -672,6 +719,8 @@ def scope_smells_for_session(
         List of ScopedSmell instances classified for this session
     """
     blocking_smell_names = {"test_skip", "swallowed_exception"}
+    # REASON: acknowledged_silent_except is acceptable individually but blocks on INCREASE — an `# slopometry: allow-silent` marker moves a handler out of swallowed_exception, so a rising marker count is the anti-reward-hack signal that new suppressions need justifying.
+    block_on_increase_names = {"acknowledged_silent_except"}
 
     related_via_imports: set[str] = set()
     if edited_files:
@@ -708,7 +757,9 @@ def scope_smells_for_session(
         change = smell_changes.get(smell.name, 0)
         guidance = smell.definition.guidance
 
-        if smell.name in blocking_smell_names and edited_files:
+        is_blocking_smell = smell.name in blocking_smell_names or (smell.name in block_on_increase_names and change > 0)
+
+        if is_blocking_smell and edited_files:
             related_files = [f for f in smell.files if _is_file_related_to_edits(f, edited_files, related_via_imports)]
             unrelated_files = [f for f in smell.files if f not in related_files]
 

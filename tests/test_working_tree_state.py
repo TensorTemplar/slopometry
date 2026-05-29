@@ -322,6 +322,43 @@ def test_get_files_changed_since__empty_when_all_preexisting():
         assert session_edits == set()
 
 
+def test_get_modified_source_files_from_git__excludes_submodule_internal_edits(tmp_path):
+    """Submodule-internal .py edits must not appear in the parent's modified-files list.
+
+    The parent's cache key is derived from this output, so any submodule leak
+    here translates directly into repeated stop-hook feedback firing.
+    """
+    sub = tmp_path / "subrepo"
+    sub.mkdir()
+    _init_git_repo(sub)
+    (sub / "sub.py").write_text("def sub(): pass")
+    _commit_all(sub)
+
+    main = tmp_path / "main"
+    main.mkdir()
+    _init_git_repo(main)
+    (main / "main.py").write_text("def main(): pass")
+    _commit_all(main)
+
+    subprocess.run(
+        ["git", "-c", "protocol.file.allow=always", "submodule", "add", str(sub), "vendor/sub"],
+        cwd=main,
+        capture_output=True,
+        check=True,
+    )
+    _commit_all(main, "add submodule")
+
+    (main / "vendor" / "sub" / "sub.py").write_text("def sub(): return 99")
+
+    calculator = WorkingTreeStateCalculator(main)
+    modified = calculator._get_modified_source_files_from_git()
+    rel = {str(p.relative_to(main)) for p in modified}
+
+    assert not any(p.startswith("vendor/sub/") for p in rel), (
+        f"Submodule-internal paths leaked into parent's modified list: {rel}"
+    )
+
+
 def test_calculate_working_tree_hash__refactored_produces_consistent_results():
     """Test the refactored calculate_working_tree_hash produces stable results.
 
@@ -341,3 +378,77 @@ def test_calculate_working_tree_hash__refactored_produces_consistent_results():
 
         assert hash1 == hash2, "Refactored hash should be deterministic"
         assert len(hash1) == 16
+
+
+class TestSourceContentKey:
+    """Tests for the commit-invariant source content key and its hashing helpers."""
+
+    def test_hash_files_via_git__matches_python_fallback_under_autocrlf(self, tmp_path):
+        """git hash-object and the Python fallback must agree even with EOL filters active.
+
+        With core.autocrlf=true, a default `git hash-object` normalizes CRLF→LF before
+        hashing, diverging from the raw-bytes Python hash. The --no-filters flag makes
+        both paths hash the exact working-tree bytes, so the cache key is identical
+        regardless of which path runs (otherwise the cache would thrash between runs).
+        """
+        _init_git_repo(tmp_path)
+        subprocess.run(["git", "config", "--local", "core.autocrlf", "true"], cwd=tmp_path, check=True)
+        # CRLF content that git's clean filter would normalize
+        (tmp_path / "crlf.py").write_bytes(b"def f():\r\n    pass\r\n")
+        _commit_all(tmp_path)
+
+        calculator = WorkingTreeStateCalculator(tmp_path)
+        via_git = calculator._hash_files_via_git(["crlf.py"])
+        via_python = calculator._hash_files_in_python(["crlf.py"])
+
+        assert via_git == via_python, "git --no-filters and Python fallback must produce identical SHAs"
+
+    def test_calculate_source_content_key__includes_untracked_excludes_ignored_and_submodule(self, tmp_path):
+        """The content key reflects tracked + untracked source, never ignored dirs."""
+        _init_git_repo(tmp_path)
+        (tmp_path / "app.py").write_text("def app(): pass")
+        _commit_all(tmp_path)
+
+        calculator = WorkingTreeStateCalculator(tmp_path)
+        key_tracked_only = calculator.calculate_source_content_key()
+
+        # Untracked source file changes the key
+        (tmp_path / "extra.py").write_text("def extra(): pass")
+        key_with_untracked = calculator.calculate_source_content_key()
+        assert key_with_untracked != key_tracked_only
+
+        # Untracked file in an ignored dir does NOT change the key
+        (tmp_path / "build").mkdir()
+        (tmp_path / "build" / "gen.py").write_text("# generated")
+        key_with_build = calculator.calculate_source_content_key()
+        assert key_with_build == key_with_untracked
+
+    def test_calculate_source_content_key__deleted_tracked_file_changes_key(self, tmp_path):
+        """Deleting a tracked source file is a code change and must change the key.
+
+        A deleted-in-worktree tracked file is still listed by `git ls-files --cached`,
+        so hashing must tolerate the missing path (git errors -> Python fallback skips
+        it) and the file must drop out of the key.
+        """
+        _init_git_repo(tmp_path)
+        (tmp_path / "a.py").write_text("def a(): pass")
+        (tmp_path / "b.py").write_text("def b(): pass")
+        _commit_all(tmp_path)
+
+        calculator = WorkingTreeStateCalculator(tmp_path)
+        key_before = calculator.calculate_source_content_key()
+
+        (tmp_path / "b.py").unlink()
+        key_after = calculator.calculate_source_content_key()
+
+        assert key_after != key_before, "Deleting a tracked source file must change the key"
+
+    def test_calculate_source_content_key__no_source_files_is_stable(self, tmp_path):
+        """A repo with no in-scope source files yields a stable sentinel key."""
+        _init_git_repo(tmp_path)
+        (tmp_path / "README.md").write_text("# docs only")
+        _commit_all(tmp_path)
+
+        calculator = WorkingTreeStateCalculator(tmp_path)
+        assert calculator.calculate_source_content_key() == calculator.calculate_source_content_key()
+        assert calculator.get_all_source_files() == []

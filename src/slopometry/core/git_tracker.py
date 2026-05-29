@@ -7,6 +7,7 @@ import tarfile
 import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
+from io import BytesIO
 from pathlib import Path
 
 from slopometry.core.models.hook import GitState
@@ -25,11 +26,71 @@ class GitOperationError(Exception):
     pass
 
 
+def get_submodule_prefixes(working_dir: Path) -> tuple[str, ...]:
+    """Get submodule paths (relative to working_dir) as a tuple of prefixes.
+
+    Reads .gitmodules in the repository root to find declared submodule paths.
+    Returned strings end with a forward slash so callers can use str.startswith
+    to test whether an arbitrary relative path lives inside a submodule.
+
+    Returns an empty tuple only when no .gitmodules file exists. If .gitmodules
+    is present but cannot be parsed, raises GitOperationError — silently
+    returning () would disable submodule filtering and re-introduce the exact
+    cache-invalidation bug this helper exists to prevent.
+    """
+    gitmodules = working_dir / ".gitmodules"
+    if not gitmodules.is_file():
+        return ()
+    try:
+        result = subprocess.run(
+            ["git", "config", "--file", str(gitmodules), "--get-regexp", r"^submodule\..*\.path$"],
+            cwd=working_dir,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise GitOperationError(f"git config timed out reading {gitmodules}: {e}") from e
+    except (subprocess.SubprocessError, OSError) as e:
+        raise GitOperationError(f"git config failed reading {gitmodules}: {e}") from e
+
+    # returncode == 1 is git config's standard "no matching keys" result — a
+    # .gitmodules with no submodule.*.path entries is malformed but not fatal;
+    # treat it as no submodules. Any other non-zero return is a real failure.
+    if result.returncode == 1:
+        return ()
+    if result.returncode != 0:
+        raise GitOperationError(
+            f"git config failed reading {gitmodules} (exit {result.returncode}): {result.stderr.strip()}"
+        )
+
+    prefixes: list[str] = []
+    for line in result.stdout.splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) == 2 and parts[1]:
+            prefix = parts[1].rstrip("/") + "/"
+            prefixes.append(prefix)
+    return tuple(prefixes)
+
+
+def path_in_submodule(rel_path: str, submodule_prefixes: tuple[str, ...]) -> bool:
+    """Return True if rel_path lives inside any declared submodule."""
+    normalized = rel_path.replace("\\", "/").lstrip("./")
+    return any(normalized.startswith(prefix) for prefix in submodule_prefixes)
+
+
 class GitTracker:
     """Tracks git repository state and commit counts."""
 
     def __init__(self, working_dir: Path | None = None):
         self.working_dir = working_dir or Path.cwd()
+        self._submodule_prefixes: tuple[str, ...] | None = None
+
+    def submodule_prefixes(self) -> tuple[str, ...]:
+        """Cached accessor for declared submodule paths as relative prefixes."""
+        if self._submodule_prefixes is None:
+            self._submodule_prefixes = get_submodule_prefixes(self.working_dir)
+        return self._submodule_prefixes
 
     def get_git_state(self) -> GitState:
         """Get current git repository state."""
@@ -206,9 +267,10 @@ class GitTracker:
             )
 
             if result.returncode == 0:
+                submodule_prefixes = self.submodule_prefixes()
                 files = []
                 for line in result.stdout.splitlines():
-                    if line.endswith(".py"):
+                    if line.endswith(".py") and not path_in_submodule(line, submodule_prefixes):
                         files.append(self.working_dir / line)
                 return files
 
@@ -248,9 +310,13 @@ class GitTracker:
             if result.returncode != 0:
                 return False
 
+            submodule_prefixes = self.submodule_prefixes()
             for line in result.stdout.splitlines():
-                if line.endswith(".py") or line.endswith(".rs"):
-                    return True
+                if not (line.endswith(".py") or line.endswith(".rs")):
+                    continue
+                if path_in_submodule(line, submodule_prefixes):
+                    continue
+                return True
             return False
 
         except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError):
@@ -292,10 +358,13 @@ class GitTracker:
             "build",
         }
 
+        submodule_prefixes = self.submodule_prefixes()
         files = []
         for file_path in self.working_dir.rglob("*.py"):
-            parts = file_path.relative_to(self.working_dir).parts
-            if any(part in ignored_dirs for part in parts):
+            rel = file_path.relative_to(self.working_dir)
+            if any(part in ignored_dirs for part in rel.parts):
+                continue
+            if path_in_submodule(rel.as_posix(), submodule_prefixes):
                 continue
             files.append(file_path)
 
@@ -324,9 +393,10 @@ class GitTracker:
             )
 
             if result.returncode == 0:
+                submodule_prefixes = self.submodule_prefixes()
                 files = []
                 for line in result.stdout.splitlines():
-                    if line.endswith(".rs"):
+                    if line.endswith(".rs") and not path_in_submodule(line, submodule_prefixes):
                         files.append(self.working_dir / line)
                 return files
 
@@ -362,10 +432,13 @@ class GitTracker:
             "node_modules",
         }
 
+        submodule_prefixes = self.submodule_prefixes()
         files = []
         for file_path in self.working_dir.rglob("*.rs"):
-            parts = file_path.relative_to(self.working_dir).parts
-            if any(part in ignored_dirs for part in parts):
+            rel = file_path.relative_to(self.working_dir)
+            if any(part in ignored_dirs for part in rel.parts):
+                continue
+            if path_in_submodule(rel.as_posix(), submodule_prefixes):
                 continue
             files.append(file_path)
 
@@ -398,8 +471,6 @@ class GitTracker:
             if result.returncode != 0:
                 shutil.rmtree(temp_dir, ignore_errors=True)
                 raise GitOperationError(f"git archive failed for {commit_ref}: {result.stderr.decode().strip()}")
-
-            from io import BytesIO
 
             tar_data = BytesIO(result.stdout)
             with tarfile.open(fileobj=tar_data, mode="r") as tar:
@@ -450,8 +521,6 @@ class GitTracker:
 
                 if result.returncode != 0:
                     raise GitOperationError(f"git archive failed for {commit_ref}: {result.stderr.decode().strip()}")
-
-                from io import BytesIO
 
                 tar_data = BytesIO(result.stdout)
                 with tarfile.open(fileobj=tar_data, mode="r") as tar:
@@ -546,8 +615,6 @@ class GitTracker:
                     shutil.rmtree(temp_dir, ignore_errors=True)
                     return None
                 raise GitOperationError(f"git archive failed for {commit_ref}: {stderr}")
-
-            from io import BytesIO
 
             tar_data = BytesIO(result.stdout)
             try:

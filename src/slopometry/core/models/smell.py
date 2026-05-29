@@ -56,6 +56,15 @@ SMELL_REGISTRY: dict[str, SmellDefinition] = {
         count_field="swallowed_exception_count",
         files_field="swallowed_exception_files",
     ),
+    "acknowledged_silent_except": SmellDefinition(
+        internal_name="acknowledged_silent_except",
+        label="Acknowledged Silent Excepts",
+        category=SmellCategory.GENERAL,
+        weight=0.05,
+        guidance="BLOCKING (on increase): These silent except handlers are marked `# slopometry: allow-silent`. An individual marker is fine, but a rise means new silent handlers were suppressed this session. Present a table [Location | Purpose | Justification] for the NEW ones and confirm each genuinely needs no logging/handling — this prevents mass-suppression of real swallowed exceptions",
+        count_field="acknowledged_silent_except_count",
+        files_field="acknowledged_silent_except_files",
+    ),
     "test_skip": SmellDefinition(
         internal_name="test_skip",
         label="Test Skips",
