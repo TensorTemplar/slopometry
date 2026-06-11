@@ -7,7 +7,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-from slopometry.core.git_tracker import GitTracker
+from slopometry.core.git_tracker import GitTracker, get_submodule_prefixes, path_in_submodule
 from slopometry.core.language_config import (
     get_combined_git_patterns,
     is_source_file,
@@ -81,6 +81,143 @@ class WorkingTreeStateCalculator:
 
         return changed
 
+    def _list_source_files(self, ls_files_flags: list[str]) -> list[Path]:
+        """Run ``git ls-files <flags>`` and return the in-scope source files it lists.
+
+        Applies the same extension / ``should_ignore_path`` / submodule filtering as
+        ``_get_modified_source_files_from_git`` so build artifacts (``build/``,
+        ``dist/``, ``*.egg-info``) and submodule contents are excluded. ``git
+        ls-files`` never descends into submodules (a submodule is a single gitlink
+        entry, not a source path), so submodule source cannot leak in.
+
+        Args:
+            ls_files_flags: Flags appended to ``git ls-files`` (e.g. ``--cached``).
+
+        Returns:
+            List of absolute Path objects for in-scope source files.
+        """
+        submodule_prefixes = get_submodule_prefixes(self.working_directory)
+        try:
+            result = subprocess.run(
+                ["git", "ls-files", *ls_files_flags],
+                cwd=self.working_directory,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError):
+            return []
+        if result.returncode != 0:
+            return []
+
+        files: list[Path] = []
+        for line in result.stdout.splitlines():
+            rel_path = line.strip()
+            if not rel_path:
+                continue
+            if path_in_submodule(rel_path, submodule_prefixes):
+                continue
+            if is_source_file(rel_path, self.languages) and not should_ignore_path(rel_path, self.languages):
+                files.append(self.working_directory / rel_path)
+        return files
+
+    def get_all_source_files(self) -> list[Path]:
+        """List every non-ignored source file in the working tree (tracked + untracked).
+
+        Uses ``git ls-files --cached --others --exclude-standard`` so the set is a
+        function of the current working tree, independent of HEAD/commit state, and
+        includes new untracked ``.py``/``.rs`` files while honoring ``.gitignore``.
+
+        Returns:
+            List of absolute Path objects for in-scope source files.
+        """
+        return self._list_source_files(["--cached", "--others", "--exclude-standard"])
+
+    def get_untracked_source_files(self) -> list[Path]:
+        """List untracked, non-ignored source files in the working tree.
+
+        Uses ``git ls-files --others --exclude-standard`` (untracked only). The
+        fast-path uses this so that creating a new source file is treated as a
+        source change even though ``git diff`` (tracked-only) cannot see it.
+
+        Returns:
+            List of absolute Path objects for untracked in-scope source files.
+        """
+        return self._list_source_files(["--others", "--exclude-standard"])
+
+    def calculate_source_content_key(self) -> str:
+        """Commit-invariant cache key over the working-tree content of all source files.
+
+        Hashes the current content of every in-scope ``.py``/``.rs`` file (tracked +
+        untracked) and folds the ``(rel_path, blob_sha)`` pairs into a single digest.
+        Blob SHAs are computed by ``git hash-object`` (C-level, fast on large repos);
+        a pure-Python fallback computes the identical git blob SHA when the git call
+        fails, so the key is independent of which path produced it.
+
+        The key is a pure function of source *content*: it is stable across commits,
+        branch switches, pulls, rebases, and non-source churn, and changes only when
+        source bytes change (including the addition of a new untracked source file).
+
+        Returns:
+            BLAKE2b hex digest (16 chars) of the source content state.
+        """
+        rel_paths = sorted(str(f.relative_to(self.working_directory)) for f in self.get_all_source_files())
+        if not rel_paths:
+            return hashlib.blake2b(b"no-source", digest_size=8).hexdigest()
+
+        blob_shas = self._hash_files_via_git(rel_paths)
+        components = [f"{rel_path}:{blob_shas[rel_path]}" for rel_path in rel_paths if rel_path in blob_shas]
+        combined = "|".join(components)
+        return hashlib.blake2b(combined.encode("utf-8"), digest_size=8).hexdigest()
+
+    def _hash_files_via_git(self, rel_paths: list[str]) -> dict[str, str]:
+        """Map each relative path to its git blob SHA of current working-tree content.
+
+        Prefers a single ``git hash-object --no-filters --stdin-paths`` call. Falls
+        back to an equivalent pure-Python git-blob hash if git is unavailable or the
+        output does not line up with the inputs.
+
+        ``--no-filters`` is required for fallback parity: without it, git applies
+        gitattributes / ``core.autocrlf`` clean filters (e.g. CRLF→LF) before hashing,
+        producing a SHA that differs from the raw-bytes hash computed by
+        ``_hash_files_in_python``. With ``--no-filters`` both paths hash the exact
+        working-tree bytes, so the cache key is identical regardless of which ran.
+        """
+        try:
+            result = subprocess.run(
+                ["git", "hash-object", "--no-filters", "--stdin-paths"],
+                input="\n".join(rel_paths) + "\n",
+                cwd=self.working_directory,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if result.returncode == 0:
+                shas = result.stdout.split()
+                if len(shas) == len(rel_paths):
+                    return dict(zip(rel_paths, shas, strict=True))
+        except (subprocess.TimeoutExpired, subprocess.SubprocessError, OSError) as e:
+            logger.debug(f"git hash-object unavailable ({e}); using Python git-blob fallback")
+        return self._hash_files_in_python(rel_paths)
+
+    def _hash_files_in_python(self, rel_paths: list[str]) -> dict[str, str]:
+        """Compute git blob SHAs in Python (``sha1("blob <len>\\0" + content)``).
+
+        Produces byte-identical SHAs to ``git hash-object`` so the content key is
+        the same regardless of whether the git fast path or this fallback ran.
+        Files that cannot be read are skipped.
+        """
+        result: dict[str, str] = {}
+        for rel_path in rel_paths:
+            try:
+                content = (self.working_directory / rel_path).read_bytes()
+            except OSError as e:
+                logger.debug(f"Skipping unreadable source file {rel_path}: {e}")
+                continue
+            header = f"blob {len(content)}\0".encode()
+            result[rel_path] = hashlib.sha1(header + content).hexdigest()  # noqa: S324 - git blob id, not security
+        return result
+
     def calculate_working_tree_hash(self, commit_sha: str) -> str:
         """Calculate a hash representing the current working tree state.
 
@@ -120,7 +257,10 @@ class WorkingTreeStateCalculator:
 
         Uses git diff to get modified source files (staged + unstaged) for
         configured languages. Filters out files in ignored directories
-        (build artifacts, caches, etc.).
+        (build artifacts, caches, etc.) and any paths inside declared
+        submodules — --ignore-submodules=all on each git diff invocation
+        keeps submodule gitlink diffs out of the cache key regardless of
+        user git config (submodule.recurse, diff.submodule=log, etc.).
 
         This is tier 1 of the two-tier change detection - fast but may include
         files that only have mtime changes (which tier 2 content hash filters out).
@@ -130,20 +270,19 @@ class WorkingTreeStateCalculator:
         """
         git_patterns = get_combined_git_patterns(self.languages)
         files: set[Path] = set()
+        submodule_prefixes = get_submodule_prefixes(self.working_directory)
 
         for pattern in git_patterns:
             try:
-                # Unstaged changes
                 result1 = subprocess.run(
-                    ["git", "diff", "--name-only", "--", pattern],
+                    ["git", "diff", "--name-only", "--ignore-submodules=all", "--", pattern],
                     cwd=self.working_directory,
                     capture_output=True,
                     text=True,
                     timeout=10,
                 )
-                # Staged changes
                 result2 = subprocess.run(
-                    ["git", "diff", "--cached", "--name-only", "--", pattern],
+                    ["git", "diff", "--cached", "--name-only", "--ignore-submodules=all", "--", pattern],
                     cwd=self.working_directory,
                     capture_output=True,
                     text=True,
@@ -153,7 +292,8 @@ class WorkingTreeStateCalculator:
                 for line in result1.stdout.splitlines() + result2.stdout.splitlines():
                     if line.strip():
                         rel_path = line.strip()
-                        # Filter out non-source files and ignored directories
+                        if path_in_submodule(rel_path, submodule_prefixes):
+                            continue
                         if is_source_file(rel_path, self.languages) and not should_ignore_path(
                             rel_path, self.languages
                         ):

@@ -13,6 +13,8 @@ from slopometry.core.python_feature_analyzer import (
     FeatureVisitor,
     PythonFeatureAnalyzer,
     _analyze_comments_standalone,
+    _analyze_single_file_features,
+    _find_allow_silent_lines,
 )
 
 # Frozen commit for baseline testing against this repository
@@ -209,6 +211,142 @@ class TestFeatureStatsMerge:
         assert merged.total_type_references == 18
         assert merged.any_type_count == 3
         assert merged.str_type_count == 7
+
+
+class TestSilentExceptDetection:
+    """Tests for swallowed vs acknowledged silent except classification.
+
+    Silent = the handler does no processing of any kind (only pass/continue/break/
+    ellipsis/bare-string). Assignments and counter increments are processing, so they
+    are NOT silent. A silent handler marked `# slopometry: allow-silent` is acknowledged
+    (intentional) rather than swallowed.
+    """
+
+    @staticmethod
+    def _visit(code: str) -> FeatureVisitor:
+        tree = ast.parse(code)
+        visitor = FeatureVisitor(allow_silent_lines=_find_allow_silent_lines(code))
+        visitor.visit(tree)
+        return visitor
+
+    def test_visit_try__pass_only_handler_is_swallowed(self) -> None:
+        code = "try:\n    risky()\nexcept ValueError:\n    pass\n"
+        visitor = self._visit(code)
+        assert visitor.swallowed_exceptions == 1
+        assert visitor.acknowledged_silent_excepts == 0
+
+    def test_visit_try__continue_only_handler_is_swallowed(self) -> None:
+        code = "for x in items:\n    try:\n        parse(x)\n    except ValueError:\n        continue\n"
+        visitor = self._visit(code)
+        assert visitor.swallowed_exceptions == 1
+
+    def test_visit_try__fallback_assignment_is_not_silent(self) -> None:
+        """`except ImportError: torch = None` recovers a value — processing, not silent."""
+        code = "try:\n    import torch\nexcept ImportError:\n    torch = None\n"
+        visitor = self._visit(code)
+        assert visitor.swallowed_exceptions == 0
+        assert visitor.acknowledged_silent_excepts == 0
+
+    def test_visit_try__counter_increment_is_not_silent(self) -> None:
+        """`except: dropped += 1; continue` tracks the failure — processing, not silent."""
+        code = (
+            "dropped = 0\n"
+            "for x in items:\n"
+            "    try:\n"
+            "        parse(x)\n"
+            "    except ValueError:\n"
+            "        dropped += 1\n"
+            "        continue\n"
+        )
+        visitor = self._visit(code)
+        assert visitor.swallowed_exceptions == 0
+
+    def test_visit_try__logging_call_is_not_silent(self) -> None:
+        code = "try:\n    risky()\nexcept ValueError:\n    logger.warning('failed')\n"
+        visitor = self._visit(code)
+        assert visitor.swallowed_exceptions == 0
+
+    def test_visit_try__allow_silent_marker_downgrades_to_acknowledged(self) -> None:
+        code = "try:\n    risky()\nexcept ValueError:  # slopometry: allow-silent\n    pass\n"
+        visitor = self._visit(code)
+        assert visitor.swallowed_exceptions == 0
+        assert visitor.acknowledged_silent_excepts == 1
+
+    def test_visit_try__marker_on_body_line_downgrades_to_acknowledged(self) -> None:
+        code = "try:\n    risky()\nexcept ValueError:\n    pass  # slopometry: allow-silent\n"
+        visitor = self._visit(code)
+        assert visitor.swallowed_exceptions == 0
+        assert visitor.acknowledged_silent_excepts == 1
+
+    def test_find_allow_silent_lines__ignores_marker_inside_string(self) -> None:
+        """The marker only counts as a real comment token, not text in a string."""
+        code = 'x = "# slopometry: allow-silent"\n'
+        assert _find_allow_silent_lines(code) == set()
+
+    def test_visit_try__marker_attributes_only_to_its_own_sibling_handler(self) -> None:
+        """Stacked handlers: a marker on one must not leak to an adjacent sibling.
+
+        Python gives sibling except handlers non-overlapping line spans, so the
+        marker on handler A must acknowledge A while B stays a swallowed exception.
+        """
+        code = (
+            "try:\n    risky()\nexcept ValueError:  # slopometry: allow-silent\n    pass\nexcept KeyError:\n    pass\n"
+        )
+        visitor = self._visit(code)
+        assert visitor.acknowledged_silent_excepts == 1
+        assert visitor.swallowed_exceptions == 1
+
+    def test_visit_try__marker_on_nested_inner_handler_only(self) -> None:
+        """A marked inner handler is acknowledged; the outer (containing a try) is not silent."""
+        code = (
+            "try:\n"
+            "    risky()\n"
+            "except Exception:\n"
+            "    try:\n"
+            "        cleanup()\n"
+            "    except FileNotFoundError:  # slopometry: allow-silent\n"
+            "        pass\n"
+        )
+        visitor = self._visit(code)
+        assert visitor.acknowledged_silent_excepts == 1
+        # outer handler contains a try (not inert) -> not silent -> not counted either way
+        assert visitor.swallowed_exceptions == 0
+
+    def test_visit_try__unmarked_sibling_of_nonsilent_handler_is_swallowed(self) -> None:
+        """A processing handler plus an adjacent unmarked silent handler: only the silent one counts."""
+        code = "try:\n    risky()\nexcept ValueError:\n    logger.warning('bad')\nexcept KeyError:\n    pass\n"
+        visitor = self._visit(code)
+        assert visitor.swallowed_exceptions == 1
+        assert visitor.acknowledged_silent_excepts == 0
+
+    def test_visit_try__marker_in_multiline_string_is_not_a_comment(self) -> None:
+        """The marker inside a string literal must not downgrade a real silent handler."""
+        code = 'try:\n    risky()\nexcept ValueError:\n    """# slopometry: allow-silent"""\n'
+        visitor = self._visit(code)
+        # bare string body is silent; the marker text is inside it, not a comment token
+        assert visitor.swallowed_exceptions == 1
+        assert visitor.acknowledged_silent_excepts == 0
+
+    def test_analyze_single_file__populates_acknowledged_smell_fields(self, tmp_path: Path) -> None:
+        """End-to-end: marked handler lands in acknowledged_silent_except, not swallowed."""
+        f = tmp_path / "mod.py"
+        f.write_text(
+            "def g():\n"
+            "    try:\n"
+            "        risky()\n"
+            "    except ValueError:  # slopometry: allow-silent\n"
+            "        pass\n"
+            "    try:\n"
+            "        other()\n"
+            "    except KeyError:\n"
+            "        pass\n"
+        )
+        stats = _analyze_single_file_features(f)
+        assert stats is not None
+        assert stats.acknowledged_silent_except_count == 1
+        assert stats.swallowed_exception_count == 1
+        assert str(f) in stats.acknowledged_silent_except_files
+        assert str(f) in stats.swallowed_exception_files
 
 
 class TestPythonFeatureAnalyzerIntegration:
@@ -829,8 +967,12 @@ except Exception:
 
         assert visitor.swallowed_exceptions == 0
 
-    def test_visit_try__detects_multi_statement_inert_handler(self) -> None:
-        """Test that except block with only assignments and pass/continue is flagged."""
+    def test_visit_try__counter_increment_then_continue_is_not_swallowed(self) -> None:
+        """A handler that increments a counter before continue tracks the failure.
+
+        Incrementing a counter is processing (the failure is recorded and typically
+        surfaced later), so it is not a silent swallow.
+        """
         code = """
 for item in items:
     try:
@@ -843,7 +985,7 @@ for item in items:
         visitor = FeatureVisitor()
         visitor.visit(tree)
 
-        assert visitor.swallowed_exceptions == 1
+        assert visitor.swallowed_exceptions == 0
 
     def test_visit_try__ignores_handler_with_raise(self) -> None:
         """Test that except block that re-raises is not flagged."""
@@ -973,8 +1115,12 @@ except Exception:
 
         assert visitor.swallowed_exceptions == 1
 
-    def test_visit_try__detects_ellipsis_with_assignment_in_except(self) -> None:
-        """except with assignment and ellipsis is all inert."""
+    def test_visit_try__assignment_with_ellipsis_is_not_swallowed(self) -> None:
+        """A handler that assigns a value is recovering state, not silently swallowing.
+
+        Even alongside an ellipsis, the assignment is processing, so the handler is
+        not flagged as a swallowed exception (e.g. `except ImportError: torch = None`).
+        """
         code = """
 try:
     risky()
@@ -986,7 +1132,7 @@ except Exception:
         visitor = FeatureVisitor()
         visitor.visit(tree)
 
-        assert visitor.swallowed_exceptions == 1
+        assert visitor.swallowed_exceptions == 0
 
     def test_visit_try__ignores_except_with_if_statement(self) -> None:
         """ast.If is not inert, so except with only an if block is not flagged."""

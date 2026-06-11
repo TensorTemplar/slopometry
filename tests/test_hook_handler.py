@@ -12,6 +12,8 @@ from slopometry.core.database import SessionManager
 from slopometry.core.hook_handler import (
     _get_related_files_via_imports,
     _has_analyzable_source_files,
+    _has_source_changes,
+    _resolve_working_directory,
     detect_event_type_from_parsed,
     extract_dev_guidelines_from_claude_md,
     format_code_smell_feedback,
@@ -284,6 +286,31 @@ class TestFormatCodeSmellFeedback:
         assert "(+2)" in feedback
         assert "Code Smells" in feedback
         assert "src/foo.py" in feedback
+
+    def test_scope_smells__acknowledged_silent_blocks_on_increase(self):
+        """A rising acknowledged_silent_except count is blocking in edited files."""
+        metrics = self._make_metrics(
+            acknowledged_silent_except_count=3,
+            acknowledged_silent_except_files=["src/foo.py"],
+        )
+        delta = ComplexityDelta(acknowledged_silent_except_change=2)
+        scoped = scope_smells_for_session(metrics, delta, {"src/foo.py"}, "/tmp")
+
+        ack = [s for s in scoped if s.name == "acknowledged_silent_except"]
+        assert ack, "acknowledged_silent_except should be scoped"
+        assert any(s.is_blocking for s in ack), "an increase in edited files must block"
+
+    def test_scope_smells__acknowledged_silent_unchanged_does_not_block(self):
+        """A steady acknowledged_silent_except count is informational, not blocking."""
+        metrics = self._make_metrics(
+            acknowledged_silent_except_count=3,
+            acknowledged_silent_except_files=["src/foo.py"],
+        )
+        delta = ComplexityDelta(acknowledged_silent_except_change=0)
+        scoped = scope_smells_for_session(metrics, delta, {"src/foo.py"}, "/tmp")
+
+        ack = [s for s in scoped if s.name == "acknowledged_silent_except"]
+        assert not any(s.is_blocking for s in ack), "no increase => not blocking"
 
     def test_format_code_smell_feedback__includes_actionable_guidance(self):
         """Test that actionable guidance from SmellField is included."""
@@ -1140,6 +1167,41 @@ class TestHasAnalyzableSourceFiles:
 
         assert _has_analyzable_source_files(str(tmp_path)) is False
 
+    def test_has_analyzable_source_files__ignores_submodule_only_sources(self, tmp_path):
+        """Returns False when the only .py/.rs files live inside a submodule.
+
+        A parent repo with no source files of its own but a submodule containing
+        source files must not trigger the stop-hook analysis path — that code
+        belongs to the submodule's repository, not the parent project.
+        """
+        sub = tmp_path / "subrepo"
+        sub.mkdir()
+        subprocess.run(["git", "init"], cwd=sub, capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=sub, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=sub, capture_output=True)
+        (sub / "sub.py").write_text("def sub(): pass")
+        subprocess.run(["git", "add", "."], cwd=sub, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=sub, capture_output=True)
+
+        main = tmp_path / "main"
+        main.mkdir()
+        subprocess.run(["git", "init"], cwd=main, capture_output=True, check=True)
+        subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=main, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=main, capture_output=True)
+        (main / "README.md").write_text("# docs only")
+        subprocess.run(["git", "add", "."], cwd=main, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=main, capture_output=True)
+
+        subprocess.run(
+            ["git", "-c", "protocol.file.allow=always", "submodule", "add", str(sub), "vendor/sub"],
+            cwd=main,
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(["git", "commit", "-m", "add submodule"], cwd=main, capture_output=True)
+
+        assert _has_analyzable_source_files(str(main)) is False
+
 
 class TestHandleStopEventEarlyExits:
     """Tests for handle_stop_event early exit paths."""
@@ -1169,12 +1231,12 @@ class TestHandleStopEventEarlyExits:
             # get_session_statistics should NOT have been called
             mock_db.get_session_statistics.assert_not_called()
 
-    def test_handle_stop_event__fast_path_cache_hit_skips_expensive_computation(self):
-        """Fast-path: same commit SHA + no source modifications = instant return.
+    def test_handle_stop_event__fast_path_cache_hit_skips_expensive_computation(self, tmp_path):
+        """Fast-path: same commit SHA + no source delta = instant return.
 
-        This is the critical optimization for large repos like k8s-hq where
-        _compute_working_tree_cache_key runs 9 git commands. The fast-path
-        uses only 1-2 git commands.
+        This is the critical optimization for large repos like k8s-hq where the full
+        content key hashes every source file. The fast-path uses only a few git
+        commands and bails before reading any file content.
         """
         parsed = StopInput(
             session_id="test-fast-cache",
@@ -1185,23 +1247,23 @@ class TestHandleStopEventEarlyExits:
             patch("slopometry.core.hook_handler.EventDatabase") as mock_db_cls,
             patch("slopometry.core.hook_handler._load_feedback_cache") as mock_cache,
             patch("slopometry.core.hook_handler._get_current_commit_sha") as mock_sha,
-            patch("slopometry.core.hook_handler._has_source_modifications") as mock_mods,
+            patch("slopometry.core.hook_handler._has_source_changes") as mock_changes,
             patch("slopometry.core.hook_handler._compute_working_tree_cache_key") as mock_full_key,
         ):
             mock_db = mock_db_cls.return_value
-            mock_db.get_session_working_directory.return_value = "/large/repo"
+            mock_db.get_session_working_directory.return_value = str(tmp_path)
 
             # Cache has commit_sha from previous run
             mock_cache.return_value = FeedbackCacheState(last_key="old_key", file_hashes={}, commit_sha="abc123def")
             mock_sha.return_value = "abc123def"  # Same commit
-            mock_mods.return_value = False  # No source modifications
+            mock_changes.return_value = False  # No source delta (no mods, no new files)
 
             assert handle_stop_event("test-fast-cache", parsed) == 0
             # The expensive full key computation should NOT have been called
             mock_full_key.assert_not_called()
             mock_db.get_session_statistics.assert_not_called()
 
-    def test_handle_stop_event__falls_through_when_commit_sha_differs(self):
+    def test_handle_stop_event__falls_through_when_commit_sha_differs(self, tmp_path):
         """When commit SHA changed, fast-path doesn't match, falls to full check."""
         parsed = StopInput(
             session_id="test-new-commit",
@@ -1216,7 +1278,7 @@ class TestHandleStopEventEarlyExits:
             patch("slopometry.core.hook_handler._compute_working_tree_cache_key"),
         ):
             mock_db = mock_db_cls.return_value
-            mock_db.get_session_working_directory.return_value = "/some/repo"
+            mock_db.get_session_working_directory.return_value = str(tmp_path)
 
             # Cache has old commit SHA
             mock_cache.return_value = FeedbackCacheState(last_key="old_key", file_hashes={}, commit_sha="old_sha")
@@ -1226,10 +1288,10 @@ class TestHandleStopEventEarlyExits:
             mock_has_src.return_value = False
 
             assert handle_stop_event("test-new-commit", parsed) == 0
-            # _has_source_modifications should NOT be called (SHA mismatch short-circuits)
+            # _has_source_changes should NOT be called (SHA mismatch short-circuits)
             mock_has_src.assert_called_once()
 
-    def test_handle_stop_event__legacy_cache_without_commit_sha_falls_through(self):
+    def test_handle_stop_event__legacy_cache_without_commit_sha_falls_through(self, tmp_path):
         """Caches from before the commit_sha field skip the fast-path gracefully."""
         parsed = StopInput(
             session_id="test-legacy-cache",
@@ -1243,7 +1305,7 @@ class TestHandleStopEventEarlyExits:
             patch("slopometry.core.hook_handler._compute_working_tree_cache_key"),
         ):
             mock_db = mock_db_cls.return_value
-            mock_db.get_session_working_directory.return_value = "/some/repo"
+            mock_db.get_session_working_directory.return_value = str(tmp_path)
 
             # Legacy cache: no commit_sha field (defaults to None)
             mock_cache.return_value = FeedbackCacheState(last_key="old_key", file_hashes={})
@@ -1255,7 +1317,7 @@ class TestHandleStopEventEarlyExits:
             # Should fall through to _has_analyzable_source_files, not crash
             mock_has_src.assert_called_once()
 
-    def test_handle_stop_event__full_cache_key_hit_after_fast_path_miss(self):
+    def test_handle_stop_event__full_cache_key_hit_after_fast_path_miss(self, tmp_path):
         """When fast-path misses (source modifications) but full key matches, still returns 0."""
         parsed = StopInput(
             session_id="test-full-key-hit",
@@ -1266,16 +1328,16 @@ class TestHandleStopEventEarlyExits:
             patch("slopometry.core.hook_handler.EventDatabase") as mock_db_cls,
             patch("slopometry.core.hook_handler._load_feedback_cache") as mock_cache,
             patch("slopometry.core.hook_handler._get_current_commit_sha") as mock_sha,
-            patch("slopometry.core.hook_handler._has_source_modifications") as mock_mods,
+            patch("slopometry.core.hook_handler._has_source_changes") as mock_changes,
             patch("slopometry.core.hook_handler._has_analyzable_source_files") as mock_has_src,
             patch("slopometry.core.hook_handler._compute_working_tree_cache_key") as mock_full_key,
         ):
             mock_db = mock_db_cls.return_value
-            mock_db.get_session_working_directory.return_value = "/some/repo"
+            mock_db.get_session_working_directory.return_value = str(tmp_path)
 
             mock_cache.return_value = FeedbackCacheState(last_key="full_key_abc", file_hashes={}, commit_sha="abc123")
             mock_sha.return_value = "abc123"  # Same commit
-            mock_mods.return_value = True  # Has modifications — fast-path can't confirm
+            mock_changes.return_value = True  # Has source delta — fast-path can't confirm
 
             mock_has_src.return_value = True
             mock_full_key.return_value = "full_key_abc"  # But full key matches
@@ -1284,7 +1346,7 @@ class TestHandleStopEventEarlyExits:
             mock_full_key.assert_called_once()
             mock_db.get_session_statistics.assert_not_called()
 
-    def test_handle_stop_event__returns_zero_when_no_source_files(self):
+    def test_handle_stop_event__returns_zero_when_no_source_files(self, tmp_path):
         """Returns 0 without computing stats when repo has no analyzable source files."""
         parsed = StopInput(
             session_id="test-no-source",
@@ -1297,11 +1359,149 @@ class TestHandleStopEventEarlyExits:
             patch("slopometry.core.hook_handler._has_analyzable_source_files") as mock_has_src,
         ):
             mock_db = mock_db_cls.return_value
-            mock_db.get_session_working_directory.return_value = "/some/hardware/project"
+            mock_db.get_session_working_directory.return_value = str(tmp_path)
 
             mock_cache.return_value = None  # No cache (first run)
             mock_has_src.return_value = False  # No Python/Rust files
 
             assert handle_stop_event("test-no-source", parsed) == 0
             mock_db.get_session_statistics.assert_not_called()
-            mock_has_src.assert_called_once_with("/some/hardware/project")
+            mock_has_src.assert_called_once_with(str(tmp_path))
+
+
+class TestResolveWorkingDirectory:
+    """Tests for _resolve_working_directory — repo-move tolerance."""
+
+    def test_resolve_working_directory__returns_stored_when_directory_exists(self, tmp_path):
+        """Existing stored path is used as-is."""
+        assert _resolve_working_directory(str(tmp_path)) == str(tmp_path)
+
+    def test_resolve_working_directory__falls_back_to_cwd_when_stored_missing(self, tmp_path, monkeypatch):
+        """When the recorded path no longer exists (repo moved/renamed), use cwd instead.
+
+        Simulates: session started at /old/path/repo, user `mv`s it to /new/path/repo,
+        next Stop event must find the cache at /new/path/repo, not crash trying to
+        mkdir under /old/path/repo/.slopometry.
+        """
+        monkeypatch.chdir(tmp_path)
+        missing = "/this/path/does/not/exist/anywhere"
+        assert _resolve_working_directory(missing) == str(tmp_path)
+
+    def test_resolve_working_directory__returns_none_when_stored_is_none(self):
+        """None stored_wd means unknown session — propagate None so caller bails."""
+        assert _resolve_working_directory(None) is None
+
+
+class TestHasSourceChanges:
+    """Tests for _has_source_changes — the fast-path source-delta probe.
+
+    Returns True when the working tree has any in-scope source delta (tracked
+    modification OR new untracked source file), and False only when the source
+    tree is provably identical to the committed state. Ignored dirs and submodule
+    contents never count.
+    """
+
+    @staticmethod
+    def _init_git_repo(path: Path) -> None:
+        subprocess.run(["git", "init", "-q"], cwd=path, check=True)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "user.email=t@t.com",
+                "-c",
+                "user.name=T",
+                "commit",
+                "--allow-empty",
+                "-qm",
+                "init",
+            ],
+            cwd=path,
+            check=True,
+        )
+
+    @staticmethod
+    def _commit(path: Path, message: str) -> None:
+        subprocess.run(["git", "add", "-A"], cwd=path, check=True)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "user.email=t@t.com",
+                "-c",
+                "user.name=T",
+                "commit",
+                "-qm",
+                message,
+            ],
+            cwd=path,
+            check=True,
+        )
+
+    def test_has_source_changes__returns_false_when_only_ignored_dir_files_changed(self, tmp_path):
+        """A modified .py inside __pycache__/ or .venv/ must not invalidate the cache.
+
+        This is the perf+correctness fix for repos with editable installs: a tool
+        regenerating .venv/site-packages/*.py would otherwise force every Stop event
+        to compute the full cache key, even though those files are never in scope
+        for slopometry's smell analysis.
+        """
+        self._init_git_repo(tmp_path)
+
+        ignored_dir = tmp_path / ".venv" / "site-packages"
+        ignored_dir.mkdir(parents=True)
+        ignored_file = ignored_dir / "x.py"
+        ignored_file.write_text("a = 1\n")
+        self._commit(tmp_path, "add ignored")
+
+        # Now MODIFY the ignored file — git diff reports it, but should_ignore_path filters it
+        ignored_file.write_text("a = 2\n")
+
+        assert _has_source_changes(str(tmp_path)) is False
+
+    def test_has_source_changes__returns_true_when_non_ignored_file_changed(self, tmp_path):
+        """A modified .py outside ignored dirs still trips the check."""
+        self._init_git_repo(tmp_path)
+
+        real_file = tmp_path / "real.py"
+        real_file.write_text("a = 1\n")
+        self._commit(tmp_path, "add real")
+
+        real_file.write_text("a = 2\n")
+        assert _has_source_changes(str(tmp_path)) is True
+
+    def test_has_source_changes__returns_true_for_new_untracked_source_file(self, tmp_path):
+        """A brand-new untracked .py is invisible to git diff but must still count.
+
+        Without this, the fast-path would silently swallow the fire for newly
+        created source files.
+        """
+        self._init_git_repo(tmp_path)
+        (tmp_path / "real.py").write_text("a = 1\n")
+        self._commit(tmp_path, "add real")
+
+        # Create a new untracked source file (no diff against HEAD)
+        (tmp_path / "brand_new.py").write_text("def feature(): pass\n")
+
+        assert _has_source_changes(str(tmp_path)) is True
+
+    def test_has_source_changes__returns_false_for_untracked_ignored_file(self, tmp_path):
+        """A new untracked .py inside an ignored dir (build/) must not count."""
+        self._init_git_repo(tmp_path)
+        (tmp_path / "real.py").write_text("a = 1\n")
+        self._commit(tmp_path, "add real")
+
+        build_dir = tmp_path / "build"
+        build_dir.mkdir()
+        (build_dir / "generated.py").write_text("# generated\n")
+
+        assert _has_source_changes(str(tmp_path)) is False
+
+    def test_has_source_changes__returns_false_for_clean_repo(self, tmp_path):
+        """Clean repo with no source delta takes the cheap quick-exit path."""
+        self._init_git_repo(tmp_path)
+        assert _has_source_changes(str(tmp_path)) is False

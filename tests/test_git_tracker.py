@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from slopometry.core.git_tracker import GitOperationError, GitTracker
+from slopometry.core.git_tracker import GitOperationError, GitTracker, get_submodule_prefixes
 
 # -----------------------------------------------------------------------------
 # Fixtures
@@ -624,3 +624,77 @@ def test_has_analyzable_source_files__returns_false_for_non_code_repo(tmp_path):
 
     tracker = GitTracker(tmp_path)
     assert tracker.has_analyzable_source_files() is False
+
+
+def _make_submodule_parent(tmp_path: Path) -> Path:
+    """Build a parent repo at tmp_path/main that has tmp_path/subrepo mounted at vendor/sub.
+
+    The parent gets its own main.py; the submodule gets sub.py. Returns the parent path.
+    """
+    env = os.environ.copy()
+    env["HOME"] = str(tmp_path)
+
+    sub = tmp_path / "subrepo"
+    sub.mkdir()
+    subprocess.run(["git", "init"], cwd=sub, env=env, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=sub, env=env, check=True)
+    subprocess.run(["git", "config", "user.name", "T"], cwd=sub, env=env, check=True)
+    (sub / "sub.py").write_text("def sub(): pass")
+    subprocess.run(["git", "add", "."], cwd=sub, env=env, check=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=sub, env=env, check=True)
+
+    main = tmp_path / "main"
+    main.mkdir()
+    subprocess.run(["git", "init"], cwd=main, env=env, check=True)
+    subprocess.run(["git", "config", "user.email", "t@t.com"], cwd=main, env=env, check=True)
+    subprocess.run(["git", "config", "user.name", "T"], cwd=main, env=env, check=True)
+    (main / "main.py").write_text("def main(): pass")
+    subprocess.run(["git", "add", "."], cwd=main, env=env, check=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=main, env=env, check=True)
+
+    subprocess.run(
+        ["git", "-c", "protocol.file.allow=always", "submodule", "add", str(sub), "vendor/sub"],
+        cwd=main,
+        env=env,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(["git", "commit", "-m", "add submodule"], cwd=main, env=env, check=True)
+    return main
+
+
+def test_get_tracked_python_files__excludes_submodule_contents(tmp_path):
+    """Python files living inside a declared submodule must never appear in the parent's file list."""
+    main = _make_submodule_parent(tmp_path)
+    tracker = GitTracker(main)
+
+    files = tracker.get_tracked_python_files()
+    rel = [str(f.relative_to(main)) for f in files]
+
+    assert "main.py" in rel
+    assert not any(p.startswith("vendor/sub/") for p in rel)
+
+
+def test_submodule_prefixes__returns_declared_paths(tmp_path):
+    """GitTracker.submodule_prefixes reads .gitmodules and returns path/-suffixed prefixes."""
+    main = _make_submodule_parent(tmp_path)
+    tracker = GitTracker(main)
+
+    assert tracker.submodule_prefixes() == ("vendor/sub/",)
+
+
+def test_submodule_prefixes__returns_empty_when_no_gitmodules(tmp_path):
+    """No .gitmodules file means no submodules — return empty, do not raise."""
+    assert get_submodule_prefixes(tmp_path) == ()
+
+
+def test_submodule_prefixes__raises_when_gitmodules_unreadable(tmp_path):
+    """A present-but-unparseable .gitmodules must raise so callers can surface the problem.
+
+    Silently returning () would disable submodule filtering and re-introduce the
+    cache-invalidation bug this helper exists to prevent.
+    """
+    (tmp_path / ".gitmodules").write_text("[submodule broken\n")
+
+    with pytest.raises(GitOperationError):
+        get_submodule_prefixes(tmp_path)

@@ -643,8 +643,18 @@ class TestQPEIntegration:
         # Documented expectations for slopometry codebase quality
         # These are loose bounds that should remain stable across minor changes
 
-        # MI should be in reasonable range for a Python codebase (40-70 typical)
-        assert 25 <= metrics.average_mi <= 80, f"MI {metrics.average_mi} outside expected range"
+        # MI guard targets PRODUCTION maintainability. Test files are excluded: their
+        # code-as-string fixtures legitimately score very low (often negative) MI, so
+        # including them lets test volume drag the average and mask — or fabricate —
+        # production regressions. Average over non-test files only.
+        production_mi = [
+            mi
+            for path, mi in metrics.files_by_mi.items()
+            if not (Path(path).name.startswith("test_") or "tests/" in path.replace("\\", "/"))
+        ]
+        assert production_mi, "Expected production (non-test) files in the MI analysis"
+        avg_production_mi = sum(production_mi) / len(production_mi)
+        assert 25 <= avg_production_mi <= 80, f"Production MI {avg_production_mi} outside expected range"
 
         # Should analyze multiple files
         assert metrics.total_files_analyzed > 10, "Expected to analyze more than 10 Python files"
