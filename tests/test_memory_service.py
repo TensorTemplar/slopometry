@@ -1,0 +1,201 @@
+"""Test memory service."""
+
+import tempfile
+from collections.abc import Iterator
+from datetime import datetime
+from pathlib import Path
+
+import pytest
+
+from slopometry.core.database import EventDatabase
+from slopometry.core.models.memory import MemoryCandidate, MemoryCreateRequest, MemoryEntry, MemoryType
+from slopometry.solo.services.memory_service import MemoryService
+
+
+@pytest.fixture
+def temp_db() -> Iterator[EventDatabase]:
+    """Create a temporary database for testing."""
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+        db_path = Path(f.name)
+    try:
+        db = EventDatabase(db_path)
+        yield db
+    finally:
+        if db_path.exists():
+            db_path.unlink()
+
+
+@pytest.fixture
+def memory_service(temp_db: EventDatabase) -> MemoryService:
+    """Create a MemoryService with temporary database."""
+    return MemoryService(db=temp_db)
+
+
+def test_save_memory(memory_service: MemoryService) -> None:
+    """Saves a memory entry."""
+    memory = MemoryEntry(
+        id="mem-001",
+        session_id="session-abc",
+        project_dir="/test/project",
+        memory_type=MemoryType.USER,
+        content="Test memory content",
+        created_at=datetime.now(),
+    )
+
+    memory_service.save_memory(memory)
+
+    memories = memory_service.get_memories()
+    assert len(memories) == 1
+    assert memories[0].id == "mem-001"
+    assert memories[0].content == "Test memory content"
+
+
+def test_save_memories(memory_service: MemoryService) -> None:
+    """Saves multiple candidates."""
+    request = MemoryCreateRequest(
+        session_id="session-xyz",
+        project_dir="/test/project",
+        candidates=[
+            MemoryCandidate(
+                memory_type=MemoryType.USER,
+                content="First memory",
+            ),
+            MemoryCandidate(
+                memory_type=MemoryType.PROJECT,
+                content="Second memory",
+            ),
+        ],
+    )
+
+    saved = memory_service.save_memories(request)
+
+    assert len(saved) == 2
+    assert saved[0].content == "First memory"
+    assert saved[1].content == "Second memory"
+    assert saved[0].session_id == "session-xyz"
+
+
+def test_get_memories(memory_service: MemoryService) -> None:
+    """Retrieves memories."""
+    memory_service.save_memory(
+        MemoryEntry(
+            id="mem-001",
+            session_id="session-1",
+            project_dir="/project1",
+            memory_type=MemoryType.USER,
+            content="User memory",
+            created_at=datetime.now(),
+        )
+    )
+    memory_service.save_memory(
+        MemoryEntry(
+            id="mem-002",
+            session_id="session-2",
+            project_dir="/project2",
+            memory_type=MemoryType.PROJECT,
+            content="Project memory",
+            created_at=datetime.now(),
+        )
+    )
+
+    memories = memory_service.get_memories()
+    assert len(memories) == 2
+
+    project_memories = memory_service.get_memories(project_dir="/project2")
+    assert len(project_memories) == 1
+    assert project_memories[0].memory_type == MemoryType.PROJECT
+
+    type_memories = memory_service.get_memories(memory_type=MemoryType.USER)
+    assert len(type_memories) == 1
+    assert type_memories[0].id == "mem-001"
+
+
+def test_delete_memory(memory_service: MemoryService) -> None:
+    """Deletes a memory by ID."""
+    memory = MemoryEntry(
+        id="mem-to-delete",
+        session_id="session-1",
+        project_dir="/test/project",
+        memory_type=MemoryType.REFERENCE,
+        content="Memory to delete",
+        created_at=datetime.now(),
+    )
+    memory_service.save_memory(memory)
+
+    result = memory_service.delete_memory("mem-to-delete")
+    assert result is True
+
+    memories = memory_service.get_memories()
+    assert len(memories) == 0
+
+    result = memory_service.delete_memory("non-existent")
+    assert result is False
+
+
+def test_delete_all_memories(memory_service: MemoryService) -> None:
+    """Clears all memories and processed_sessions."""
+    memory_service.save_memory(
+        MemoryEntry(
+            id="mem-1",
+            session_id="session-1",
+            project_dir="/project1",
+            memory_type=MemoryType.USER,
+            content="Memory 1",
+            created_at=datetime.now(),
+        )
+    )
+    memory_service.save_memory(
+        MemoryEntry(
+            id="mem-2",
+            session_id="session-2",
+            project_dir="/project2",
+            memory_type=MemoryType.PROJECT,
+            content="Memory 2",
+            created_at=datetime.now(),
+        )
+    )
+    memory_service.mark_session_processed("session-1", "/project1", 1)
+
+    assert memory_service.is_session_processed("session-1", "/project1") is True
+
+    count = memory_service.delete_all_memories()
+    assert count == 2
+
+    memories = memory_service.get_memories()
+    assert len(memories) == 0
+
+    assert memory_service.is_session_processed("session-1", "/project1") is False
+
+
+def test_mark_session_processed(memory_service: MemoryService) -> None:
+    """Marks session as processed."""
+    memory_service.mark_session_processed("session-test", "/test/project", 5)
+
+    assert memory_service.is_session_processed("session-test", "/test/project") is True
+
+
+def test_is_session_processed(memory_service: MemoryService) -> None:
+    """Checks if session was processed."""
+    assert memory_service.is_session_processed("unprocessed-session", "/any/project") is False
+
+    memory_service.mark_session_processed("processed-session", "/any/project", 3)
+
+    assert memory_service.is_session_processed("processed-session", "/any/project") is True
+
+
+def test_get_memories_limit(memory_service: MemoryService) -> None:
+    """Test that get_memories respects limit parameter."""
+    for i in range(10):
+        memory_service.save_memory(
+            MemoryEntry(
+                id=f"mem-{i}",
+                session_id="session-1",
+                project_dir="/test/project",
+                memory_type=MemoryType.USER,
+                content=f"Memory {i}",
+                created_at=datetime.now(),
+            )
+        )
+
+    memories = memory_service.get_memories(limit=5)
+    assert len(memories) == 5

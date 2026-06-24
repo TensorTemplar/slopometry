@@ -508,6 +508,103 @@ class Migration014AddBehavioralPatternHistory(Migration):
         )
 
 
+class Migration015AbstractEventTypeValues(Migration):
+    """Translate legacy PascalCase event_type values into the new snake_case
+    abstract protocol values. Existing rows are rewritten; the column type is
+    unchanged (TEXT), only the string content shifts.
+    """
+
+    _RENAMES: dict[str, str] = {
+        "PreToolUse": "tool_call_started",
+        "PostToolUse": "tool_call_completed",
+        "Notification": "notification",
+        "Stop": "turn_completed",
+        "SubagentStop": "subagent_completed",
+        "TodoUpdated": "todo_updated",
+        "MessageUpdated": "message_updated",
+        "SubagentStart": "subagent_started",
+    }
+
+    @property
+    def version(self) -> str:
+        return "015"
+
+    @property
+    def description(self) -> str:
+        return "Translate event_type values from PascalCase (legacy Claude Code/OpenCode wire names) to snake_case (abstract protocol)"
+
+    def up(self, conn: sqlite3.Connection) -> None:
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='hook_events'")
+        if not cursor.fetchone():
+            return
+        cursor = conn.execute("PRAGMA table_info(hook_events)")
+        if not any(row[1] == "event_type" for row in cursor.fetchall()):
+            return
+        for legacy, abstract in self._RENAMES.items():
+            conn.execute(
+                "UPDATE hook_events SET event_type = ? WHERE event_type = ?",
+                (abstract, legacy),
+            )
+
+
+class Migration016AddMemorySupersededByColumn(Migration):
+    """Add superseded_by column to memories for lineage tracking.
+
+    Distinct from `retained`, which is a user/system retention decision.
+    `superseded_by` records the id of the newer memory that an LLM judge
+    decided replaces this one. A separate cleanup pass can prune the chain.
+    """
+
+    @property
+    def version(self) -> str:
+        return "016"
+
+    @property
+    def description(self) -> str:
+        return "Add superseded_by column to memories for LLM-judged lineage tracking"
+
+    def up(self, conn: sqlite3.Connection) -> None:
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='memories'")
+        if not cursor.fetchone():
+            return
+        cursor = conn.execute("PRAGMA table_info(memories)")
+        if any(row[1] == "superseded_by" for row in cursor.fetchall()):
+            return
+        conn.execute("ALTER TABLE memories ADD COLUMN superseded_by TEXT")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_memories_superseded_by ON memories(superseded_by)"
+        )
+
+
+class Migration017AddProcessedMemorySourceColumn(Migration):
+    """Add source column to processed_memory_sessions for harness routing.
+
+    Pre-MultiHarness rows had no source column; their session IDs were bare
+    (no ``<source>:`` prefix). New rows carry an explicit source
+    (``claude_code`` or ``opencode``) to avoid cross-harness collisions in the
+    ``(session_id, project_dir)`` primary key.
+    """
+
+    @property
+    def version(self) -> str:
+        return "017"
+
+    @property
+    def description(self) -> str:
+        return "Add source column to processed_memory_sessions; default existing rows to claude_code"
+
+    def up(self, conn: sqlite3.Connection) -> None:
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='processed_memory_sessions'")
+        if not cursor.fetchone():
+            return
+        cursor = conn.execute("PRAGMA table_info(processed_memory_sessions)")
+        if any(row[1] == "source" for row in cursor.fetchall()):
+            return
+        conn.execute(
+            "ALTER TABLE processed_memory_sessions ADD COLUMN source TEXT NOT NULL DEFAULT 'claude_code'"
+        )
+
+
 class MigrationRunner:
     """Manages database migrations."""
 
@@ -528,6 +625,9 @@ class MigrationRunner:
             Migration012AddNFPObjectiveToExperimentRuns(),
             Migration013AddSourceAndParentSession(),
             Migration014AddBehavioralPatternHistory(),
+            Migration015AbstractEventTypeValues(),
+            Migration016AddMemorySupersededByColumn(),
+            Migration017AddProcessedMemorySourceColumn(),
         ]
 
     @contextmanager

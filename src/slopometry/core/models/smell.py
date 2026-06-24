@@ -1,12 +1,12 @@
 """Code smell definitions, registry, and data models."""
 
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class SmellCategory(str, Enum):
+class SmellCategory(StrEnum):
     """Category of code smell for organization and filtering."""
 
     GENERAL = "general"

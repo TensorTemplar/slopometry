@@ -1,7 +1,7 @@
 """Experiment tracking and progress models."""
 
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from uuid import uuid4
 
@@ -11,7 +11,7 @@ from slopometry.core.models.complexity import ExtendedComplexityMetrics
 from slopometry.core.models.user_story import NextFeaturePrediction
 
 
-class ExperimentStatus(str, Enum):
+class ExperimentStatus(StrEnum):
     """Status of an experiment run."""
 
     PENDING = "pending"
@@ -66,15 +66,6 @@ class ProgressDisplayData(BaseModel):
     complexity_score: str = Field(description="Formatted complexity score")
     halstead_score: str = Field(description="Formatted Halstead score")
     maintainability_score: str = Field(description="Formatted maintainability score")
-
-
-class MergeCommit(BaseModel):
-    """Information about a merge commit in git history."""
-
-    hash: str = Field(description="The commit hash")
-    parents: list[str] = Field(description="Parent commit hashes")
-    message: str = Field(description="Commit message")
-    feature_branch: str = Field(description="The feature branch commit (second parent)")
 
 
 class FeatureBoundary(BaseModel):

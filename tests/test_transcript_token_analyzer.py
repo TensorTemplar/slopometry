@@ -514,7 +514,7 @@ class TestOpenCodeTranscriptTokens:
         assert usage.implementation_input_tokens == 0
 
     def test_lowercase_tools__classified_correctly_without_agent(self):
-        """Lowercase tool names (OpenCode format) should match ToolType enum case-insensitively."""
+        """Lowercase tool names (OpenCode format) should match ToolType enum case-insensitively (slopometry.core.protocol.adapters.claude_code)."""
         transcript = [
             self._make_oc_msg("assistant", 50_000, 5_000, tools=["grep", "read", "glob"]),
         ]

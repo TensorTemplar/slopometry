@@ -15,7 +15,53 @@ from slopometry.core.models.baseline import HistoricalMetricStats, QPEScore, Rep
 from slopometry.core.models.complexity import ComplexityDelta, ExtendedComplexityMetrics
 from slopometry.core.models.display import LeaderboardEntry, SessionDisplayData
 from slopometry.core.models.experiment import ExperimentProgress, ExperimentRun, ExperimentStatus, FeatureBoundary
-from slopometry.core.models.hook import GitState, HookEvent, HookEventType, Project, ProjectSource, ToolType
+from slopometry.core.models.hook import (
+    GitState,
+    Project,
+    ProjectSource,
+)
+from slopometry.core.models.protocol.events import (
+    AbstractEventSource,
+    AbstractEventType,
+    AbstractHookEvent,
+    ToolCallPayload,
+)
+from slopometry.core.protocol.session import SessionManager
+
+
+def _reconstruct_tool_call(
+    tool_name: str | None,
+    tool_type_value: str | None,
+    row: sqlite3.Row,
+) -> ToolCallPayload | None:
+    """Reconstruct ToolCallPayload from denormalized DB columns.
+
+    The DB stores tool fields as flat columns (tool_name, tool_type, duration_ms,
+    exit_code, error_message) and the original input/output inside `metadata`.
+    We prefer the typed columns for tool_call fields; input/output come from
+    metadata when present, otherwise we leave them empty.
+    """
+    if not tool_name:
+        return None
+    metadata = json.loads(row["metadata"]) if row["metadata"] else {}
+    input_payload = metadata.get("tool_input") or metadata.get("args") or {}
+    output_payload = (
+        metadata.get("tool_response")
+        if "tool_response" in metadata
+        else metadata.get("output")
+    )
+    if not isinstance(input_payload, dict):
+        input_payload = {}
+    return ToolCallPayload(
+        tool_name=tool_name,
+        tool_type=tool_type_value,
+        input=input_payload,
+        output=output_payload,
+        duration_ms=row["duration_ms"],
+        exit_code=row["exit_code"],
+        error_message=row["error_message"],
+    )
+from slopometry.core.models.memory import MemoryEntry, MemoryType
 from slopometry.core.models.session import BehavioralPatterns, ContextCoverage, PlanEvolution, SessionStatistics
 from slopometry.core.models.user_story import NextFeaturePrediction, UserStory, UserStoryEntry
 from slopometry.core.plan_analyzer import PlanAnalyzer
@@ -318,10 +364,47 @@ class EventDatabase:
                 "CREATE INDEX IF NOT EXISTS idx_repo_baselines_repo_head ON repo_baselines(repository_path, head_commit_sha)"
             )
 
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS memories (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    project_dir TEXT NOT NULL,
+                    memory_type TEXT NOT NULL CHECK (memory_type IN ('user', 'feedback', 'project', 'reference')),
+                    content TEXT NOT NULL,
+                    source_context TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT,
+                    retained INTEGER NOT NULL DEFAULT 0,
+                    superseded_by TEXT,
+                    embedding TEXT,
+                    metadata TEXT
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_project_dir ON memories(project_dir)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_session_id ON memories(session_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(memory_type)")
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS processed_memory_sessions (
+                    session_id TEXT NOT NULL,
+                    project_dir TEXT NOT NULL,
+                    source TEXT NOT NULL DEFAULT 'claude_code',
+                    processed_at TEXT NOT NULL,
+                    memory_count INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (session_id, project_dir)
+                )
+            """)
+
             conn.commit()
 
-    def save_event(self, event: HookEvent) -> int:
+    def save_event(self, event: AbstractHookEvent) -> int:
         """Save a hook event to the database."""
+        tool_name = event.tool_call.tool_name if event.tool_call else None
+        tool_type = event.tool_call.tool_type if event.tool_call else None
+        duration_ms = event.tool_call.duration_ms if event.tool_call else None
+        exit_code = event.tool_call.exit_code if event.tool_call else None
+        error_message = event.tool_call.error_message if event.tool_call else None
+
         with self._get_db_connection() as conn:
             cursor = conn.execute(
                 """
@@ -338,24 +421,24 @@ class EventDatabase:
                     event.event_type.value,
                     event.timestamp.isoformat(),
                     event.sequence_number,
-                    event.tool_name,
-                    event.tool_type.value if event.tool_type else None,
+                    tool_name,
+                    tool_type,
                     json.dumps(event.metadata),
-                    event.duration_ms,
-                    event.exit_code,
-                    event.error_message,
+                    duration_ms,
+                    exit_code,
+                    error_message,
                     event.git_state.model_dump_json() if event.git_state else None,
                     event.working_directory,
                     event.project.name if event.project else None,
                     event.project.source.value if event.project else None,
-                    event.transcript_path,
+                    event.transcript_location,
                     event.source.value,
                     event.parent_session_id,
                 ),
             )
             return cursor.lastrowid or 0
 
-    def get_session_events(self, session_id: str) -> list[HookEvent]:
+    def get_session_events(self, session_id: str) -> list[AbstractHookEvent]:
         """Get all events for a session."""
         with self._get_db_connection() as conn:
             conn.row_factory = sqlite3.Row
@@ -384,32 +467,27 @@ class EventDatabase:
                         source=ProjectSource(row["project_source"]),
                     )
 
-                # Handle source column (may be NULL for pre-migration rows)
-                from slopometry.core.models.hook import EventSource
-
                 source_val = row["source"] if "source" in row.keys() else None
-                source = EventSource(source_val) if source_val else EventSource.CLAUDE_CODE
+                source = AbstractEventSource(source_val) if source_val else AbstractEventSource.CLAUDE_CODE
                 parent_session_id = row["parent_session_id"] if "parent_session_id" in row.keys() else None
 
+                tool_name = row["tool_name"]
+                tool_type_value = row["tool_type"]
                 events.append(
-                    HookEvent(
+                    AbstractHookEvent(
                         id=row["id"],
                         session_id=row["session_id"],
-                        event_type=HookEventType(row["event_type"]),
+                        event_type=AbstractEventType(row["event_type"]),
                         timestamp=datetime.fromisoformat(row["timestamp"]),
                         sequence_number=row["sequence_number"],
-                        tool_name=row["tool_name"],
-                        tool_type=ToolType(row["tool_type"]) if row["tool_type"] else None,
-                        metadata=json.loads(row["metadata"]),
-                        duration_ms=row["duration_ms"],
-                        exit_code=row["exit_code"],
-                        error_message=row["error_message"],
+                        source=source,
+                        parent_session_id=parent_session_id,
+                        tool_call=_reconstruct_tool_call(tool_name, tool_type_value, row),
+                        metadata=json.loads(row["metadata"]) if row["metadata"] else {},
                         git_state=git_state,
                         working_directory=working_directory,
                         project=project,
-                        transcript_path=row["transcript_path"],
-                        source=source,
-                        parent_session_id=parent_session_id,
+                        transcript_location=row["transcript_path"],
                     )
                 )
             return events
@@ -440,10 +518,10 @@ class EventDatabase:
             row = conn.execute(
                 """
                 SELECT metadata FROM hook_events
-                WHERE session_id = ? AND event_type = 'Stop' AND source = 'opencode'
+                WHERE session_id = ? AND event_type = ? AND source = ?
                 ORDER BY sequence_number DESC LIMIT 1
                 """,
-                (session_id,),
+                (session_id, AbstractEventType.TURN_COMPLETED.value, AbstractEventSource.OPENCODE.value),
             ).fetchone()
             if not row:
                 return None
@@ -563,7 +641,7 @@ class EventDatabase:
                 (session_id,),
             ).fetchall()
 
-            events_by_type = {HookEventType(row["event_type"]): row["count"] for row in event_type_rows}
+            events_by_type = {AbstractEventType(row["event_type"]): row["count"] for row in event_type_rows}
 
             tool_usage_rows = conn.execute(
                 """
@@ -575,7 +653,7 @@ class EventDatabase:
                 (session_id,),
             ).fetchall()
 
-            tool_usage = {ToolType(row["tool_type"]): row["count"] for row in tool_usage_rows}
+            tool_usage = {row["tool_type"]: row["count"] for row in tool_usage_rows}
 
             first_git_row = conn.execute(
                 """
@@ -834,29 +912,26 @@ class EventDatabase:
                 WHERE session_id = ? AND event_type IN (?, ?)
                 ORDER BY sequence_number
                 """,
-                (session_id, HookEventType.POST_TOOL_USE.value, HookEventType.TODO_UPDATED.value),
+                (session_id, AbstractEventType.TOOL_CALL_COMPLETED.value, AbstractEventType.TODO_UPDATED.value),
             ).fetchall()
 
-            # Check if this session has TODO_UPDATED events (OpenCode).
-            # If so, skip POST_TOOL_USE todowrite events to avoid duplicate analysis.
-            has_todo_updated = any(row["event_type"] == HookEventType.TODO_UPDATED.value for row in rows)
+            has_todo_updated = any(row["event_type"] == AbstractEventType.TODO_UPDATED.value for row in rows)
 
             for row in rows:
                 timestamp = datetime.fromisoformat(row["timestamp"])
                 event_type = row["event_type"]
                 tool_name = row["tool_name"] or ""
-                tool_type = ToolType(row["tool_type"]) if row["tool_type"] else None
+                tool_type = row["tool_type"]
 
                 metadata = json.loads(row["metadata"]) if row["metadata"] else {}
 
-                if event_type == HookEventType.TODO_UPDATED.value:
+                if event_type == AbstractEventType.TODO_UPDATED.value:
                     # OpenCode todo.updated bus event — canonical source for OpenCode todos
                     todos = metadata.get("todos", [])
                     if todos:
                         analyzer.analyze_todo_write_event({"todos": todos}, timestamp)
                     continue
 
-                # POST_TOOL_USE events below
                 raw_input = metadata.get("tool_input") or metadata.get("args", {})
                 tool_input = raw_input if isinstance(raw_input, dict) else {}
                 tool_name_lower = tool_name.lower()
@@ -1047,37 +1122,57 @@ class EventDatabase:
         cutoff_date = datetime.now() - timedelta(days=days)
         with self._get_db_connection() as conn:
             rows = conn.execute(
-                "SELECT DISTINCT session_id FROM hook_events WHERE timestamp < ?",
+                "SELECT DISTINCT session_id, source FROM hook_events WHERE timestamp < ?",
                 (cutoff_date.isoformat(),),
             ).fetchall()
             session_ids_to_delete = [row[0] for row in rows]
+
             if not dry_run and session_ids_to_delete:
                 conn.execute("DELETE FROM hook_events WHERE timestamp < ?", (cutoff_date.isoformat(),))
 
         files_deleted = 0
-        state_dir = Path.home() / ".claude" / "slopometry"
-        if state_dir.exists():
-            for session_id in session_ids_to_delete:
-                seq_file = state_dir / f"seq_{session_id}.txt"
-                if seq_file.exists():
-                    if not dry_run:
-                        seq_file.unlink()
-                    files_deleted += 1
+        seen_dirs: set[Path] = set()
+        for session_id, source in rows:
+            sm = SessionManager(source=source or "claude_code")
+            seq_file = sm.state_dir / f"seq_{session_id}.txt"
+            seen_dirs.add(sm.state_dir)
+            if seq_file.exists():
+                if not dry_run:
+                    seq_file.unlink()
+                files_deleted += 1
+        for legacy_dir in (Path.home() / ".claude" / "slopometry",):
+            if legacy_dir.exists():
+                for seq_file in legacy_dir.glob("seq_*.txt"):
+                    if seq_file.exists():
+                        if not dry_run:
+                            seq_file.unlink()
+                        files_deleted += 1
         return len(session_ids_to_delete), files_deleted
 
     def cleanup_session(self, session_id: str) -> tuple[int, int]:
         """Clean up a specific session and its associated files."""
         with self._get_db_connection() as conn:
-            result = conn.execute("SELECT COUNT(*) FROM hook_events WHERE session_id = ?", (session_id,)).fetchone()
+            source_row = conn.execute(
+                "SELECT source FROM hook_events WHERE session_id = ? LIMIT 1",
+                (session_id,),
+            ).fetchone()
+            source = (source_row[0] if source_row and source_row[0] else "claude_code")
+            result = conn.execute(
+                "SELECT COUNT(*) FROM hook_events WHERE session_id = ?", (session_id,)
+            ).fetchone()
             events_count = result[0] if result else 0
             conn.execute("DELETE FROM hook_events WHERE session_id = ?", (session_id,))
 
         files_deleted = 0
-        state_dir = Path.home() / ".claude" / "slopometry"
-        seq_file = state_dir / f"seq_{session_id}.txt"
+        sm = SessionManager(source=source)
+        seq_file = sm.state_dir / f"seq_{session_id}.txt"
         if seq_file.exists():
             seq_file.unlink()
             files_deleted = 1
+        legacy_file = Path.home() / ".claude" / "slopometry" / f"seq_{session_id}.txt"
+        if legacy_file.exists():
+            legacy_file.unlink()
+            files_deleted += 1
         return events_count, files_deleted
 
     def cleanup_all_sessions(self) -> tuple[int, int, int]:
@@ -1089,11 +1184,11 @@ class EventDatabase:
             conn.execute("DELETE FROM hook_events")
 
         files_deleted = 0
-        state_dir = Path.home() / ".claude" / "slopometry"
-        if state_dir.exists():
-            for seq_file in state_dir.glob("seq_*.txt"):
-                seq_file.unlink()
-                files_deleted += 1
+        for state_root in (Path.home() / ".slopometry" / "sessions", Path.home() / ".claude" / "slopometry"):
+            if state_root.exists():
+                for seq_file in state_root.glob("**/seq_*.txt"):
+                    seq_file.unlink()
+                    files_deleted += 1
         return len(sessions), events_count, files_deleted
 
     def save_experiment_run(self, experiment: ExperimentRun) -> None:
@@ -2078,25 +2173,232 @@ class EventDatabase:
             conn.execute("DELETE FROM qpe_leaderboard")
             return count
 
+    def save_memory(self, memory: MemoryEntry) -> None:
+        """Save a memory entry to the database."""
+        with self._get_db_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO memories (
+                    id, session_id, project_dir, memory_type, content,
+                    source_context, created_at, updated_at,
+                    retained, superseded_by, embedding, metadata
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    memory.id,
+                    memory.session_id,
+                    memory.project_dir,
+                    memory.memory_type.value,
+                    memory.content,
+                    memory.source_context,
+                    memory.created_at.isoformat(),
+                    memory.updated_at.isoformat() if memory.updated_at else None,
+                    int(memory.retained),
+                    memory.superseded_by,
+                    json.dumps(memory.embedding) if memory.embedding else None,
+                    json.dumps(memory.metadata) if memory.metadata else None,
+                ),
+            )
 
-class SessionManager:
-    """Manages sequence numbering for Claude Code sessions."""
+    def save_memories(self, memories: list["MemoryEntry"]) -> int:
+        """Save multiple memory entries.
 
-    def __init__(self):
-        self.state_dir = Path.home() / ".claude" / "slopometry"
-        self.state_dir.mkdir(parents=True, exist_ok=True)
+        Returns:
+            Number of memories saved
+        """
+        with self._get_db_connection() as conn:
+            for memory in memories:
+                conn.execute(
+                    """
+                    INSERT INTO memories (
+                        id, session_id, project_dir, memory_type, content,
+                        source_context, created_at, updated_at,
+                        retained, superseded_by, embedding, metadata
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        memory.id,
+                        memory.session_id,
+                        memory.project_dir,
+                        memory.memory_type.value,
+                        memory.content,
+                        memory.source_context,
+                        memory.created_at.isoformat(),
+                        memory.updated_at.isoformat() if memory.updated_at else None,
+                        int(memory.retained),
+                        memory.superseded_by,
+                        json.dumps(memory.embedding) if memory.embedding else None,
+                        json.dumps(memory.metadata) if memory.metadata else None,
+                    ),
+                )
+            return len(memories)
 
-    def get_next_sequence_number(self, session_id: str) -> int:
-        """Get the next sequence number for a session."""
-        seq_file = self.state_dir / f"seq_{session_id}.txt"
-        if seq_file.exists():
-            try:
-                current_seq = int(seq_file.read_text().strip())
-                next_seq = current_seq + 1
-            except (ValueError, FileNotFoundError) as e:
-                logger.debug("Corrupt or missing sequence file for session %s, resetting to 1: %s", session_id, e)
-                next_seq = 1
-        else:
-            next_seq = 1
-        seq_file.write_text(str(next_seq))
-        return next_seq
+    def get_memories(
+        self,
+        project_dir: str | None = None,
+        memory_type: str | None = None,
+        limit: int = 50,
+    ) -> list[MemoryEntry]:
+        """Get memories with optional filters."""
+        with self._get_db_connection() as conn:
+            query = "SELECT * FROM memories WHERE 1=1"
+            params: list = []
+
+            if project_dir:
+                query += " AND project_dir = ?"
+                params.append(project_dir)
+
+            if memory_type:
+                query += " AND memory_type = ?"
+                params.append(memory_type)
+
+            query += " ORDER BY created_at DESC LIMIT ?"
+            params.append(limit)
+
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(query, params).fetchall()
+
+            memories = []
+            for row in rows:
+                memories.append(
+                    MemoryEntry(
+                        id=row["id"],
+                        session_id=row["session_id"],
+                        project_dir=row["project_dir"],
+                        memory_type=MemoryType(row["memory_type"]),
+                        content=row["content"],
+                        source_context=row["source_context"],
+                        created_at=datetime.fromisoformat(row["created_at"]),
+                        updated_at=datetime.fromisoformat(row["updated_at"]) if row["updated_at"] else None,
+                        retained=bool(row["retained"]),
+                        superseded_by=row["superseded_by"] if "superseded_by" in row.keys() else None,
+                        embedding=json.loads(row["embedding"]) if row["embedding"] else None,
+                        metadata=json.loads(row["metadata"]) if row["metadata"] else None,
+                    )
+                )
+            return memories
+
+    def delete_memory(self, memory_id: str) -> bool:
+        """Delete a memory by ID.
+
+        Returns:
+            True if a memory was deleted, False otherwise
+        """
+        with self._get_db_connection() as conn:
+            cursor = conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
+            conn.commit()
+            return bool(cursor.rowcount and cursor.rowcount > 0)
+
+    def delete_all_memories(self) -> int:
+        """Delete all memories and processed session records.
+
+        Returns:
+            Number of memories deleted
+        """
+        with self._get_db_connection() as conn:
+            cursor = conn.execute("DELETE FROM memories")
+            conn.execute("DELETE FROM processed_memory_sessions")
+            conn.commit()
+            return cursor.rowcount if cursor.rowcount else 0
+
+    def update_memory(
+        self,
+        memory_id: str,
+        content: str | None = None,
+        retained: bool | None = None,
+        superseded_by: str | None = None,
+        source_context: str | None = None,
+        embedding: list[float] | None = None,
+    ) -> bool:
+        """Update a memory entry.
+
+        Returns:
+            True if a memory was updated, False otherwise
+        """
+        updates: list[str] = []
+        params: list = []
+
+        if content is not None:
+            updates.append("content = ?")
+            params.append(content)
+
+        if embedding is not None:
+            updates.append("embedding = ?")
+            params.append(json.dumps(embedding))
+
+        if retained is not None:
+            updates.append("retained = ?")
+            params.append(int(retained))
+
+        if superseded_by is not None:
+            updates.append("superseded_by = ?")
+            params.append(superseded_by)
+
+        if source_context is not None:
+            updates.append("source_context = ?")
+            params.append(source_context)
+
+        if not updates:
+            return False
+
+        updates.append("updated_at = ?")
+        params.append(datetime.now().isoformat())
+
+        params.append(memory_id)
+
+        with self._get_db_connection() as conn:
+            cursor = conn.execute(
+                f"UPDATE memories SET {', '.join(updates)} WHERE id = ?",
+                params,
+            )
+            conn.commit()
+            return bool(cursor.rowcount and cursor.rowcount > 0)
+
+    def mark_session_processed(
+        self, session_id: str, project_dir: str, memory_count: int, source: str = "claude_code"
+    ) -> None:
+        """Mark a session as processed for memory extraction."""
+        with self._get_db_connection() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO processed_memory_sessions
+                (session_id, project_dir, source, processed_at, memory_count)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (session_id, project_dir, source, datetime.now().isoformat(), memory_count),
+            )
+
+    def is_session_processed(self, session_id: str, project_dir: str, source: str = "claude_code") -> bool:
+        """Check if a session has already been processed for memories."""
+        with self._get_db_connection() as conn:
+            cursor = conn.execute(
+                "SELECT 1 FROM processed_memory_sessions WHERE session_id = ? AND project_dir = ? AND source = ?",
+                (session_id, project_dir, source),
+            )
+            return cursor.fetchone() is not None
+
+    def get_memory_stats(self, project_dir: str | None = None) -> dict:
+        """Get statistics about stored memories."""
+        with self._get_db_connection() as conn:
+            base_query = "SELECT memory_type, COUNT(*) as count FROM memories"
+            params: list = []
+
+            if project_dir:
+                base_query += " WHERE project_dir = ?"
+                params.append(project_dir)
+
+            base_query += " GROUP BY memory_type"
+
+            rows = conn.execute(base_query, params).fetchall()
+            type_distribution = {row[0]: row[1] for row in rows}
+
+            total_query = "SELECT COUNT(*) FROM memories"
+            if project_dir:
+                total_query += " WHERE project_dir = ?"
+            total = conn.execute(total_query, params).fetchone()[0] or 0
+
+            return {
+                "total": total,
+                "by_type": type_distribution,
+            }
+

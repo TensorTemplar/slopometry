@@ -17,7 +17,7 @@ class LLMService:
     def generate_user_stories_from_commits(
         self, repo_path: Path, base_commit: str, head_commit: str
     ) -> tuple[int, list[str]]:
-        """Generate user stories from commit diffs using configured AI agent.
+        """Generate user stories from commit diffs using the configured AI agent.
 
         Returns:
             Tuple of (successful_generations, error_messages)
@@ -25,8 +25,8 @@ class LLMService:
         from slopometry.core.models import UserStoryEntry
         from slopometry.summoner.services.llm_wrapper import (
             calculate_stride_size,
+            get_agent,
             get_commit_diff,
-            get_user_story_agent,
             get_user_story_prompt,
             resolve_commit_reference,
         )
@@ -49,7 +49,7 @@ class LLMService:
 
             prompt = get_user_story_prompt(diff)
 
-            agent = get_user_story_agent()
+            agent = get_agent()
             result = agent.run_sync(prompt)
 
             user_story_entry = UserStoryEntry(
@@ -60,7 +60,7 @@ class LLMService:
                 user_stories=result.output,
                 rating=3,  # Default neutral rating
                 guidelines_for_improving="",
-                model_used=settings.user_story_agent,
+                model_used=settings.llm_model_name,
                 prompt_template=prompt,
                 repository_path=str(repo_path),
             )
@@ -139,6 +139,6 @@ class LLMService:
                 "resolved_head": head_commit,
             }
 
-    def get_configured_agent(self) -> str:
-        """Get the configured user story agent name."""
-        return settings.user_story_agent
+    def get_configured_model(self) -> str:
+        """Get the configured LLM model name."""
+        return settings.llm_model_name

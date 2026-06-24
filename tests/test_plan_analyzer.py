@@ -1,7 +1,7 @@
 from datetime import datetime
 
-from slopometry.core.models.hook import ToolType
 from slopometry.core.plan_analyzer import PlanAnalyzer
+from slopometry.core.protocol.adapters.claude_code import ToolType
 
 
 def test_increment_event_count__task_explore_increments_search_metrics() -> None:

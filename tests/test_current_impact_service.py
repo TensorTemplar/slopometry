@@ -53,10 +53,9 @@ class TestCurrentImpactService:
 
             return RepoBaseline(
                 repository_path=str(source_repo),
-                last_commit_hash="HEAD",
-                analysis_timestamp=datetime.now(),
-                current_metrics=metrics,
                 head_commit_sha="HEAD",
+                computed_at=datetime.now(),
+                current_metrics=metrics,
                 total_commits_analyzed=1,
                 cc_delta_stats=dummy_stats,
                 effort_delta_stats=dummy_stats,
@@ -352,10 +351,9 @@ class TestCurrentImpactSummary:
         )
         baseline = RepoBaseline(
             repository_path="/tmp/repo",
-            last_commit_hash="abc123",
-            analysis_timestamp=datetime.now(),
-            current_metrics=metrics,
             head_commit_sha="abc123",
+            computed_at=datetime.now(),
+            current_metrics=metrics,
             total_commits_analyzed=10,
             cc_delta_stats=dummy_stats,
             effort_delta_stats=dummy_stats,
@@ -424,10 +422,9 @@ class TestCurrentImpactSummary:
         )
         baseline = RepoBaseline(
             repository_path="/tmp/repo",
-            last_commit_hash="abc123",
-            analysis_timestamp=datetime.now(),
-            current_metrics=metrics,
             head_commit_sha="abc123",
+            computed_at=datetime.now(),
+            current_metrics=metrics,
             total_commits_analyzed=10,
             cc_delta_stats=dummy_stats,
             effort_delta_stats=dummy_stats,

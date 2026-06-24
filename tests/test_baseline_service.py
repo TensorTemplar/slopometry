@@ -14,6 +14,7 @@ from slopometry.core.models.baseline import (
     ResolvedBaselineStrategy,
 )
 from slopometry.core.models.complexity import ExtendedComplexityMetrics
+from slopometry.core.models.core import SmellCounts
 from slopometry.summoner.services.baseline_service import (
     BaselineService,
     CommitInfo,
@@ -191,7 +192,7 @@ class TestGetOrComputeBaseline:
                 mi_normalized=0.5,
                 smell_penalty=0.1,
                 adjusted_quality=0.45,
-                smell_counts={},
+                smell_counts=SmellCounts(),
             ),
             strategy=ResolvedBaselineStrategy(
                 requested=BaselineStrategy.AUTO,
@@ -267,7 +268,7 @@ class TestGetOrComputeBaseline:
                 mi_normalized=0.5,
                 smell_penalty=0.1,
                 adjusted_quality=0.45,
-                smell_counts={},
+                smell_counts=SmellCounts(),
             ),
             strategy=ResolvedBaselineStrategy(
                 requested=BaselineStrategy.AUTO,

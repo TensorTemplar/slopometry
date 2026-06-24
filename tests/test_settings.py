@@ -39,11 +39,11 @@ class TestSettingsOverridePriority:
             enable_complexity_feedback: bool = False
             llm_proxy_url: str = ""
             llm_proxy_api_key: str = ""
+            llm_model_name: str = "olka-fi/MiniMax-M3-MXFP4"
             interactive_rating_enabled: bool = False
             hf_token: str = ""
             hf_default_repo: str = ""
             offline_mode: bool = True
-            user_story_agent: str = "gemini"
 
         return TestSettings
 

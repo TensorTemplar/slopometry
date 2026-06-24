@@ -7,9 +7,9 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from slopometry.core.models.hook import ToolType
 from slopometry.core.models.session import TokenUsage
 from slopometry.core.plan_analyzer import PlanAnalyzer
+from slopometry.core.protocol.adapters.claude_code import ToolType
 
 logger = logging.getLogger(__name__)
 

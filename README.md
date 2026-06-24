@@ -44,7 +44,7 @@ Worst offenders and overall slop at a glance
 **See more examples and FAQ in details below**:
 <details>
 
-### Q: I don't need to verify when my tests are passing, right? 
+### Q: I don't need to verify when my tests are passing, right?
 
 A: lmao
 
@@ -53,9 +53,22 @@ What clevery ways you ask? Silent exception swallowing upstream ofc!
 
 Slopometry forces agents to state the purpose of swallowed exceptions and skipped tests, this is a simple LLM-as-judge call for your RL pipeline (you're welcome)
 
-A handler only counts as *swallowed* if it does **no processing of any kind** — only `pass`/`continue`/`break`/`...`. Recovering a fallback value (`except ImportError: torch = None`) or counting the failure (`errors += 1`) is real handling and is not flagged. When a silent handler is genuinely correct, mark it `# slopometry: allow-silent` to acknowledge it — but slopometry counts those markers per file and **blocks on any increase**, so an agent can't reward-hack by mass-suppressing real swallows.
+A handler only counts as *swallowed* if it does **no processing of any kind** — only `pass`/`continue`/`break`/`...`. Recovering a fallback value (`except ImportError: torch = None`) or counting the failure (`errors += 1`) is real handling and is not flagged.
 
-Here is Opus 4.5, which is writing 90% of your production code by 2026:  
+#### Acknowledging Silent Handlers
+
+When a silent handler is genuinely correct (e.g., context manager cleanup that always succeeds), mark it with `# slopometry: allow-silent`:
+
+```python
+try:
+    acquire_lock()
+except Exception:
+    pass  # slopometry: allow-silent - lock already released on context exit
+```
+
+Slopometry counts those markers per file and **blocks on any increase**, so an agent can't reward-hack by mass-suppressing real swallows. If you see a blocking increase, review the NEW markers and confirm each is justified.
+
+Here is Opus 4.5, which is writing 90% of your production code by 2026:
 ![silent-errors](assets/force-review-silent-errors.png)
 ![silent-errors2](assets/force-review-silent-errors-2.png)
   

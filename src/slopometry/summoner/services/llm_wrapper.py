@@ -2,16 +2,14 @@ import logging
 import subprocess
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
-
 from pydantic_ai import Agent
-from pydantic_ai.models.anthropic import AnthropicModel
-from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel, OpenAIResponsesModelSettings
-from pydantic_ai.providers.anthropic import AnthropicProvider
+from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openai import OpenAIProvider
 
-from slopometry.core.models.experiment import FeatureBoundary, MergeCommit
+from slopometry.core.models.experiment import FeatureBoundary
 from slopometry.core.settings import settings
+
+logger = logging.getLogger(__name__)
 
 
 class OfflineModeError(Exception):
@@ -24,66 +22,24 @@ class OfflineModeError(Exception):
         )
 
 
-def _create_providers() -> tuple[OpenAIProvider, OpenAIProvider, AnthropicProvider]:
-    """Create LLM providers. Only called when offline_mode is disabled."""
-    llm_gateway = OpenAIProvider(base_url=settings.llm_proxy_url, api_key=settings.llm_proxy_api_key)
-    responses_api_gateway = OpenAIProvider(base_url=settings.llm_responses_url, api_key=settings.llm_proxy_api_key)
-    anthropic_gateway = AnthropicProvider(
-        base_url=settings.anthropic_url, api_key=settings.anthropic_api_key.get_secret_value()
-    )
-    return llm_gateway, responses_api_gateway, anthropic_gateway
+def get_agent() -> Agent:
+    """Return the single MiniMax-M3 agent used for all LLM-based tasks.
 
-
-def _create_agents() -> dict[str, Agent]:
-    """Create all available agents. Only called when offline_mode is disabled."""
-    llm_gateway, responses_api_gateway, anthropic_gateway = _create_providers()
-
-    return {
-        "gpt_oss_120b": Agent(
-            name="gpt_oss_120b",
-            model=OpenAIResponsesModel("openai/gpt-oss-120b", provider=responses_api_gateway),
-            retries=2,
-            end_strategy="exhaustive",
-            model_settings=OpenAIResponsesModelSettings(
-                max_tokens=64000,
-                seed=1337,
-                openai_reasoning_effort="medium",
-                temperature=1.0,
-            ),
-        ),
-        "gemini": Agent(
-            name="gemini",
-            model=OpenAIChatModel(model_name="gemini-3-pro-preview", provider=llm_gateway),
-        ),
-        "minimax": Agent(
-            name="minimax",
-            model=AnthropicModel("minimax:MiniMax-M1.1", provider=anthropic_gateway),
-            retries=2,
-            end_strategy="exhaustive",
-        ),
-    }
-
-
-_agents: dict[str, Agent] | None = None
-
-
-def _get_agents() -> dict[str, Agent]:
-    """Get or create the agents registry. Raises OfflineModeError if offline_mode is enabled."""
-    global _agents
+    The endpoint is the public vLLM-hosted MiniMax-M3 (MXFP4) deployment
+    exposed at https://llm2.droidcraft.org/minimax-m3-mxfp4-vllm/v1.
+    Raises OfflineModeError when offline_mode is enabled.
+    """
     if settings.offline_mode:
         raise OfflineModeError()
-    if _agents is None:
-        _agents = _create_agents()
-    return _agents
 
-
-def get_user_story_agent() -> Agent:
-    """Get the configured agent for user story generation."""
-    agents = _get_agents()
-    agent_name = settings.user_story_agent
-    if agent_name not in agents:
-        raise ValueError(f"Unknown user_story_agent: {agent_name}. Available: {list(agents.keys())}")
-    return agents[agent_name]
+    provider = OpenAIProvider(
+        base_url=settings.llm_proxy_url,
+        api_key=settings.llm_proxy_api_key,
+    )
+    return Agent(
+        name=settings.llm_model_name,
+        model=OpenAIChatModel(model_name=settings.llm_model_name, provider=provider),
+    )
 
 
 def get_user_story_prompt(diff: str) -> str:
@@ -173,50 +129,6 @@ def get_commit_diff(base_commit: str, head_commit: str) -> str:
         return f"Error getting diff: {e.stderr}"
 
 
-def find_merge_commits(branch: str = "HEAD", limit: int = 50) -> list[MergeCommit]:
-    """Find merge commits in the git history.
-
-    Args:
-        branch: Branch to analyze (default: HEAD)
-        limit: Maximum number of commits to examine
-
-    Returns:
-        List of merge commit info with hash, message, and parent commits
-    """
-    try:
-        result = subprocess.run(
-            ["git", "log", branch, "--merges", f"-{limit}", "--format=%H|%P|%s"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-
-        merge_commits = []
-        for line in result.stdout.strip().split("\n"):
-            if not line:
-                continue
-            parts = line.split("|", 2)
-            if len(parts) >= 3:
-                commit_hash = parts[0]
-                parents = parts[1].split()
-                message = parts[2]
-
-                if len(parents) >= 2:
-                    merge_commits.append(
-                        MergeCommit(
-                            hash=commit_hash,
-                            parents=parents,
-                            message=message,
-                            feature_branch=parents[1],  # Second parent is typically the feature branch
-                        )
-                    )
-
-        return merge_commits
-    except subprocess.CalledProcessError as e:
-        logger.debug(f"Failed to find merge commits: {e}")
-        return []
-
-
 def get_feature_boundaries(limit: int = 20) -> list[FeatureBoundary]:
     """Identify feature boundaries by finding merge commits and their base commits.
 
@@ -226,34 +138,57 @@ def get_feature_boundaries(limit: int = 20) -> list[FeatureBoundary]:
     Returns:
         List of feature info with base commit, head commit, and description
     """
+    try:
+        merge_log = subprocess.run(
+            ["git", "log", "HEAD", "--merges", f"-{limit}", "--format=%H|%P|%s"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except subprocess.CalledProcessError as e:
+        logger.debug(f"Failed to find merge commits: {e}")
+        return []
 
-    merge_commits = find_merge_commits(limit=limit)
-    features = []
     current_repo_path = Path.cwd()
+    features: list[FeatureBoundary] = []
 
-    for merge in merge_commits:
+    for line in merge_log.stdout.strip().split("\n"):
+        if not line:
+            continue
+        parts = line.split("|", 2)
+        if len(parts) < 3:
+            continue
+        commit_hash, parents_raw, message = parts
+        parents = parents_raw.split()
+        if len(parents) < 2:
+            continue
+        feature_branch = parents[1]
+
         try:
-            result = subprocess.run(
-                ["git", "merge-base", merge.parents[0], merge.parents[1]], capture_output=True, text=True, check=True
-            )
-            merge_base = result.stdout.strip()
-
-            result = subprocess.run(
-                ["git", "log", "-1", "--format=%s", merge.feature_branch], capture_output=True, text=True, check=True
-            )
-            feature_tip_message = result.stdout.strip()
-
-            features.append(
-                FeatureBoundary(
-                    base_commit=merge_base,
-                    head_commit=merge.feature_branch,
-                    merge_commit=merge.hash,
-                    merge_message=merge.message,
-                    feature_message=feature_tip_message,
-                    repository_path=current_repo_path,
-                )
-            )
+            merge_base = subprocess.run(
+                ["git", "merge-base", parents[0], feature_branch],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
+            feature_tip_message = subprocess.run(
+                ["git", "log", "-1", "--format=%s", feature_branch],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.strip()
         except subprocess.CalledProcessError:
             continue
+
+        features.append(
+            FeatureBoundary(
+                base_commit=merge_base,
+                head_commit=feature_branch,
+                merge_commit=commit_hash,
+                merge_message=message,
+                feature_message=feature_tip_message,
+                repository_path=current_repo_path,
+            )
+        )
 
     return features

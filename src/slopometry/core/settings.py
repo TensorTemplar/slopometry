@@ -97,13 +97,15 @@ class Settings(BaseSettings):
         description="Extract '## Development guidelines' from CLAUDE.md in stop hook feedback",
     )
 
-    llm_proxy_url: str = ""
-    llm_proxy_api_key: str = ""
-    llm_responses_url: str = ""
-    anthropic_url: str = Field(
-        default="", description="Base URL for Anthropic-compatible API endpoint (e.g. sglang MiniMax endpoint)"
+    llm_proxy_url: str = Field(
+        default="",
+        description="OpenAI-compatible base URL for the MiniMax-M3 vLLM endpoint",
     )
-    anthropic_api_key: SecretStr = Field(default=SecretStr(""), description="API key for Anthropic-compatible provider")
+    llm_proxy_api_key: str = ""
+    llm_model_name: str = Field(
+        default="olka-fi/MiniMax-M3-MXFP4",
+        description="Served model name on the MiniMax-M3 vLLM endpoint",
+    )
     interactive_rating_enabled: bool = False
 
     hf_token: str = ""
@@ -112,11 +114,6 @@ class Settings(BaseSettings):
     offline_mode: bool = Field(
         default=True,
         description="Disables all external LLM requests from slopometry. Set to False to enable AI features.",
-    )
-
-    user_story_agent: str = Field(
-        default="gpt_oss_120b",
-        description="Agent to use for user story generation. Options: gpt_oss_120b, gemini, minimax",
     )
 
     enable_working_at_microsoft: bool = Field(
@@ -202,6 +199,36 @@ class Settings(BaseSettings):
     )
     impact_mi_weight: float = Field(
         default=0.50, description="Weight for Maintainability Index in impact score calculation"
+    )
+
+    memory_llm_endpoint: str = Field(
+        default="https://your-llm-endpoint.com/v1",
+        description="LLM endpoint for memory extraction",
+    )
+    memory_llm_model: str = Field(
+        default="your-model-name",
+        description="Model for memory extraction",
+    )
+    memory_llm_api_key: SecretStr = Field(
+        default=SecretStr(""),
+        description="API key for memory LLM endpoint",
+    )
+    memory_retention_days: int = Field(
+        default=365,
+        description="Days to retain memories",
+    )
+
+    memory_embedding_api_key: SecretStr = Field(
+        default=SecretStr(""),
+        description="API key for memory embedding endpoint",
+    )
+    memory_embedding_endpoint: str = Field(
+        default="https://your-embedding-endpoint.com/v1",
+        description="Embedding model endpoint for memory similarity",
+    )
+    memory_embedding_model: str = Field(
+        default="your-embedding-model",
+        description="Embedding model name",
     )
 
     @field_validator("baseline_strategy", mode="before")

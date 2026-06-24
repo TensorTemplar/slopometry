@@ -6,8 +6,15 @@ from pathlib import Path
 
 from slopometry.core.database import EventDatabase
 from slopometry.core.models.display import LeaderboardEntry, SessionDisplayData
-from slopometry.core.models.hook import HookEvent, HookEventType, Project, ProjectSource, ToolType
+from slopometry.core.models.hook import Project, ProjectSource
+from slopometry.core.models.protocol.events import (
+    AbstractEventSource,
+    AbstractEventType,
+    AbstractHookEvent,
+    ToolCallPayload,
+)
 from slopometry.core.models.user_story import UserStoryEntry
+from slopometry.core.protocol.adapters.claude_code import ToolType
 
 
 def test_user_story_export_functionality() -> None:
@@ -242,37 +249,49 @@ def test_list_sessions_by_repository__filters_correctly() -> None:
 
         # Session 1 - in repo A
         db.save_event(
-            HookEvent(
+            AbstractHookEvent(
                 session_id="session-repo-a",
-                event_type=HookEventType.PRE_TOOL_USE,
+                event_type=AbstractEventType.TOOL_CALL_STARTED,
+                source=AbstractEventSource.CLAUDE_CODE,
                 sequence_number=1,
                 working_directory="/path/to/repo-a",
-                tool_name="Read",
-                tool_type=ToolType.READ,
+                tool_call=ToolCallPayload(
+                    tool_name="Read",
+                    tool_type=ToolType.READ.value,
+                    input={},
+                ),
             )
         )
 
         # Session 2 - in repo B
         db.save_event(
-            HookEvent(
+            AbstractHookEvent(
                 session_id="session-repo-b",
-                event_type=HookEventType.PRE_TOOL_USE,
+                event_type=AbstractEventType.TOOL_CALL_STARTED,
+                source=AbstractEventSource.CLAUDE_CODE,
                 sequence_number=1,
                 working_directory="/path/to/repo-b",
-                tool_name="Read",
-                tool_type=ToolType.READ,
+                tool_call=ToolCallPayload(
+                    tool_name="Read",
+                    tool_type=ToolType.READ.value,
+                    input={},
+                ),
             )
         )
 
         # Session 3 - also in repo A
         db.save_event(
-            HookEvent(
+            AbstractHookEvent(
                 session_id="session-repo-a-2",
-                event_type=HookEventType.PRE_TOOL_USE,
+                event_type=AbstractEventType.TOOL_CALL_STARTED,
+                source=AbstractEventSource.CLAUDE_CODE,
                 sequence_number=1,
                 working_directory="/path/to/repo-a",
-                tool_name="Write",
-                tool_type=ToolType.WRITE,
+                tool_call=ToolCallPayload(
+                    tool_name="Write",
+                    tool_type=ToolType.WRITE.value,
+                    input={},
+                ),
             )
         )
 
@@ -291,13 +310,17 @@ def test_list_sessions_by_repository__returns_empty_for_unknown_repo() -> None:
 
         # Create a session in a known repo
         db.save_event(
-            HookEvent(
+            AbstractHookEvent(
                 session_id="session-known",
-                event_type=HookEventType.PRE_TOOL_USE,
+                event_type=AbstractEventType.TOOL_CALL_STARTED,
+                source=AbstractEventSource.CLAUDE_CODE,
                 sequence_number=1,
                 working_directory="/path/to/known-repo",
-                tool_name="Read",
-                tool_type=ToolType.READ,
+                tool_call=ToolCallPayload(
+                    tool_name="Read",
+                    tool_type=ToolType.READ.value,
+                    input={},
+                ),
             )
         )
 
@@ -314,13 +337,17 @@ def test_list_sessions_by_repository__respects_limit() -> None:
         # Create 3 sessions in the same repo
         for i in range(3):
             db.save_event(
-                HookEvent(
+                AbstractHookEvent(
                     session_id=f"session-{i}",
-                    event_type=HookEventType.PRE_TOOL_USE,
+                    event_type=AbstractEventType.TOOL_CALL_STARTED,
+                    source=AbstractEventSource.CLAUDE_CODE,
                     sequence_number=1,
                     working_directory="/path/to/repo",
-                    tool_name="Read",
-                    tool_type=ToolType.READ,
+                    tool_call=ToolCallPayload(
+                        tool_name="Read",
+                        tool_type=ToolType.READ.value,
+                        input={},
+                    ),
                 )
             )
 
@@ -335,23 +362,31 @@ def test_get_session_basic_info__returns_minimal_info() -> None:
         db = EventDatabase(db_path=Path(tmp_dir) / "test.db")
 
         db.save_event(
-            HookEvent(
+            AbstractHookEvent(
                 session_id="test-session",
-                event_type=HookEventType.PRE_TOOL_USE,
+                event_type=AbstractEventType.TOOL_CALL_STARTED,
+                source=AbstractEventSource.CLAUDE_CODE,
                 sequence_number=1,
                 working_directory="/path/to/repo",
-                tool_name="Read",
-                tool_type=ToolType.READ,
+                tool_call=ToolCallPayload(
+                    tool_name="Read",
+                    tool_type=ToolType.READ.value,
+                    input={},
+                ),
             )
         )
         db.save_event(
-            HookEvent(
+            AbstractHookEvent(
                 session_id="test-session",
-                event_type=HookEventType.POST_TOOL_USE,
+                event_type=AbstractEventType.TOOL_CALL_COMPLETED,
+                source=AbstractEventSource.CLAUDE_CODE,
                 sequence_number=2,
                 working_directory="/path/to/repo",
-                tool_name="Write",
-                tool_type=ToolType.WRITE,
+                tool_call=ToolCallPayload(
+                    tool_name="Write",
+                    tool_type=ToolType.WRITE.value,
+                    input={},
+                ),
             )
         )
 
@@ -379,23 +414,31 @@ def test_get_session_working_directory__returns_first_event_working_dir() -> Non
         db = EventDatabase(db_path=Path(tmp_dir) / "test.db")
 
         db.save_event(
-            HookEvent(
+            AbstractHookEvent(
                 session_id="test-wd-session",
-                event_type=HookEventType.PRE_TOOL_USE,
+                event_type=AbstractEventType.TOOL_CALL_STARTED,
+                source=AbstractEventSource.CLAUDE_CODE,
                 sequence_number=1,
                 working_directory="/first/working/dir",
-                tool_name="Read",
-                tool_type=ToolType.READ,
+                tool_call=ToolCallPayload(
+                    tool_name="Read",
+                    tool_type=ToolType.READ.value,
+                    input={},
+                ),
             )
         )
         db.save_event(
-            HookEvent(
+            AbstractHookEvent(
                 session_id="test-wd-session",
-                event_type=HookEventType.POST_TOOL_USE,
+                event_type=AbstractEventType.TOOL_CALL_COMPLETED,
+                source=AbstractEventSource.CLAUDE_CODE,
                 sequence_number=2,
                 working_directory="/second/working/dir",
-                tool_name="Write",
-                tool_type=ToolType.WRITE,
+                tool_call=ToolCallPayload(
+                    tool_name="Write",
+                    tool_type=ToolType.WRITE.value,
+                    input={},
+                ),
             )
         )
 
@@ -420,15 +463,21 @@ def test_get_sessions_summary__returns_session_display_data() -> None:
         db = EventDatabase(db_path=Path(tmp_dir) / "test.db")
 
         for i in range(3):
-            event = HookEvent(
+            tool_name = "bash" if i < 2 else "read"
+            tool_type = ToolType.BASH if i < 2 else ToolType.READ
+            event = AbstractHookEvent(
                 session_id="sess-abc",
-                event_type=HookEventType.PRE_TOOL_USE,
+                event_type=AbstractEventType.TOOL_CALL_STARTED,
+                source=AbstractEventSource.CLAUDE_CODE,
                 timestamp=datetime(2025, 1, 1, 10, i),
                 sequence_number=i + 1,
                 working_directory="/repo",
                 project=Project(name="my-project", source=ProjectSource.GIT),
-                tool_name="bash" if i < 2 else "read",
-                tool_type=ToolType.BASH if i < 2 else ToolType.READ,
+                tool_call=ToolCallPayload(
+                    tool_name=tool_name,
+                    tool_type=tool_type.value,
+                    input={},
+                ),
             )
             db.save_event(event)
 
@@ -449,14 +498,13 @@ def test_get_sessions_summary__handles_null_tool_type() -> None:
     with tempfile.TemporaryDirectory() as tmp_dir:
         db = EventDatabase(db_path=Path(tmp_dir) / "test.db")
 
-        event = HookEvent(
+        event = AbstractHookEvent(
             session_id="sess-null",
-            event_type=HookEventType.NOTIFICATION,
+            event_type=AbstractEventType.NOTIFICATION,
+            source=AbstractEventSource.CLAUDE_CODE,
             timestamp=datetime(2025, 1, 1, 12, 0),
             sequence_number=1,
             working_directory="/repo",
-            tool_name=None,
-            tool_type=None,
         )
         db.save_event(event)
 
@@ -472,14 +520,18 @@ def test_get_sessions_summary__respects_limit() -> None:
         db = EventDatabase(db_path=Path(tmp_dir) / "test.db")
 
         for i in range(5):
-            event = HookEvent(
+            event = AbstractHookEvent(
                 session_id=f"sess-{i:03d}",
-                event_type=HookEventType.PRE_TOOL_USE,
+                event_type=AbstractEventType.TOOL_CALL_STARTED,
+                source=AbstractEventSource.CLAUDE_CODE,
                 timestamp=datetime(2025, 1, 1, 10 + i, 0),
                 sequence_number=1,
                 working_directory="/repo",
-                tool_name="bash",
-                tool_type=ToolType.BASH,
+                tool_call=ToolCallPayload(
+                    tool_name="bash",
+                    tool_type=ToolType.BASH.value,
+                    input={},
+                ),
             )
             db.save_event(event)
 
