@@ -188,6 +188,81 @@ class TestFormatCodeSmellFeedback:
             assert "BLOCKING" in feedback
             assert "table" in feedback
 
+    def test_format_code_smell_feedback__swallow_hint_shown_when_swallowed_blocking(self):
+        """Concrete marker comment format appears after ACTION REQUIRED when swallow-related smell blocks."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            subprocess.run(["git", "init"], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=tmppath, capture_output=True)
+
+            src_dir = tmppath / "src"
+            src_dir.mkdir()
+            (src_dir / "bar.py").write_text("def bar(): pass")
+            subprocess.run(["git", "add", "."], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=tmppath, capture_output=True)
+
+            metrics = self._make_metrics(
+                swallowed_exception_count=1,
+                swallowed_exception_files=["src/bar.py"],
+            )
+            scoped = scope_smells_for_session(metrics, None, {"src/bar.py"}, str(tmppath))
+            feedback, _, _ = format_code_smell_feedback(scoped)
+
+            assert "# slopometry: allow-silent" in feedback
+            assert "lock already released on context exit" in feedback
+            assert "**To acknowledge after review**" in feedback
+            assert "Place `# slopometry: allow-silent - <short reason>`" in feedback
+
+    def test_format_code_smell_feedback__swallow_hint_shown_when_acknowledged_increased(self):
+        """Hint also appears when acknowledged_silent_except increases (potential mass-suppression)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            subprocess.run(["git", "init"], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=tmppath, capture_output=True)
+
+            src_dir = tmppath / "src"
+            src_dir.mkdir()
+            (src_dir / "bar.py").write_text("def bar(): pass")
+            subprocess.run(["git", "add", "."], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=tmppath, capture_output=True)
+
+            metrics = self._make_metrics(
+                acknowledged_silent_except_count=3,
+                acknowledged_silent_except_files=["src/bar.py"],
+            )
+            delta = ComplexityDelta(acknowledged_silent_except_change=2)
+            scoped = scope_smells_for_session(metrics, delta, {"src/bar.py"}, str(tmppath))
+            feedback, _, _ = format_code_smell_feedback(scoped)
+
+            assert "# slopometry: allow-silent" in feedback
+            assert "lock already released on context exit" in feedback
+
+    def test_format_code_smell_feedback__swallow_hint_absent_when_no_swallow_smell(self):
+        """Hint does NOT appear when a non-swallow smell is blocking."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            subprocess.run(["git", "init"], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=tmppath, capture_output=True)
+
+            src_dir = tmppath / "src"
+            src_dir.mkdir()
+            (src_dir / "bar.py").write_text("def bar(): pass")
+            subprocess.run(["git", "add", "."], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=tmppath, capture_output=True)
+
+            metrics = self._make_metrics(
+                test_skip_count=1,
+                test_skip_files=["src/bar.py"],
+            )
+            scoped = scope_smells_for_session(metrics, None, {"src/bar.py"}, str(tmppath))
+            feedback, _, _ = format_code_smell_feedback(scoped)
+
+            assert "**To acknowledge after review**" not in feedback
+            assert "lock already released on context exit" not in feedback
+
     def test_format_code_smell_feedback__test_skips_are_blocking(self):
         """Test that test skips are marked as blocking when related file edited."""
         with tempfile.TemporaryDirectory() as tmpdir:

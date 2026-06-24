@@ -455,6 +455,35 @@ def scope_smells_for_session(
     return result
 
 
+def _any_swallow_smell_in_blocking(blocking_smells: list[ScopedSmell]) -> bool:
+    """True if any blocking smell is swallowed_exception or acknowledged_silent_except."""
+    return any(s.name in ("swallowed_exception", "acknowledged_silent_except") for s in blocking_smells)
+
+
+def _swallow_marker_hint_lines() -> list[str]:
+    """Concrete example of how to mark a silent handler as acknowledged.
+
+    Shown after the ACTION REQUIRED block when a swallow-related smell is
+    blocking, so a human reviewer can copy the exact comment format to
+    exclude the detection on the next pass.
+    """
+    return [
+        "**To acknowledge after review** (so the handler stops blocking next time):",
+        "",
+        "```python",
+        "try:",
+        "    acquire_lock()",
+        "except Exception:",
+        "    pass  # slopometry: allow-silent - lock already released on context exit",
+        "```",
+        "",
+        "Place `# slopometry: allow-silent - <short reason>` on the same line as the",
+        "suppressing statement (`pass`/`continue`). To revert back to blocking review,",
+        "remove the marker comment.",
+        "",
+    ]
+
+
 def format_code_smell_feedback(
     scoped_smells: list[ScopedSmell],
     session_id: str | None = None,
@@ -499,6 +528,8 @@ def format_code_smell_feedback(
             if smell.guidance:
                 lines.append(f"     → {smell.guidance}")
         lines.append("")
+        if _any_swallow_smell_in_blocking(blocking_requiring_action):
+            lines.extend(_swallow_marker_hint_lines())
 
     smells_increased = [s for s in other_smells if s.change > 0]
     smells_decreased = [s for s in other_smells if s.change < 0]

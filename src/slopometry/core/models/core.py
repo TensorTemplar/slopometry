@@ -211,11 +211,25 @@ class ExtendedComplexityMetrics(ComplexityMetrics):
     )
     swallowed_exception_count: int = Field(
         default=0,
-        description="BLOCKING: You MUST present a table with columns [Location | Purpose | Justification ] for each and ask user to confirm silent failure is acceptable",
+        description=(
+            "BLOCKING: You MUST present a table with columns "
+            "[Location | Purpose | Justification] for each and ask user to confirm "
+            "silent failure is acceptable. To acknowledge a handler as intentional "
+            "after user review (so it stops blocking next time), add "
+            "`# slopometry: allow-silent - <short reason>` on the same line as the "
+            "suppressing statement. This moves the handler out of "
+            "`swallowed_exception` into `acknowledged_silent_except`."
+        ),
     )
     acknowledged_silent_except_count: int = Field(
         default=0,
-        description="Silent except handlers explicitly marked `# slopometry: allow-silent`. An increase is blocking — confirm newly-suppressed handlers are justified.",
+        description=(
+            "Silent except handlers explicitly marked `# slopometry: allow-silent`. "
+            "An increase is blocking — confirm newly-suppressed handlers are "
+            "justified. To revert a handler back to `swallowed_exception` (force "
+            "review again next time), remove the `# slopometry: allow-silent` "
+            "comment from the same line."
+        ),
     )
     type_ignore_count: int = Field(
         default=0,

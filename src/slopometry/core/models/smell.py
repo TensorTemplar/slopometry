@@ -52,7 +52,16 @@ SMELL_REGISTRY: dict[str, SmellDefinition] = {
         label="Swallowed Exceptions",
         category=SmellCategory.GENERAL,
         weight=0.15,
-        guidance="BLOCKING: You MUST present a table with columns [Location | Purpose | Justification ] for each and ask user to confirm silent failure is acceptable",
+        guidance=(
+            "BLOCKING: You MUST present a table with columns "
+            "[Location | Purpose | Justification] for each and ask user to confirm "
+            "silent failure is acceptable. To acknowledge a handler as intentional "
+            "after user review (so it stops blocking next time), add "
+            "`# slopometry: allow-silent - <short reason>` on the same line as the "
+            "suppressing statement (e.g., `# slopometry: allow-silent - "
+            "lock already released on context exit`). This moves the handler out of "
+            "`swallowed_exception` into `acknowledged_silent_except`."
+        ),
         count_field="swallowed_exception_count",
         files_field="swallowed_exception_files",
     ),
@@ -61,7 +70,16 @@ SMELL_REGISTRY: dict[str, SmellDefinition] = {
         label="Acknowledged Silent Excepts",
         category=SmellCategory.GENERAL,
         weight=0.05,
-        guidance="BLOCKING (on increase): These silent except handlers are marked `# slopometry: allow-silent`. An individual marker is fine, but a rise means new silent handlers were suppressed this session. Present a table [Location | Purpose | Justification] for the NEW ones and confirm each genuinely needs no logging/handling — this prevents mass-suppression of real swallowed exceptions",
+        guidance=(
+            "BLOCKING (on increase): These silent except handlers are marked "
+            "`# slopometry: allow-silent`. An individual marker is fine, but a rise "
+            "means new silent handlers were suppressed this session. Present a table "
+            "[Location | Purpose | Justification] for the NEW ones and confirm each "
+            "genuinely needs no logging/handling — this prevents mass-suppression of "
+            "real swallowed exceptions. To revert a handler back to "
+            "`swallowed_exception` (force review again next time), remove the "
+            "`# slopometry: allow-silent` comment from the same line."
+        ),
         count_field="acknowledged_silent_except_count",
         files_field="acknowledged_silent_except_files",
     ),
@@ -70,7 +88,13 @@ SMELL_REGISTRY: dict[str, SmellDefinition] = {
         label="Test Skips",
         category=SmellCategory.GENERAL,
         weight=0.10,
-        guidance="BLOCKING: You MUST present a table with columns [Test Name | Intent] for each skip and ask user to confirm skipping is acceptable",
+        guidance=(
+            "BLOCKING: You MUST present a table with columns [Test Name | Intent] "
+            "for each skip and ask user to confirm skipping is acceptable. If the "
+            "skip is conditional on missing external data (no API key, missing host "
+            "session, etc.), document the precondition in the skip message so the "
+            "intent is obvious."
+        ),
         count_field="test_skip_count",
         files_field="test_skip_files",
     ),
