@@ -144,11 +144,9 @@ uv tool update-shell
 ```
 
 # Restart your terminal or run:
+```bash
 source ~/.zshrc  # for zsh
 # or: source ~/.bashrc  # for bash
-
-# After making code changes, reinstall to update the global tool
-uv tool install . --reinstall --find-links "https://github.com/Droidcraft/rust-code-analysis/releases/expanded_assets/python-2026.1.31"
 ```
 
 ## Quick Start
@@ -233,15 +231,6 @@ curl -o ~/.config/slopometry/.env https://raw.githubusercontent.com/TensorTempla
 ```
 
 
-### Development Installation
-
-```bash
-git clone https://github.com/TensorTemplar/slopometry
-cd slopometry
-uv sync --extra dev
-uv run pytest
-```
-
 Customize via `.env` file or environment variables:
 
 - `SLOPOMETRY_DATABASE_PATH`: Custom database location (optional)
@@ -251,6 +240,23 @@ Customize via `.env` file or environment variables:
     - Windows: `%LOCALAPPDATA%\slopometry\slopometry.db`
 - `SLOPOMETRY_ENABLE_COMPLEXITY_ANALYSIS`: Collect complexity metrics (default: `true`)
 - `SLOPOMETRY_ENABLE_COMPLEXITY_FEEDBACK`: Provide feedback to Claude (default: `false`)
+
+# Development
+
+For working on slopometry itself (not just installing it):
+
+```bash
+git clone https://github.com/TensorTemplar/slopometry
+cd slopometry
+uv sync --extra dev
+uv run pytest
+```
+
+After making code changes, reinstall to update the global tool:
+
+```bash
+uv tool install . --reinstall --find-links "https://github.com/Droidcraft/rust-code-analysis/releases/expanded_assets/python-2026.1.31"
+```
 
 # Cite
 
