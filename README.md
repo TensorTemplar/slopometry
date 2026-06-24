@@ -7,6 +7,8 @@ A tool that lurks in the shadows, tracks and analyzes Claude Code sessions provi
 
 **NEWS:**
 
+* **Jun 2026: Dropping support for closed-source models for all Summoner features*: Since there is now a precendent for silent sabotage by providers, based on flavor of the week media posture - we can no longer rely on closed systems for features that require meta-reasoning or need to run reliably. We appreciate Anthropic being up-front about this in the model card though!
+
 * **April 2026: Behavioral pattern detection.** Sessions are now scanned for ownership dodging ("pre-existing", "not introduced by") and simple workaround ("simplest", "for now", "quick fix") phrases in assistant output, reported as per-minute rates. Rates are persisted per-repo and `current-impact` shows rolling average trends. Display reordered: plans, token impact, and behavioral patterns now appear first. Also: newly written files no longer incorrectly flagged as blind spots, and single-method class detection skips data classes with only `@property` methods.
 
 * **February 2026: OpenCode 1.2.10+ now supported for solo features, including stop hook feedback! See [plugin doc](plugins/opencode/README.md).**
