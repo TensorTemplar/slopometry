@@ -12,21 +12,33 @@ done their harness-specific glue.
 import json
 import logging
 import os
+import select
+import sys
 from datetime import datetime
 from pathlib import Path
 
 from slopometry.core.git_tracker import GitTracker
 from slopometry.core.lock import SlopometryLock
+from slopometry.core.models.hook import GitState, Project
 from slopometry.core.models.protocol.events import AbstractEventSource, AbstractEventType, AbstractHookEvent
 from slopometry.core.project_tracker import ProjectTracker
 from slopometry.core.protocol.adapters.base import ADAPTERS
 from slopometry.core.protocol.session import SessionManager
+from slopometry.core.settings import settings
 
 logger = logging.getLogger(__name__)
 
+_SESSION_MANAGERS: dict[str, SessionManager] = {}
 
-def _capture_git_state(event_type: AbstractEventType, sequence_number: int):
-    tracker = GitTracker()
+
+def _session_manager(source: str) -> SessionManager:
+    if source not in _SESSION_MANAGERS:
+        _SESSION_MANAGERS[source] = SessionManager(source=source)
+    return _SESSION_MANAGERS[source]
+
+
+def _capture_git_state(event_type: AbstractEventType, sequence_number: int, working_directory: str) -> GitState | None:
+    tracker = GitTracker(Path(working_directory))
     match (event_type, sequence_number):
         case (AbstractEventType.TOOL_CALL_STARTED, 1) | (AbstractEventType.TURN_COMPLETED, _):
             return tracker.get_git_state()
@@ -34,7 +46,7 @@ def _capture_git_state(event_type: AbstractEventType, sequence_number: int):
             return None
 
 
-def _capture_project(working_directory: str):
+def _capture_project(working_directory: str) -> Project | None:
     return ProjectTracker(working_dir=Path(working_directory)).get_project()
 
 
@@ -74,20 +86,18 @@ def dispatch_event(
         event_type_override=event_type_override,
     )
 
-    session_manager = SessionManager(source=source.value)
-    event.sequence_number = session_manager.get_next_sequence_number(event.session_id)
-    event.git_state = _capture_git_state(event.event_type, event.sequence_number)
+    event.sequence_number = _session_manager(source.value).get_next_sequence_number(event.session_id)
+    event.git_state = _capture_git_state(event.event_type, event.sequence_number, cwd)
     event.project = _capture_project(event.working_directory)
 
     lock = SlopometryLock(project_dir=cwd)
     with lock.acquire() as acquired:
         if not acquired:
-            logger.debug("Could not acquire lock, skipping event persistence for %s", event.session_id)
-            return event
+            logger.warning("Could not acquire lock, event not persisted for %s", event.session_id)
+        else:
+            from slopometry.core.database import EventDatabase
 
-        from slopometry.core.database import EventDatabase
-
-        EventDatabase().save_event(event)
+            EventDatabase().save_event(event)
 
     return event
 
@@ -101,9 +111,10 @@ def emit_event_from_stdin(
     Used by the `slopometry emit-event` CLI subcommand and by harness-specific
     entry points after they have read their stdin.
     """
-    import sys
-
     try:
+        ready, _, _ = select.select([sys.stdin], [], [], settings.stdin_timeout_seconds)
+        if not ready:
+            return 0
         stdin_input = sys.stdin.read().strip()
     except Exception:
         return 0
@@ -113,11 +124,15 @@ def emit_event_from_stdin(
     try:
         raw_payload = json.loads(stdin_input)
     except json.JSONDecodeError as e:
-        from slopometry.core.settings import settings
-
         if settings.debug_mode:
             print(f"Slopometry: Failed to parse event JSON: {e}", file=sys.stderr)
         return 0
 
-    dispatch_event(source, raw_payload, event_type_override=event_type_override)
+    try:
+        dispatch_event(source, raw_payload, event_type_override=event_type_override)
+    except Exception as e:
+        if settings.debug_mode:
+            print(f"Slopometry dispatch error: {e}", file=sys.stderr)
+        return 0
+
     return 0

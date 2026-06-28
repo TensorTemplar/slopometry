@@ -1,21 +1,21 @@
-"""Tests for MemoryFreshnessValidator."""
+"""Tests for validate_freshness."""
 
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from slopometry.core.models.memory import MemoryCandidate, MemoryEntry, MemoryType
+from slopometry.core.models.memory import FreshnessAction, MemoryCandidate, MemoryEntry, MemoryType
 from slopometry.solo.services.memory_freshness import (
-    CEILING_THRESHOLD,
-    FLOOR_THRESHOLD,
+    DEFAULT_CEILING_THRESHOLD,
+    DEFAULT_FLOOR_THRESHOLD,
     FreshnessDecision,
-    MemoryFreshnessValidator,
     ProjectSimilarityDistribution,
     _cosine_similarity,
     _find_above_threshold,
     _judge_reconciliation,
     compute_project_distribution,
+    validate_freshness,
 )
 
 
@@ -44,45 +44,45 @@ def _memory(
 
 
 class TestCosineSimilarity:
-    def test_identical_vectors_have_similarity_one(self):
+    def test_cosine_similarity__returns_one_for_identical_vectors(self):
         v = [1.0, 0.0, 0.0]
         assert _cosine_similarity(v, v) == pytest.approx(1.0)
 
-    def test_orthogonal_vectors_have_similarity_zero(self):
+    def test_cosine_similarity__returns_zero_for_orthogonal_vectors(self):
         assert _cosine_similarity([1.0, 0.0], [0.0, 1.0]) == pytest.approx(0.0)
 
-    def test_empty_vectors_return_zero(self):
+    def test_cosine_similarity__returns_zero_for_empty_vectors(self):
         assert _cosine_similarity([], [1.0]) == 0.0
 
-    def test_mismatched_lengths_return_zero(self):
+    def test_cosine_similarity__returns_zero_for_mismatched_lengths(self):
         assert _cosine_similarity([1.0, 0.0], [1.0, 0.0, 0.0]) == 0.0
 
 
 class TestProjectSimilarityDistribution:
-    def test_zero_pairs_falls_back_to_floor(self):
+    def test_derived_threshold__falls_back_to_floor_when_zero_pairs(self):
         d = ProjectSimilarityDistribution(0, 0.0, 0.0, 0.0, 0.0, 0.0)
-        assert d.derived_threshold == FLOOR_THRESHOLD
+        assert d.derived_threshold == DEFAULT_FLOOR_THRESHOLD
 
-    def test_threshold_is_p75_clamped_to_floor(self):
+    def test_derived_threshold__clamped_to_floor_when_p75_below_floor(self):
         d = ProjectSimilarityDistribution(10, 0.30, 0.30, 0.20, 0.10, 0.05)
-        assert d.derived_threshold == FLOOR_THRESHOLD
+        assert d.derived_threshold == DEFAULT_FLOOR_THRESHOLD
 
-    def test_threshold_is_p75_when_above_floor(self):
+    def test_derived_threshold__uses_p75_when_above_floor(self):
         d = ProjectSimilarityDistribution(100, 0.70, 0.65, 0.80, 0.90, 0.95)
         assert d.derived_threshold == pytest.approx(0.80)
 
-    def test_threshold_is_clamped_to_ceiling(self):
+    def test_derived_threshold__clamped_to_ceiling_when_p75_above_ceiling(self):
         d = ProjectSimilarityDistribution(100, 0.95, 0.95, 0.99, 1.0, 1.0)
-        assert d.derived_threshold == CEILING_THRESHOLD
+        assert d.derived_threshold == DEFAULT_CEILING_THRESHOLD
 
 
 class TestComputeProjectDistribution:
-    def test_no_embeddings_returns_zero_distribution(self):
+    def test_compute_project_distribution__returns_zero_distribution_when_no_embeddings(self):
         existing = [_memory("X", embedding=None), _memory("Y", embedding=None)]
         d = compute_project_distribution(existing)
         assert d.n_pairs == 0
 
-    def test_pairs_counted_correctly(self):
+    def test_compute_project_distribution__counts_pairs_correctly(self):
         existing = [
             _memory("a", [1.0, 0.0], "m1"),
             _memory("b", [0.0, 1.0], "m2"),
@@ -94,14 +94,14 @@ class TestComputeProjectDistribution:
         assert 0.0 <= d.p50 <= 1.0
         assert 0.0 <= d.p75 <= 1.0
 
-    def test_quantiles_are_monotonic(self):
+    def test_compute_project_distribution__quantiles_are_monotonic(self):
         existing = [_memory(f"m{i}", [float(i) / 10, 1.0 - float(i) / 10], f"id{i}") for i in range(5)]
         d = compute_project_distribution(existing)
         assert d.p50 <= d.p75 <= d.p90 <= d.p95
 
 
 class TestFindAboveThreshold:
-    def test_returns_only_memories_above_threshold(self):
+    def test_find_above_threshold__returns_only_memories_above_threshold(self):
         candidate = _candidate("X", [1.0, 0.0])
         existing = [
             _memory("identical", [1.0, 0.0], "m1"),
@@ -114,19 +114,19 @@ class TestFindAboveThreshold:
         assert "m1" in ids
         assert "m2" in ids
 
-    def test_candidate_without_embedding_returns_empty(self):
+    def test_find_above_threshold__returns_empty_when_candidate_has_no_embedding(self):
         candidate = _candidate("X", embedding=None)
         existing = [_memory("Y", [1.0, 0.0], "m1")]
         assert _find_above_threshold(candidate, existing, threshold=0.5) == []
 
-    def test_returns_empty_when_no_matches_above_threshold(self):
+    def test_find_above_threshold__returns_empty_when_no_matches_above_threshold(self):
         candidate = _candidate("X", [1.0, 0.0])
         existing = [_memory("Y", [0.0, 1.0], "m1")]
         assert _find_above_threshold(candidate, existing, threshold=0.78) == []
 
 
 class TestJudgeReconciliation:
-    def test_returns_keep_both_when_llm_says_so(self):
+    def test_judge_reconciliation__returns_keep_both_when_llm_says_keep_both(self):
         mock_response = MagicMock()
         mock_response.choices = [
             MagicMock(message=MagicMock(content='{"action": "keep_both", "reason": "different topics"}'))
@@ -138,12 +138,12 @@ class TestJudgeReconciliation:
                 _memory("user prefers dark mode"),
                 "https://llm.example/v1",
                 "model-x",
-                "key",
+                "key", 0.85,
             )
-        assert decision.action == "keep_both"
+        assert decision.action == FreshnessAction.KEEP_BOTH
         assert "topics" in decision.reason or "different" in decision.reason
 
-    def test_returns_merge_with_merged_content(self):
+    def test_judge_reconciliation__returns_merge_with_merged_content_when_llm_says_merge(self):
         mock_response = MagicMock()
         mock_response.choices = [
             MagicMock(
@@ -159,12 +159,12 @@ class TestJudgeReconciliation:
                 _memory("uses radon"),
                 "https://llm.example/v1",
                 "model-x",
-                "key",
+                "key", 0.85,
             )
-        assert decision.action == "merge"
+        assert decision.action == FreshnessAction.MERGE
         assert decision.merged_content == "uses rust-code-analysis since 2026"
 
-    def test_returns_supersede_when_llm_says_so(self):
+    def test_judge_reconciliation__returns_supersede_when_llm_says_supersede(self):
         mock_response = MagicMock()
         mock_response.choices = [
             MagicMock(message=MagicMock(content='{"action": "supersede", "reason": "newer version"}'))
@@ -176,11 +176,11 @@ class TestJudgeReconciliation:
                 _memory("Python 3.10"),
                 "https://llm.example/v1",
                 "model-x",
-                "key",
+                "key", 0.85,
             )
-        assert decision.action == "supersede"
+        assert decision.action == FreshnessAction.SUPERSEDE
 
-    def test_returns_dedupe_when_llm_says_so(self):
+    def test_judge_reconciliation__returns_dedupe_when_llm_says_dedupe(self):
         mock_response = MagicMock()
         mock_response.choices = [
             MagicMock(message=MagicMock(content='{"action": "dedupe", "reason": "same info"}'))
@@ -192,11 +192,11 @@ class TestJudgeReconciliation:
                 _memory("user prefers pyright"),
                 "https://llm.example/v1",
                 "model-x",
-                "key",
+                "key", 0.85,
             )
-        assert decision.action == "dedupe"
+        assert decision.action == FreshnessAction.DEDUPE
 
-    def test_strips_markdown_fences(self):
+    def test_judge_reconciliation__strips_markdown_fences_from_llm_response(self):
         mock_response = MagicMock()
         mock_response.choices = [
             MagicMock(
@@ -210,12 +210,12 @@ class TestJudgeReconciliation:
                 _memory("Y"),
                 "https://llm.example/v1",
                 "model-x",
-                "key",
+                "key", 0.85,
             )
-        assert decision.action == "merge"
+        assert decision.action == FreshnessAction.MERGE
         assert decision.merged_content == "merged"
 
-    def test_falls_back_to_keep_both_on_invalid_action(self):
+    def test_judge_reconciliation__falls_back_to_keep_both_on_invalid_action(self):
         mock_response = MagicMock()
         mock_response.choices = [
             MagicMock(message=MagicMock(content='{"action": "maybe", "reason": "unsure"}'))
@@ -227,31 +227,31 @@ class TestJudgeReconciliation:
                 _memory("Y"),
                 "https://llm.example/v1",
                 "model-x",
-                "key",
+                "key", 0.85,
             )
-        assert decision.action == "keep_both"
+        assert decision.action == FreshnessAction.KEEP_BOTH
 
 
-class TestMemoryFreshnessValidator:
-    def test_no_existing_memories_returns_empty_decisions_and_floor_distribution(self):
-        validator = MemoryFreshnessValidator("https://llm.example/v1", "model-x")
-        decisions, distribution = validator.validate([_candidate("X", [1.0, 0.0])], [])
+class TestValidateFreshness:
+    def test_validate_freshness__returns_empty_decisions_and_floor_distribution_when_no_existing_memories(self):
+        decisions, distribution = validate_freshness(
+            [_candidate("X", [1.0, 0.0])], [], "https://llm.example/v1", "model-x", "test-key"
+        )
         assert decisions == []
         assert distribution.n_pairs == 0
-        assert distribution.derived_threshold == FLOOR_THRESHOLD
+        assert distribution.derived_threshold == DEFAULT_FLOOR_THRESHOLD
 
-    def test_no_above_threshold_matches_skips_llm_call(self):
-        validator = MemoryFreshnessValidator("https://llm.example/v1", "model-x")
+    def test_validate_freshness__skips_llm_call_when_no_above_threshold_matches(self):
         candidates = [_candidate("X", [1.0, 0.0])]
         existing = [_memory("orthogonal", [0.0, 1.0], "m1")]
 
         with patch("openai.OpenAI") as mock_openai:
-            decisions, _ = validator.validate(candidates, existing)
+            decisions, _ = validate_freshness(candidates, existing, "https://llm.example/v1", "model-x", "test-key")
             mock_openai.assert_not_called()
 
         assert decisions == []
 
-    def test_similar_match_triggers_llm_judge_with_action(self):
+    def test_validate_freshness__triggers_llm_judge_when_similar_match_found(self):
         mock_response = MagicMock()
         mock_response.choices = [
             MagicMock(
@@ -260,38 +260,40 @@ class TestMemoryFreshnessValidator:
                 )
             )
         ]
-        validator = MemoryFreshnessValidator("https://llm.example/v1", "model-x")
         candidates = [_candidate("uses rust-code-analysis", [1.0, 0.0])]
         existing = [_memory("uses radon", [0.99, 0.14], "m1")]
 
         with patch("openai.OpenAI") as mock_openai:
             mock_openai.return_value.chat.completions.create.return_value = mock_response
-            decisions, distribution = validator.validate(candidates, existing)
+            decisions, distribution = validate_freshness(
+                candidates, existing, "https://llm.example/v1", "model-x", "test-key"
+            )
 
         assert len(decisions) == 1
         decision = decisions[0]
         assert isinstance(decision, FreshnessDecision)
-        assert decision.action == "merge"
+        assert decision.action == FreshnessAction.MERGE
         assert decision.merged_content == "merged"
         assert decision.similarity > distribution.derived_threshold
 
-    def test_keep_both_action_does_not_merge_or_supersede(self):
+    def test_validate_freshness__does_not_merge_or_supersede_on_keep_both(self):
         mock_response = MagicMock()
         mock_response.choices = [
             MagicMock(message=MagicMock(content='{"action": "keep_both", "reason": "different aspects"}'))
         ]
-        validator = MemoryFreshnessValidator("https://llm.example/v1", "model-x")
         candidates = [_candidate("uses rust-code-analysis for complexity", [1.0, 0.0])]
         existing = [_memory("user prefers dark mode", [0.99, 0.14], "m1")]
 
         with patch("openai.OpenAI") as mock_openai:
             mock_openai.return_value.chat.completions.create.return_value = mock_response
-            decisions, _ = validator.validate(candidates, existing)
+            decisions, _ = validate_freshness(
+                candidates, existing, "https://llm.example/v1", "model-x", "test-key"
+            )
 
         assert len(decisions) == 1
-        assert decisions[0].action == "keep_both"
+        assert decisions[0].action == FreshnessAction.KEEP_BOTH
 
-    def test_multiple_candidates_with_different_actions(self):
+    def test_validate_freshness__handles_multiple_candidates_with_different_actions(self):
         mock_response_a = MagicMock()
         mock_response_a.choices = [
             MagicMock(
@@ -308,7 +310,6 @@ class TestMemoryFreshnessValidator:
                 )
             )
         ]
-        validator = MemoryFreshnessValidator("https://llm.example/v1", "model-x")
         candidates = [
             _candidate("uses rust-code-analysis for complexity", [1.0, 0.0]),
             _candidate("user prefers dark mode in editors", [0.0, 1.0]),
@@ -323,31 +324,40 @@ class TestMemoryFreshnessValidator:
                 mock_response_a,
                 mock_response_b,
             ]
-            decisions, _ = validator.validate(candidates, existing)
+            decisions, _ = validate_freshness(
+                candidates, existing, "https://llm.example/v1", "model-x", "test-key"
+            )
 
         assert len(decisions) == 2
         actions = {d.action for d in decisions}
-        assert "merge" in actions
-        assert "dedupe" in actions
+        assert FreshnessAction.MERGE in actions
+        assert FreshnessAction.DEDUPE in actions
 
-    def test_data_driven_threshold_for_low_similarity_project_is_low(self):
-        validator = MemoryFreshnessValidator("https://llm.example/v1", "model-x")
+    def test_validate_freshness__uses_floor_threshold_for_low_similarity_project(self):
         candidates = [_candidate("X", [1.0, 0.0])]
         existing = [
             _memory("a", [1.0, 0.0], "m1"),
             _memory("b", [0.0, 1.0], "m2"),
         ]
-        with patch("openai.OpenAI"):
-            _, distribution = validator.validate(candidates, existing)
-        assert distribution.derived_threshold == FLOOR_THRESHOLD
+        mock_response = MagicMock()
+        mock_response.choices = [
+            MagicMock(message=MagicMock(content='{"action": "keep_both", "reason": "different"}'))
+        ]
+        with patch("openai.OpenAI") as mock_openai:
+            mock_openai.return_value.chat.completions.create.return_value = mock_response
+            _, distribution = validate_freshness(
+                candidates, existing, "https://llm.example/v1", "model-x", "test-key"
+            )
+        assert distribution.derived_threshold == DEFAULT_FLOOR_THRESHOLD
 
-    def test_failed_llm_call_skipped_silently(self):
-        validator = MemoryFreshnessValidator("https://llm.example/v1", "model-x")
+    def test_validate_freshness__skips_failed_llm_call_silently(self):
         candidates = [_candidate("X", [1.0, 0.0])]
         existing = [_memory("Y", [0.99, 0.14], "m1")]
 
         with patch("openai.OpenAI") as mock_openai:
             mock_openai.return_value.chat.completions.create.side_effect = RuntimeError("llm down")
-            decisions, _ = validator.validate(candidates, existing)
+            decisions, _ = validate_freshness(
+                candidates, existing, "https://llm.example/v1", "model-x", "test-key"
+            )
 
         assert decisions == []

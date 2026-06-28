@@ -1,11 +1,10 @@
 """Transcript discovery for memory extraction."""
 
-import os
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 from slopometry.core.models.protocol.events import AbstractEventSource
+from slopometry.core.settings import get_claude_projects_dirs, get_opencode_storage_root
 
 
 @dataclass(frozen=True)
@@ -23,33 +22,32 @@ class TranscriptFinder:
 
     def find_claude_project_dirs(self) -> list[Path]:
         """Find Claude Code project directories based on platform."""
-        if sys.platform == "win32":
-            base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-            return [base / "Claude" / "projects"]
-        elif sys.platform == "darwin":
-            return [Path.home() / "Library" / "Application Support" / "Claude" / "projects"]
-        else:
-            xdg_data_home = os.environ.get("XDG_DATA_HOME")
-            claude_xdg = Path(xdg_data_home) / "claude" / "projects" if xdg_data_home else None
-            default_claude = Path.home() / ".claude" / "projects"
-            if claude_xdg and claude_xdg.exists():
-                return [claude_xdg]
-            if default_claude.exists():
-                return [default_claude]
-            return [default_claude]
+        return get_claude_projects_dirs()
 
     def _decode_claude_project_dir(self, dirname: str) -> Path | None:
         """Decode Claude project directory name back to working directory.
 
-        Claude encodes paths like /mnt/terradump/code/slopometry as
-        -mnt-terradump-code-slopometry (leading dash, slashes become dashes)
+        Claude encodes path separators as hyphens, so e.g.
+        -mnt-terradump-code-slopometry -> /mnt/terradump/code/slopometry.
+        Hyphens in directory names are double-escaped as ``--``.
         """
         if not dirname.startswith("-"):
             return None
-        decoded = "/" + dirname[1:].replace("-", "/")
+        raw = dirname[1:]
+        parts = raw.split("-")
+        decoded_parts: list[str] = []
+        i = 0
+        while i < len(parts):
+            if not parts[i] and i + 1 < len(parts):
+                decoded_parts.append("-")
+                i += 2
+            else:
+                decoded_parts.append(parts[i])
+                i += 1
+        decoded = "/" + "/".join(decoded_parts)
         try:
             return Path(decoded).resolve()
-        except Exception:
+        except Exception:  # slopometry: allow-silent - corrupt symlink or permissions in project dir; skip gracefully
             return None
 
     def find_slopometry_transcripts(self, project_dir: Path) -> list[DiscoveredTranscript]:
@@ -80,7 +78,7 @@ class TranscriptFinder:
 
         return results
 
-    def find_opencode_storage_root(self) -> Path | None:
+    def find_opencode_storage_root(self) -> Path:
         """Find OpenCode's storage root directory.
 
         Layout: ``<root>/project/<id>.json``,
@@ -88,13 +86,7 @@ class TranscriptFinder:
         ``<root>/message/<session_id>/<message_id>.json``,
         ``<root>/part/<message_id>/<part_id>.json``.
         """
-        if sys.platform == "win32":
-            base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-            return base / "opencode" / "storage"
-        xdg_data_home = os.environ.get("XDG_DATA_HOME")
-        if xdg_data_home:
-            return Path(xdg_data_home) / "opencode" / "storage"
-        return Path.home() / ".local" / "share" / "opencode" / "storage"
+        return get_opencode_storage_root()
 
     def find_opencode_sessions(self, project_dir: Path) -> list[DiscoveredTranscript]:
         """Find OpenCode sessions whose working directory matches project_dir.
@@ -112,7 +104,7 @@ class TranscriptFinder:
         import json
 
         storage_root = self.find_opencode_storage_root()
-        if storage_root is None or not storage_root.is_dir():
+        if not storage_root.is_dir():
             return []
 
         project_dir_resolved = project_dir.resolve()
@@ -123,7 +115,7 @@ class TranscriptFinder:
             return results
 
         def _directory_matches_project(directory_str: str | None) -> bool:
-            """True if ``directory_str`` equals or contains ``project_dir_resolved``."""
+            """True if ``directory_str`` equals ``project_dir_resolved`` or either is inside the other."""
             if not directory_str:
                 return False
             try:
@@ -132,6 +124,11 @@ class TranscriptFinder:
                 return False
             if directory_resolved == project_dir_resolved:
                 return True
+            try:
+                directory_resolved.relative_to(project_dir_resolved)
+                return True
+            except ValueError:
+                pass
             try:
                 project_dir_resolved.relative_to(directory_resolved)
                 return True
@@ -180,9 +177,11 @@ class TranscriptFinder:
         """Discover all transcripts for a project, across all harnesses.
 
         Returns:
-            List of DiscoveredTranscript, one per session per harness
+            List of DiscoveredTranscript, one per session per harness, deduplicated
+            when the same session appears across multiple discovery sources.
         """
         results: list[DiscoveredTranscript] = []
+        seen: set[tuple[str, str]] = set()
         project_dir = project_dir.resolve()
 
         for claude_projects_dir in self.find_claude_project_dirs():
@@ -199,6 +198,10 @@ class TranscriptFinder:
 
                 for transcript_path in project_subdir.glob("*.jsonl"):
                     session_id = transcript_path.stem
+                    key = (session_id, AbstractEventSource.CLAUDE_CODE.value)
+                    if key in seen:
+                        continue
+                    seen.add(key)
                     results.append(
                         DiscoveredTranscript(
                             session_id=session_id,
@@ -208,7 +211,18 @@ class TranscriptFinder:
                         )
                     )
 
-        results.extend(self.find_slopometry_transcripts(project_dir))
-        results.extend(self.find_opencode_sessions(project_dir))
+        for t in self.find_slopometry_transcripts(project_dir):
+            key = (t.session_id, t.source.value)
+            if key in seen:
+                continue
+            seen.add(key)
+            results.append(t)
+
+        for t in self.find_opencode_sessions(project_dir):
+            key = (t.session_id, t.source.value)
+            if key in seen:
+                continue
+            seen.add(key)
+            results.append(t)
 
         return results

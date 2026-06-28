@@ -21,7 +21,7 @@ from slopometry.core.models.protocol.events import (
     AbstractHookEvent,
     ToolCallPayload,
 )
-from slopometry.core.protocol.adapters.claude_code import resolve_tool_type
+from slopometry.core.protocol.adapters.claude_code import _TOOL_NAME_TO_TYPE, resolve_tool_type
 
 _OPENCODE_TYPE_TO_ABSTRACT: dict[str, AbstractEventType] = {
     "pre_tool_use": AbstractEventType.TOOL_CALL_STARTED,
@@ -42,7 +42,11 @@ def resolve_opencode_event_type(event_type: str) -> AbstractEventType:
 
 class OpenCodeAdapter:
     source = AbstractEventSource.OPENCODE
-    tool_type_map: dict[str, str] = {}
+    tool_type_map: dict[str, str] = {name: enum.value for name, enum in _TOOL_NAME_TO_TYPE.items()}
+
+    @classmethod
+    def map_tool_name(cls, tool_name: str) -> str:
+        return resolve_tool_type(tool_name)
 
     def detect_event_type(self, raw_payload: dict[str, Any]) -> AbstractEventType:
         event_type = raw_payload.get("event_type")

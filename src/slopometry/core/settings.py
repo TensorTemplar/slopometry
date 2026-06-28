@@ -43,6 +43,33 @@ def get_default_config_dir() -> Path:
         return Path.home() / ".config" / app_name
 
 
+def get_claude_projects_dirs() -> list[Path]:
+    """Platform-specific directories where Claude Code stores project transcripts."""
+    if sys.platform == "win32":
+        base = Path(os.environ["LOCALAPPDATA"]) if os.environ.get("LOCALAPPDATA") else Path.home() / "AppData" / "Local"
+        return [base / "Claude" / "projects"]
+    elif sys.platform == "darwin":
+        return [Path.home() / "Library" / "Application Support" / "Claude" / "projects"]
+    else:
+        xdg_data_home = os.environ.get("XDG_DATA_HOME")
+        claude_xdg = Path(xdg_data_home) / "claude" / "projects" if xdg_data_home else None
+        default_claude = Path.home() / ".claude" / "projects"
+        if claude_xdg and claude_xdg.exists():
+            return [claude_xdg]
+        return [default_claude]
+
+
+def get_opencode_storage_root() -> Path:
+    """Platform-specific path to OpenCode's storage root directory."""
+    if sys.platform == "win32":
+        base = Path(os.environ["LOCALAPPDATA"]) if os.environ.get("LOCALAPPDATA") else Path.home() / "AppData" / "Local"
+        return base / "opencode" / "storage"
+    xdg_data_home = os.environ.get("XDG_DATA_HOME")
+    if xdg_data_home:
+        return Path(xdg_data_home) / "opencode" / "storage"
+    return Path.home() / ".local" / "share" / "opencode" / "storage"
+
+
 class Settings(BaseSettings):
     """Application settings with support for .env files."""
 
@@ -202,12 +229,12 @@ class Settings(BaseSettings):
     )
 
     memory_llm_endpoint: str = Field(
-        default="https://your-llm-endpoint.com/v1",
-        description="LLM endpoint for memory extraction",
+        default="",
+        description="LLM endpoint for memory extraction; must be set explicitly",
     )
     memory_llm_model: str = Field(
-        default="your-model-name",
-        description="Model for memory extraction",
+        default="",
+        description="Model for memory extraction; must be set explicitly",
     )
     memory_llm_api_key: SecretStr = Field(
         default=SecretStr(""),
@@ -223,12 +250,26 @@ class Settings(BaseSettings):
         description="API key for memory embedding endpoint",
     )
     memory_embedding_endpoint: str = Field(
-        default="https://your-embedding-endpoint.com/v1",
-        description="Embedding model endpoint for memory similarity",
+        default="",
+        description="Embedding model endpoint for memory similarity; must be set explicitly",
     )
     memory_embedding_model: str = Field(
-        default="your-embedding-model",
-        description="Embedding model name",
+        default="",
+        description="Embedding model name; must be set explicitly",
+    )
+
+    freshness_threshold_floor: float = Field(
+        default=0.45,
+        description="Minimum dedupe similarity threshold; derived threshold never goes below this",
+    )
+    freshness_threshold_ceiling: float = Field(
+        default=0.95,
+        description="Maximum dedupe similarity threshold; derived threshold never goes above this",
+    )
+
+    stdin_timeout_seconds: float = Field(
+        default=5.0,
+        description="Seconds to wait for stdin input in hook dispatch before giving up",
     )
 
     @field_validator("baseline_strategy", mode="before")

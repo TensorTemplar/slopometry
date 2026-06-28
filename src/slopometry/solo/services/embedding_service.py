@@ -32,10 +32,7 @@ class EmbeddingService:
         """
         try:
             from openai import OpenAI
-        except ImportError:
-            raise RuntimeError("openai package required for embeddings. Install with: pip install openai")
 
-        try:
             client = OpenAI(base_url=self.endpoint, api_key=self.api_key)
 
             response = client.embeddings.create(
@@ -47,8 +44,6 @@ class EmbeddingService:
                 return response.data[0].embedding
             raise RuntimeError("Empty response from embedding endpoint")
 
-        except RuntimeError:
-            raise
         except Exception as e:
             raise RuntimeError(f"Failed to get embedding: {e}") from e
 

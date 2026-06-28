@@ -56,7 +56,7 @@ def storage_finder(monkeypatch: pytest.MonkeyPatch):
     return TranscriptFinder()
 
 
-def test_opencode_session_emits_opencode_source(
+def test_discover_transcripts__emits_opencode_source_for_opencode_sessions(
     storage_finder: TranscriptFinder,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -97,7 +97,7 @@ def test_opencode_session_emits_opencode_source(
     assert all(isinstance(r, DiscoveredTranscript) for r in opencode_results)
 
 
-def test_non_matching_worktree_excluded(
+def test_discover_transcripts__excludes_non_matching_worktree(
     storage_finder: TranscriptFinder,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -128,19 +128,20 @@ def test_non_matching_worktree_excluded(
     assert results == []
 
 
-def test_missing_opencode_storage_root_returns_only_claude(
+def test_discover_transcripts__returns_only_claude_when_opencode_storage_missing(
     storage_finder: TranscriptFinder,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ):
     project_dir = tmp_path / "myproject"
     project_dir.mkdir()
-    monkeypatch.setattr(storage_finder, "find_opencode_storage_root", lambda: None)
+    nonexistent_storage = tmp_path / "nonexistent_opencode_storage"
+    monkeypatch.setattr(storage_finder, "find_opencode_storage_root", lambda: nonexistent_storage)
     results = storage_finder.discover_transcripts(project_dir)
     assert all(r.source == AbstractEventSource.CLAUDE_CODE for r in results)
 
 
-def test_slopometry_transcript_marked_as_claude_code(tmp_path: Path):
+def test_discover_transcripts__marks_slopometry_transcript_as_claude_code(tmp_path: Path):
     project_dir = tmp_path / "myproject"
     slop_dir = project_dir / ".slopometry" / "ses_abc"
     slop_dir.mkdir(parents=True)
@@ -151,7 +152,7 @@ def test_slopometry_transcript_marked_as_claude_code(tmp_path: Path):
     )
 
 
-def test_only_matching_worktree_included(
+def test_find_opencode_sessions__includes_only_matching_worktree(
     storage_finder: TranscriptFinder,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -194,7 +195,7 @@ def test_only_matching_worktree_included(
     assert {r.session_id for r in results} == {"ses_keep"}
 
 
-def test_find_opencode_storage_root_returns_none_when_no_xdg(
+def test_find_opencode_storage_root__falls_back_to_home_when_no_xdg(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ):
@@ -204,13 +205,13 @@ def test_find_opencode_storage_root_returns_none_when_no_xdg(
     assert finder.find_opencode_storage_root() == tmp_path / ".local" / "share" / "opencode" / "storage"
 
 
-def test_find_opencode_storage_root_uses_xdg_when_set(monkeypatch: pytest.MonkeyPatch):
+def test_find_opencode_storage_root__uses_xdg_when_set(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("XDG_DATA_HOME", "/custom/xdg")
     finder = TranscriptFinder()
     assert finder.find_opencode_storage_root() == Path("/custom/xdg/opencode/storage")
 
 
-def test_opencode_session_in_subdirectory_of_worktree_included(
+def test_find_opencode_sessions__includes_session_in_subdirectory_of_worktree(
     storage_finder: TranscriptFinder,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -252,10 +253,10 @@ def test_opencode_session_in_subdirectory_of_worktree_included(
     assert {r.session_id for r in results_subdir} == {"ses_subdir"}
 
     results_root = storage_finder.find_opencode_sessions(project_root)
-    assert results_root == []
+    assert {r.session_id for r in results_root} == {"ses_subdir"}
 
 
-def test_opencode_session_outside_worktree_excluded(
+def test_find_opencode_sessions__excludes_session_outside_worktree(
     storage_finder: TranscriptFinder,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

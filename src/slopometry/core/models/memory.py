@@ -3,7 +3,7 @@
 from datetime import datetime
 from enum import StrEnum
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class MemoryType(StrEnum):
@@ -13,6 +13,28 @@ class MemoryType(StrEnum):
     FEEDBACK = "feedback"
     PROJECT = "project"
     REFERENCE = "reference"
+
+
+class FreshnessAction(StrEnum):
+    """The four reconciliation verdicts an LLM judge can return for a memory pair."""
+
+    KEEP_BOTH = "keep_both"
+    MERGE = "merge"
+    SUPERSEDE = "supersede"
+    DEDUPE = "dedupe"
+
+    @property
+    def color(self) -> str:
+        """Rich console color for display."""
+        match self:
+            case FreshnessAction.KEEP_BOTH:
+                return "green"
+            case FreshnessAction.MERGE:
+                return "cyan"
+            case FreshnessAction.SUPERSEDE:
+                return "yellow"
+            case FreshnessAction.DEDUPE:
+                return "magenta"
 
 
 class MemoryEntry(BaseModel):
@@ -48,3 +70,30 @@ class MemoryCreateRequest(BaseModel):
     session_id: str
     project_dir: str
     candidates: list[MemoryCandidate]
+
+
+class LLMMemoryCandidate(BaseModel):
+    """Raw LLM-extracted memory candidate before enrichment.
+
+    The extraction LLM returns a JSON array of these. ``memory_type`` is
+    validated against the canonical ``MemoryType`` enum — invalid types
+    cause the candidate to be skipped rather than raising.
+    """
+
+    memory_type: MemoryType
+    content: str
+    source_context: str | None = None
+
+
+class FreshnessVerdict(BaseModel):
+    """Structured LLM judge response for a single memory reconciliation pair.
+
+    ``merged_content`` is only present when ``action == merge``.
+    """
+
+    action: FreshnessAction
+    reason: str = ""
+    merged_content: str | None = Field(
+        default=None,
+        description="Only present when action == merge",
+    )

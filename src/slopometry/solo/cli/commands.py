@@ -1,11 +1,13 @@
 """CLI commands for solo-leveler features."""
 
 import logging
+from collections import Counter, defaultdict
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import click
 
+from slopometry.core.models.memory import FreshnessAction
 from slopometry.display.console import console, styled_pager
 
 if TYPE_CHECKING:
@@ -888,9 +890,7 @@ def find_memories(
         console.print("[yellow]No transcripts found for this project.[/yellow]")
         return
 
-    source_counts: dict[str, int] = {}
-    for t in transcripts:
-        source_counts[t.source.value] = source_counts.get(t.source.value, 0) + 1
+    source_counts: Counter[str] = Counter(t.source.value for t in transcripts)
     source_breakdown = ", ".join(f"{src}={n}" for src, n in sorted(source_counts.items()))
     console.print(f"[green]Found {len(transcripts)} transcript(s)[/green] [dim]({source_breakdown})[/dim]\n")
 
@@ -923,7 +923,7 @@ def find_memories(
                 from slopometry.solo.services.transcript_finder import TranscriptFinder
 
                 storage_root = TranscriptFinder().find_opencode_storage_root()
-                if storage_root is None:
+                if not storage_root.is_dir():
                     console.print("  [yellow]OpenCode storage not found[/yellow]")
                     continue
                 cleaned_transcript = memory_extractor.extract_memories_from_opencode_session(
@@ -961,17 +961,20 @@ def find_memories(
                     console.print(f"  [red]Embedding error for candidate {i+1}: {e}[/red]")
                     raise
 
-            from slopometry.solo.services.memory_freshness import MemoryFreshnessValidator
+            from slopometry.solo.services.memory_freshness import validate_freshness
 
             existing_memories = memory_service.get_memories(project_dir=proj_dir_str, limit=200)
             decisions: list = []
             if existing_memories:
-                freshness_validator = MemoryFreshnessValidator(
+                decisions, distribution = validate_freshness(
+                    candidates,
+                    existing_memories,
                     llm_endpoint=endpoint,
                     llm_model=model,
                     api_key=api_key,
+                    floor_threshold=settings.freshness_threshold_floor,
+                    ceiling_threshold=settings.freshness_threshold_ceiling,
                 )
-                decisions, distribution = freshness_validator.validate(candidates, existing_memories)
                 console.print(
                     f"  [dim]Project similarity distribution: "
                     f"n={distribution.n_pairs} "
@@ -987,33 +990,32 @@ def find_memories(
                 if decisions:
                     console.print(f"  [yellow]Freshness: {len(decisions)} similar pair(s) reviewed:[/yellow]")
                     for decision in decisions:
-                        action_color = {
-                            "keep_both": "green",
-                            "merge": "cyan",
-                            "supersede": "yellow",
-                            "dedupe": "magenta",
-                        }.get(decision.action, "white")
+                        action_color = decision.action.color
                         console.print(
-                            f"    [{action_color}]{decision.action.upper()}[/{action_color}]"
+                            f"    [{action_color}]{decision.action.value.upper()}[/{action_color}]"
                             f" (sim={decision.similarity:.2f}): "
                             f"[dim]new=[/dim]{decision.new_candidate.content[:80]!r} "
                             f"[dim]existing=[/dim]{decision.existing_memory.content[:80]!r}"
                         )
                         console.print(f"      [dim]REASON:[/dim] {decision.reason}")
+                    decisions_by_candidate = defaultdict(list)
                     for decision in decisions:
-                        if decision.action == "merge" and decision.merged_content:
-                            decision.new_candidate.content = decision.merged_content
-                        elif decision.action == "dedupe":
-                            if decision.new_candidate.metadata is None:
-                                decision.new_candidate.metadata = {}
-                            decision.new_candidate.metadata["deduped_against"] = decision.existing_memory.id
-                    for decision in decisions:
-                        if decision.new_candidate.metadata is None:
-                            decision.new_candidate.metadata = {}
-                        decision.new_candidate.metadata["freshness_action"] = decision.action
-                        decision.new_candidate.metadata["freshness_reason"] = decision.reason
-                        if decision.action != "keep_both":
-                            decision.new_candidate.metadata["freshness_pair_with"] = decision.existing_memory.id
+                        decisions_by_candidate[id(decision.new_candidate)].append(decision)
+                    for group in decisions_by_candidate.values():
+                        candidate = group[0].new_candidate
+                        for decision in group:
+                            if decision.action == FreshnessAction.MERGE and decision.merged_content:
+                                candidate.content = decision.merged_content
+                            elif decision.action == FreshnessAction.DEDUPE:
+                                if candidate.metadata is None:
+                                    candidate.metadata = {}
+                                candidate.metadata["deduped_against"] = decision.existing_memory.id
+                        if candidate.metadata is None:
+                            candidate.metadata = {}
+                        candidate.metadata["freshness_action"] = group[0].action
+                        candidate.metadata["freshness_reason"] = group[0].reason
+                        if group[0].action != FreshnessAction.KEEP_BOTH:
+                            candidate.metadata["freshness_pair_with"] = group[0].existing_memory.id
 
             from slopometry.core.models.memory import MemoryCreateRequest
 
@@ -1024,12 +1026,10 @@ def find_memories(
             )
 
             saved = memory_service.save_memories(request)
-            new_memory_ids: dict[str, str] = {}
-            for candidate, entry in zip(candidates, saved):
-                new_memory_ids[candidate.content] = entry.id
+            candidate_id_map: dict[int, str] = {id(c): e.id for c, e in zip(candidates, saved)}
             for decision in decisions:
-                if decision.action == "supersede":
-                    new_id = new_memory_ids.get(decision.new_candidate.content)
+                if decision.action == FreshnessAction.SUPERSEDE:
+                    new_id = candidate_id_map.get(id(decision.new_candidate))
                     if new_id is None:
                         continue
                     memory_service.update_memory(

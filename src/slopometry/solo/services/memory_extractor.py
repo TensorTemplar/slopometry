@@ -6,7 +6,8 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from slopometry.core.models.memory import MemoryCandidate, MemoryType
+from slopometry.core.models.memory import LLMMemoryCandidate, MemoryCandidate
+from slopometry.solo.services.llm_text import strip_llm_wrappers
 
 logger = logging.getLogger(__name__)
 
@@ -143,7 +144,7 @@ class LLMConnectionError(Exception):
 class MemoryExtractor:
     """Extracts memory candidates from transcripts using LLM."""
 
-    def __init__(self, llm_endpoint: str, llm_model: str, api_key: str = "dummy"):
+    def __init__(self, llm_endpoint: str, llm_model: str, api_key: str):
         self.llm_endpoint = llm_endpoint
         self.llm_model = llm_model
         self.api_key = api_key
@@ -211,14 +212,14 @@ class MemoryExtractor:
                             content = message.get("content", [])
                             for block in content:
                                 if isinstance(block, dict) and block.get("type") == "text":
-                                    text_parts.append(block.get("text", ""))
+                                    conversation_parts.append(f"SYSTEM: {block.get('text', '')}")
 
                 except (json.JSONDecodeError, KeyError):
                     continue
 
             return "\n".join(conversation_parts)
 
-        except Exception as e:
+        except Exception as e:  # slopometry: allow-silent - one malformed transcript must not abort the batch
             logger.error(f"Failed to parse transcript {transcript_path}: {e}")
             return ""
 
@@ -353,23 +354,7 @@ class MemoryExtractor:
         if not content:
             raise ValueError("LLM returned empty response")
 
-        json_str = content.strip()
-
-        if json_str.startswith("<think>"):
-            end_marker = "</think>"
-            end_idx = json_str.find(end_marker)
-            if end_idx != -1:
-                json_str = json_str[end_idx + len(end_marker) :]
-                while json_str.startswith("\n"):
-                    json_str = json_str[1:]
-
-        if json_str.startswith("```json"):
-            json_str = json_str[7:]
-        elif json_str.startswith("```"):
-            json_str = json_str[3:]
-        if json_str.endswith("```"):
-            json_str = json_str[:-3]
-        json_str = json_str.strip()
+        json_str = strip_llm_wrappers(content)
 
         try:
             data = json.loads(json_str)
@@ -379,22 +364,22 @@ class MemoryExtractor:
         if not isinstance(data, list):
             raise ValueError(f"Expected JSON array, got {type(data).__name__}")
 
+        from pydantic import TypeAdapter
+
+        adapter = TypeAdapter(LLMMemoryCandidate)
         candidates: list[MemoryCandidate] = []
         for item in data:
             try:
-                memory_type_str = item.get("memory_type", "")
-                if memory_type_str not in ["user", "feedback", "project", "reference"]:
-                    continue
-
+                llm_candidate = adapter.validate_python(item)
                 candidates.append(
                     MemoryCandidate(
-                        memory_type=MemoryType(memory_type_str),
-                        content=item.get("content", ""),
-                        source_context=item.get("source_context"),
+                        memory_type=llm_candidate.memory_type,
+                        content=llm_candidate.content,
+                        source_context=llm_candidate.source_context,
                     )
                 )
-            except (KeyError, ValueError) as e:
-                logger.debug(f"Skipping invalid memory candidate: {e}")
+            except (ValueError, TypeError) as e:
+                logger.debug("Skipping invalid memory candidate: %s", e)
                 continue
 
         return candidates

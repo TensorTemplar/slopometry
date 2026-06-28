@@ -145,6 +145,10 @@ class ClaudeCodeAdapter:
     source = AbstractEventSource.CLAUDE_CODE
     tool_type_map: dict[str, str] = {name: enum.value for name, enum in _TOOL_NAME_TO_TYPE.items()}
 
+    @classmethod
+    def map_tool_name(cls, tool_name: str) -> str:
+        return resolve_tool_type(tool_name)
+
     def detect_event_type(self, raw_payload: dict[str, Any]) -> AbstractEventType:
         fields = set(raw_payload.keys())
         if "tool_name" in fields and "tool_input" in fields:

@@ -7,8 +7,7 @@ import pytest
 from slopometry.solo.services.embedding_service import EmbeddingService
 
 
-def test_compute_similarity_same_vector() -> None:
-    """Similarity of vector to itself should be 1.0."""
+def test_compute_similarity__returns_one_for_identical_vectors() -> None:
     service = EmbeddingService(
         endpoint="http://localhost:11434/v1",
         model="embedding-model",
@@ -21,8 +20,7 @@ def test_compute_similarity_same_vector() -> None:
     assert similarity == pytest.approx(1.0)
 
 
-def test_compute_similarity_different_vectors() -> None:
-    """Different vectors should have similarity less than 1.0."""
+def test_compute_similarity__returns_less_than_one_for_different_vectors() -> None:
     service = EmbeddingService(
         endpoint="http://localhost:11434/v1",
         model="embedding-model",
@@ -37,8 +35,7 @@ def test_compute_similarity_different_vectors() -> None:
     assert similarity > -1.0
 
 
-def test_compute_similarity_zero_magnitude() -> None:
-    """Should handle zero vectors gracefully."""
+def test_compute_similarity__returns_zero_for_zero_magnitude_vectors() -> None:
     service = EmbeddingService(
         endpoint="http://localhost:11434/v1",
         model="embedding-model",
@@ -55,8 +52,7 @@ def test_compute_similarity_zero_magnitude() -> None:
     assert result2 == 0.0
 
 
-def test_compute_uniqueness_score_no_existing() -> None:
-    """Should return 1.0 when no existing embeddings."""
+def test_compute_uniqueness_score__returns_one_when_no_existing_embeddings() -> None:
     service = EmbeddingService(
         endpoint="http://localhost:11434/v1",
         model="embedding-model",
@@ -69,8 +65,7 @@ def test_compute_uniqueness_score_no_existing() -> None:
     assert score == 1.0
 
 
-def test_compute_uniqueness_score_with_existing() -> None:
-    """Should return lower score when similar embeddings exist."""
+def test_compute_uniqueness_score__returns_lower_score_when_similar_embeddings_exist() -> None:
     service = EmbeddingService(
         endpoint="http://localhost:11434/v1",
         model="embedding-model",
@@ -89,8 +84,7 @@ def test_compute_uniqueness_score_with_existing() -> None:
     assert score >= 0.0
 
 
-def test_get_embedding_raises_on_failure() -> None:
-    """Should raise RuntimeError on API failure."""
+def test_get_embedding__raises_runtime_error_on_api_failure() -> None:
     service = EmbeddingService(
         endpoint="http://localhost:11434/v1",
         model="embedding-model",
@@ -106,8 +100,7 @@ def test_get_embedding_raises_on_failure() -> None:
             service.get_embedding("test text")
 
 
-def test_get_embedding_success() -> None:
-    """Test successful embedding retrieval."""
+def test_get_embedding__returns_vector_on_success() -> None:
     service = EmbeddingService(
         endpoint="http://localhost:11434/v1",
         model="embedding-model",
@@ -131,8 +124,7 @@ def test_get_embedding_success() -> None:
         )
 
 
-def test_get_embedding_raises_on_missing_package() -> None:
-    """Should raise RuntimeError if openai package is not installed."""
+def test_get_embedding__raises_runtime_error_when_openai_not_installed() -> None:
     service = EmbeddingService(
         endpoint="http://localhost:11434/v1",
         model="embedding-model",
@@ -148,8 +140,7 @@ def test_get_embedding_raises_on_missing_package() -> None:
 
     try:
         with patch("builtins.__import__", side_effect=failing_import):
-            with pytest.raises(RuntimeError, match="openai package required"):
+            with pytest.raises(RuntimeError, match="Failed to get embedding"):
                 service.get_embedding("test text")
     finally:
         pass
-

@@ -19,6 +19,7 @@ from pathlib import Path
 
 from slopometry.core.database import EventDatabase
 from slopometry.core.git_tracker import GitTracker
+from slopometry.core.lock import SlopometryLock
 from slopometry.core.models.complexity import ComplexityDelta, ExtendedComplexityMetrics
 from slopometry.core.models.hook import FeedbackCacheState
 from slopometry.core.models.protocol.events import AbstractEventSource, AbstractEventType
@@ -211,72 +212,77 @@ def handle_stop_event(session_id: str, working_directory: str | None = None) -> 
     if not working_directory:
         return 0
 
-    cached_state = _load_feedback_cache(working_directory)
-    if cached_state is not None and cached_state.commit_sha is not None:
-        current_sha = _get_current_commit_sha(working_directory)
-        if current_sha == cached_state.commit_sha and not _has_source_changes(working_directory):
+    lock = SlopometryLock(project_dir=working_directory)
+    with lock.acquire() as acquired:
+        if not acquired:
             return 0
 
-    if not _has_analyzable_source_files(working_directory):
+        cached_state = _load_feedback_cache(working_directory)
+        if cached_state is not None and cached_state.commit_sha is not None:
+            current_sha = _get_current_commit_sha(working_directory)
+            if current_sha == cached_state.commit_sha and not _has_source_changes(working_directory):
+                return 0
+
+        if not _has_analyzable_source_files(working_directory):
+            return 0
+
+        cache_key = _compute_working_tree_cache_key(working_directory)
+        if cached_state is not None and cached_state.last_key == cache_key:
+            return 0
+
+        db = EventDatabase()
+        stats = db.get_session_statistics(session_id)
+        if not stats:
+            return 0
+
+        current_metrics = stats.complexity_metrics
+        delta = stats.complexity_delta
+
+        wt_calculator = WorkingTreeStateCalculator(working_directory, languages=None)
+        current_file_hashes = wt_calculator.get_source_file_content_hashes()
+
+        if cached_state is not None:
+            edited_files = wt_calculator.get_files_changed_since(cached_state.file_hashes)
+        else:
+            edited_files = wt_calculator.get_modified_source_file_paths()
+
+        feedback_parts: list[str] = []
+
+        if current_metrics:
+            scoped_smells = scope_smells_for_session(
+                current_metrics, delta, edited_files, working_directory, stats.context_coverage
+            )
+            code_smells = [s for s in scoped_smells if s.name != "unread_related_tests"]
+            context_smells = [s for s in scoped_smells if s.name == "unread_related_tests"]
+            code_feedback, has_code_smells, _ = format_code_smell_feedback(code_smells, session_id)
+            if has_code_smells:
+                feedback_parts.append(code_feedback)
+            context_smell_feedback, has_context_smells, _ = format_code_smell_feedback(context_smells, session_id)
+            if has_context_smells:
+                feedback_parts.append(context_smell_feedback)
+
+        if settings.enable_complexity_feedback and stats.context_coverage and stats.context_coverage.has_gaps:
+            context_feedback = format_context_coverage_feedback(stats.context_coverage)
+            if context_feedback:
+                feedback_parts.append(context_feedback)
+
+        if settings.feedback_dev_guidelines:
+            dev_guidelines = extract_dev_guidelines_from_claude_md(working_directory)
+            if dev_guidelines:
+                feedback_parts.append(f"\n**Project Development Guidelines:**\n{dev_guidelines}")
+
+        current_commit_sha = _get_current_commit_sha(working_directory)
+        _save_feedback_cache(working_directory, cache_key, current_file_hashes, commit_sha=current_commit_sha)
+
+        if feedback_parts:
+            feedback = "\n\n".join(feedback_parts)
+            feedback += (
+                f"\n\n---\n**Session**: `{session_id}` | Details: `slopometry solo show {session_id} --smell-details`"
+            )
+            hook_output = {"decision": "block", "reason": feedback}
+            print(json.dumps(hook_output))
+            return 2
         return 0
-
-    cache_key = _compute_working_tree_cache_key(working_directory)
-    if cached_state is not None and cached_state.last_key == cache_key:
-        return 0
-
-    db = EventDatabase()
-    stats = db.get_session_statistics(session_id)
-    if not stats:
-        return 0
-
-    current_metrics = stats.complexity_metrics
-    delta = stats.complexity_delta
-
-    wt_calculator = WorkingTreeStateCalculator(working_directory, languages=None)
-    current_file_hashes = wt_calculator.get_source_file_content_hashes()
-
-    if cached_state is not None:
-        edited_files = wt_calculator.get_files_changed_since(cached_state.file_hashes)
-    else:
-        edited_files = wt_calculator.get_modified_source_file_paths()
-
-    feedback_parts: list[str] = []
-
-    if current_metrics:
-        scoped_smells = scope_smells_for_session(
-            current_metrics, delta, edited_files, working_directory, stats.context_coverage
-        )
-        code_smells = [s for s in scoped_smells if s.name != "unread_related_tests"]
-        context_smells = [s for s in scoped_smells if s.name == "unread_related_tests"]
-        code_feedback, has_code_smells, _ = format_code_smell_feedback(code_smells, session_id)
-        if has_code_smells:
-            feedback_parts.append(code_feedback)
-        context_smell_feedback, has_context_smells, _ = format_code_smell_feedback(context_smells, session_id)
-        if has_context_smells:
-            feedback_parts.append(context_smell_feedback)
-
-    if settings.enable_complexity_feedback and stats.context_coverage and stats.context_coverage.has_gaps:
-        context_feedback = format_context_coverage_feedback(stats.context_coverage)
-        if context_feedback:
-            feedback_parts.append(context_feedback)
-
-    if settings.feedback_dev_guidelines:
-        dev_guidelines = extract_dev_guidelines_from_claude_md(working_directory)
-        if dev_guidelines:
-            feedback_parts.append(f"\n**Project Development Guidelines:**\n{dev_guidelines}")
-
-    current_commit_sha = _get_current_commit_sha(working_directory)
-    _save_feedback_cache(working_directory, cache_key, current_file_hashes, commit_sha=current_commit_sha)
-
-    if feedback_parts:
-        feedback = "\n\n".join(feedback_parts)
-        feedback += (
-            f"\n\n---\n**Session**: `{session_id}` | Details: `slopometry solo show {session_id} --smell-details`"
-        )
-        hook_output = {"decision": "block", "reason": feedback}
-        print(json.dumps(hook_output))
-        return 2
-    return 0
 
 
 def format_context_coverage_feedback(coverage: ContextCoverage) -> str:

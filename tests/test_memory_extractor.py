@@ -14,7 +14,7 @@ def _write_json(path: Path, payload: dict) -> None:
 
 
 class TestExtractFromOpencodeSession:
-    def test_reconstructs_user_text_only(self, tmp_path: Path):
+    def test_extract_memories_from_opencode_session__reconstructs_user_text_only(self, tmp_path: Path):
         storage = tmp_path / "opencode_storage"
         _write_json(
             storage / "message" / "ses_a" / "msg_a1.json",
@@ -24,12 +24,12 @@ class TestExtractFromOpencodeSession:
             storage / "part" / "msg_a1" / "p1.json",
             {"id": "p1", "type": "text", "text": "hello world", "messageID": "msg_a1", "sessionID": "ses_a"},
         )
-        extractor = MemoryExtractor("https://llm.example/v1", "model-x")
+        extractor = MemoryExtractor("https://llm.example/v1", "model-x", "test-key")
         out = extractor.extract_memories_from_opencode_session("ses_a", storage)
         assert "USER:" in out
         assert "hello world" in out
 
-    def test_reconstructs_assistant_text(self, tmp_path: Path):
+    def test_extract_memories_from_opencode_session__reconstructs_assistant_text(self, tmp_path: Path):
         storage = tmp_path / "opencode_storage"
         _write_json(
             storage / "message" / "ses_b" / "msg_b1.json",
@@ -39,12 +39,12 @@ class TestExtractFromOpencodeSession:
             storage / "part" / "msg_b1" / "p1.json",
             {"id": "p1", "type": "text", "text": "I will check that", "messageID": "msg_b1", "sessionID": "ses_b"},
         )
-        extractor = MemoryExtractor("https://llm.example/v1", "model-x")
+        extractor = MemoryExtractor("https://llm.example/v1", "model-x", "test-key")
         out = extractor.extract_memories_from_opencode_session("ses_b", storage)
         assert "ASSISTANT:" in out
         assert "I will check that" in out
 
-    def test_tool_part_emits_tool_marker_with_input_output(self, tmp_path: Path):
+    def test_extract_memories_from_opencode_session__emits_tool_marker_with_input_output(self, tmp_path: Path):
         storage = tmp_path / "opencode_storage"
         _write_json(
             storage / "message" / "ses_c" / "msg_c1.json",
@@ -66,12 +66,12 @@ class TestExtractFromOpencodeSession:
                 "sessionID": "ses_c",
             },
         )
-        extractor = MemoryExtractor("https://llm.example/v1", "model-x")
+        extractor = MemoryExtractor("https://llm.example/v1", "model-x", "test-key")
         out = extractor.extract_memories_from_opencode_session("ses_c", storage)
         assert "TOOL: bash" in out
         assert "ls -la" in out
 
-    def test_step_start_and_reasoning_parts_skipped(self, tmp_path: Path):
+    def test_extract_memories_from_opencode_session__skips_step_start_and_reasoning_parts(self, tmp_path: Path):
         storage = tmp_path / "opencode_storage"
         _write_json(
             storage / "message" / "ses_d" / "msg_d1.json",
@@ -101,17 +101,17 @@ class TestExtractFromOpencodeSession:
                 "sessionID": "ses_d",
             },
         )
-        extractor = MemoryExtractor("https://llm.example/v1", "model-x")
+        extractor = MemoryExtractor("https://llm.example/v1", "model-x", "test-key")
         out = extractor.extract_memories_from_opencode_session("ses_d", storage)
         assert "user-visible reply" in out
         assert "internal thoughts" not in out
 
-    def test_missing_message_directory_returns_empty_string(self, tmp_path: Path):
-        extractor = MemoryExtractor("https://llm.example/v1", "model-x")
+    def test_extract_memories_from_opencode_session__returns_empty_string_when_message_dir_missing(self, tmp_path: Path):
+        extractor = MemoryExtractor("https://llm.example/v1", "model-x", "test-key")
         out = extractor.extract_memories_from_opencode_session("ses_none", tmp_path / "opencode_storage")
         assert out == ""
 
-    def test_messages_ordered_chronologically(self, tmp_path: Path):
+    def test_extract_memories_from_opencode_session__orders_messages_chronologically(self, tmp_path: Path):
         storage = tmp_path / "opencode_storage"
         _write_json(
             storage / "message" / "ses_e" / "msg_e1.json",
@@ -129,13 +129,13 @@ class TestExtractFromOpencodeSession:
             storage / "part" / "msg_e0" / "p1.json",
             {"id": "p1", "type": "text", "text": "first message", "messageID": "msg_e0", "sessionID": "ses_e"},
         )
-        extractor = MemoryExtractor("https://llm.example/v1", "model-x")
+        extractor = MemoryExtractor("https://llm.example/v1", "model-x", "test-key")
         out = extractor.extract_memories_from_opencode_session("ses_e", storage)
         first_idx = out.index("first message")
         second_idx = out.index("second message")
         assert first_idx < second_idx
 
-    def test_unknown_role_message_skipped(self, tmp_path: Path):
+    def test_extract_memories_from_opencode_session__skips_unknown_role_messages(self, tmp_path: Path):
         storage = tmp_path / "opencode_storage"
         _write_json(
             storage / "message" / "ses_f" / "msg_f1.json",
@@ -145,11 +145,11 @@ class TestExtractFromOpencodeSession:
             storage / "part" / "msg_f1" / "p1.json",
             {"id": "p1", "type": "text", "text": "should not appear", "messageID": "msg_f1", "sessionID": "ses_f"},
         )
-        extractor = MemoryExtractor("https://llm.example/v1", "model-x")
+        extractor = MemoryExtractor("https://llm.example/v1", "model-x", "test-key")
         out = extractor.extract_memories_from_opencode_session("ses_f", storage)
         assert "should not appear" not in out
 
-    def test_truncation_config_respected_for_tool_parts(self, tmp_path: Path):
+    def test_extract_memories_from_opencode_session__respects_truncation_config_for_tool_parts(self, tmp_path: Path):
         storage = tmp_path / "opencode_storage"
         _write_json(
             storage / "message" / "ses_g" / "msg_g1.json",
@@ -168,7 +168,7 @@ class TestExtractFromOpencodeSession:
                 "sessionID": "ses_g",
             },
         )
-        extractor = MemoryExtractor("https://llm.example/v1", "model-x")
+        extractor = MemoryExtractor("https://llm.example/v1", "model-x", "test-key")
         out_default = extractor.extract_memories_from_opencode_session("ses_g", storage)
         assert len(out_default) < 500 + 500 + 100
         out_short = extractor.extract_memories_from_opencode_session(
@@ -180,12 +180,12 @@ class TestExtractFromOpencodeSession:
 
 
 class TestTranscriptTruncationConfig:
-    def test_defaults_match_pre_refactor_behavior(self):
+    def test_transcript_truncation_config__defaults_match_pre_refactor_behavior(self):
         c = TranscriptTruncationConfig()
         assert c.tool_input_chars == 120
         assert c.tool_output_chars == 120
         assert c.tool_result_chars == 200
 
-    def test_extra_fields_rejected(self):
+    def test_transcript_truncation_config__rejects_extra_fields(self):
         with pytest.raises(Exception):
             TranscriptTruncationConfig(unknown_field=42)

@@ -8,6 +8,8 @@ first access.
 import logging
 from pathlib import Path
 
+from slopometry.core.models.protocol.events import AbstractEventSource
+
 logger = logging.getLogger(__name__)
 
 _LEGACY_STATE_DIR = Path.home() / ".claude" / "slopometry"
@@ -35,7 +37,7 @@ class SessionManager:
         self._migrate_legacy_files()
 
     def _migrate_legacy_files(self) -> None:
-        if self.source != "claude_code":
+        if self.source != AbstractEventSource.CLAUDE_CODE.value:
             return
         if not _LEGACY_STATE_DIR.exists():
             return

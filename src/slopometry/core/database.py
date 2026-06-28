@@ -391,7 +391,7 @@ class EventDatabase:
                     source TEXT NOT NULL DEFAULT 'claude_code',
                     processed_at TEXT NOT NULL,
                     memory_count INTEGER NOT NULL DEFAULT 0,
-                    PRIMARY KEY (session_id, project_dir)
+                    PRIMARY KEY (session_id, project_dir, source)
                 )
             """)
 
@@ -1193,13 +1193,15 @@ class EventDatabase:
 
     def save_experiment_run(self, experiment: ExperimentRun) -> None:
         """Save an experiment run to the database."""
+        nfp_id = experiment.nfp_objective.id if experiment.nfp_objective else None
         with self._get_db_connection() as conn:
             conn.execute(
                 """
                 INSERT OR REPLACE INTO experiment_runs (
                     id, repository_path, start_commit, target_commit,
-                    process_id, worktree_path, start_time, end_time, status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    process_id, worktree_path, start_time, end_time, status,
+                    nfp_objective_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     experiment.id,
@@ -1211,23 +1213,26 @@ class EventDatabase:
                     experiment.start_time.isoformat(),
                     experiment.end_time.isoformat() if experiment.end_time else None,
                     experiment.status.value,
+                    nfp_id,
                 ),
             )
             conn.commit()
 
     def update_experiment_run(self, experiment: ExperimentRun) -> None:
         """Update an existing experiment run."""
+        nfp_id = experiment.nfp_objective.id if experiment.nfp_objective else None
         with self._get_db_connection() as conn:
             conn.execute(
                 """
                 UPDATE experiment_runs
-                SET status = ?, end_time = ?, worktree_path = ?
+                SET status = ?, end_time = ?, worktree_path = ?, nfp_objective_id = ?
                 WHERE id = ?
             """,
                 (
                     experiment.status.value,
                     experiment.end_time.isoformat() if experiment.end_time else None,
                     str(experiment.worktree_path) if experiment.worktree_path else None,
+                    nfp_id,
                     experiment.id,
                 ),
             )
@@ -2178,7 +2183,7 @@ class EventDatabase:
         with self._get_db_connection() as conn:
             conn.execute(
                 """
-                INSERT INTO memories (
+                INSERT OR REPLACE INTO memories (
                     id, session_id, project_dir, memory_type, content,
                     source_context, created_at, updated_at,
                     retained, superseded_by, embedding, metadata
@@ -2238,11 +2243,23 @@ class EventDatabase:
         project_dir: str | None = None,
         memory_type: str | None = None,
         limit: int = 50,
+        include_superseded: bool = False,
     ) -> list[MemoryEntry]:
-        """Get memories with optional filters."""
+        """Get memories with optional filters.
+
+        Args:
+            include_superseded: When False (default), exclude memories that
+                have been linked to a newer replacement via ``superseded_by``.
+                The freshness validator must pass False so it compares new
+                candidates only against the current truth, not stale chain
+                predecessors.
+        """
         with self._get_db_connection() as conn:
             query = "SELECT * FROM memories WHERE 1=1"
             params: list = []
+
+            if not include_superseded:
+                query += " AND superseded_by IS NULL"
 
             if project_dir:
                 query += " AND project_dir = ?"
@@ -2271,7 +2288,7 @@ class EventDatabase:
                         created_at=datetime.fromisoformat(row["created_at"]),
                         updated_at=datetime.fromisoformat(row["updated_at"]) if row["updated_at"] else None,
                         retained=bool(row["retained"]),
-                        superseded_by=row["superseded_by"] if "superseded_by" in row.keys() else None,
+                        superseded_by=row["superseded_by"],
                         embedding=json.loads(row["embedding"]) if row["embedding"] else None,
                         metadata=json.loads(row["metadata"]) if row["metadata"] else None,
                     )
@@ -2355,7 +2372,7 @@ class EventDatabase:
             return bool(cursor.rowcount and cursor.rowcount > 0)
 
     def mark_session_processed(
-        self, session_id: str, project_dir: str, memory_count: int, source: str = "claude_code"
+        self, session_id: str, project_dir: str, memory_count: int, source: str
     ) -> None:
         """Mark a session as processed for memory extraction."""
         with self._get_db_connection() as conn:
@@ -2368,7 +2385,7 @@ class EventDatabase:
                 (session_id, project_dir, source, datetime.now().isoformat(), memory_count),
             )
 
-    def is_session_processed(self, session_id: str, project_dir: str, source: str = "claude_code") -> bool:
+    def is_session_processed(self, session_id: str, project_dir: str, source: str) -> bool:
         """Check if a session has already been processed for memories."""
         with self._get_db_connection() as conn:
             cursor = conn.execute(
@@ -2378,13 +2395,13 @@ class EventDatabase:
             return cursor.fetchone() is not None
 
     def get_memory_stats(self, project_dir: str | None = None) -> dict:
-        """Get statistics about stored memories."""
+        """Get statistics about stored memories (excludes superseded)."""
         with self._get_db_connection() as conn:
-            base_query = "SELECT memory_type, COUNT(*) as count FROM memories"
+            base_query = "SELECT memory_type, COUNT(*) as count FROM memories WHERE superseded_by IS NULL"
             params: list = []
 
             if project_dir:
-                base_query += " WHERE project_dir = ?"
+                base_query += " AND project_dir = ?"
                 params.append(project_dir)
 
             base_query += " GROUP BY memory_type"
@@ -2392,9 +2409,9 @@ class EventDatabase:
             rows = conn.execute(base_query, params).fetchall()
             type_distribution = {row[0]: row[1] for row in rows}
 
-            total_query = "SELECT COUNT(*) FROM memories"
+            total_query = "SELECT COUNT(*) FROM memories WHERE superseded_by IS NULL"
             if project_dir:
-                total_query += " WHERE project_dir = ?"
+                total_query += " AND project_dir = ?"
             total = conn.execute(total_query, params).fetchone()[0] or 0
 
             return {

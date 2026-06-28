@@ -31,8 +31,7 @@ def memory_service(temp_db: EventDatabase) -> MemoryService:
     return MemoryService(db=temp_db)
 
 
-def test_save_memory(memory_service: MemoryService) -> None:
-    """Saves a memory entry."""
+def test_save_memory__persists_single_memory_entry(memory_service: MemoryService) -> None:
     memory = MemoryEntry(
         id="mem-001",
         session_id="session-abc",
@@ -50,8 +49,7 @@ def test_save_memory(memory_service: MemoryService) -> None:
     assert memories[0].content == "Test memory content"
 
 
-def test_save_memories(memory_service: MemoryService) -> None:
-    """Saves multiple candidates."""
+def test_save_memories__saves_all_candidates_from_request(memory_service: MemoryService) -> None:
     request = MemoryCreateRequest(
         session_id="session-xyz",
         project_dir="/test/project",
@@ -75,8 +73,24 @@ def test_save_memories(memory_service: MemoryService) -> None:
     assert saved[0].session_id == "session-xyz"
 
 
-def test_get_memories(memory_service: MemoryService) -> None:
-    """Retrieves memories."""
+def test_save_memories__does_not_mark_session_as_processed(memory_service: MemoryService) -> None:
+    request = MemoryCreateRequest(
+        session_id="session-no-mark",
+        project_dir="/test/project",
+        candidates=[
+            MemoryCandidate(
+                memory_type=MemoryType.USER,
+                content="A memory",
+            ),
+        ],
+    )
+
+    memory_service.save_memories(request)
+
+    assert not memory_service.is_session_processed("session-no-mark", "/test/project", source="claude_code")
+
+
+def test_get_memories__filters_by_project_dir_and_memory_type(memory_service: MemoryService) -> None:
     memory_service.save_memory(
         MemoryEntry(
             id="mem-001",
@@ -110,8 +124,77 @@ def test_get_memories(memory_service: MemoryService) -> None:
     assert type_memories[0].id == "mem-001"
 
 
-def test_delete_memory(memory_service: MemoryService) -> None:
-    """Deletes a memory by ID."""
+def test_get_memories__respects_limit_parameter(memory_service: MemoryService) -> None:
+    for i in range(10):
+        memory_service.save_memory(
+            MemoryEntry(
+                id=f"mem-{i}",
+                session_id="session-1",
+                project_dir="/test/project",
+                memory_type=MemoryType.USER,
+                content=f"Memory {i}",
+                created_at=datetime.now(),
+            )
+        )
+
+    memories = memory_service.get_memories(limit=5)
+    assert len(memories) == 5
+
+
+def test_get_memories__excludes_superseded_by_default(memory_service: MemoryService) -> None:
+    old = MemoryEntry(
+        id="mem-old",
+        session_id="session-1",
+        project_dir="/proj",
+        memory_type=MemoryType.PROJECT,
+        content="Old memory",
+        created_at=datetime.now(),
+    )
+    new = MemoryEntry(
+        id="mem-new",
+        session_id="session-2",
+        project_dir="/proj",
+        memory_type=MemoryType.PROJECT,
+        content="New memory that supersedes old",
+        created_at=datetime.now(),
+    )
+    memory_service.save_memory(old)
+    memory_service.save_memory(new)
+    memory_service.update_memory(old.id, superseded_by=new.id)
+
+    visible = memory_service.get_memories(project_dir="/proj", limit=100)
+    assert len(visible) == 1
+    assert visible[0].id == "mem-new"
+
+
+def test_get_memories__includes_superseded_when_flag_set(memory_service: MemoryService) -> None:
+    old = MemoryEntry(
+        id="mem-old",
+        session_id="session-1",
+        project_dir="/proj",
+        memory_type=MemoryType.PROJECT,
+        content="Old memory",
+        created_at=datetime.now(),
+    )
+    new = MemoryEntry(
+        id="mem-new",
+        session_id="session-2",
+        project_dir="/proj",
+        memory_type=MemoryType.PROJECT,
+        content="New memory that supersedes old",
+        created_at=datetime.now(),
+    )
+    memory_service.save_memory(old)
+    memory_service.save_memory(new)
+    memory_service.update_memory(old.id, superseded_by=new.id)
+
+    all_memories = memory_service.get_memories(project_dir="/proj", limit=100, include_superseded=True)
+    assert len(all_memories) == 2
+    ids = {m.id for m in all_memories}
+    assert ids == {"mem-old", "mem-new"}
+
+
+def test_delete_memory__returns_true_when_exists_false_when_not(memory_service: MemoryService) -> None:
     memory = MemoryEntry(
         id="mem-to-delete",
         session_id="session-1",
@@ -132,8 +215,7 @@ def test_delete_memory(memory_service: MemoryService) -> None:
     assert result is False
 
 
-def test_delete_all_memories(memory_service: MemoryService) -> None:
-    """Clears all memories and processed_sessions."""
+def test_delete_all_memories__clears_memories_and_processed_sessions(memory_service: MemoryService) -> None:
     memory_service.save_memory(
         MemoryEntry(
             id="mem-1",
@@ -154,9 +236,9 @@ def test_delete_all_memories(memory_service: MemoryService) -> None:
             created_at=datetime.now(),
         )
     )
-    memory_service.mark_session_processed("session-1", "/project1", 1)
+    memory_service.mark_session_processed("session-1", "/project1", 1, source="claude_code")
 
-    assert memory_service.is_session_processed("session-1", "/project1") is True
+    assert memory_service.is_session_processed("session-1", "/project1", source="claude_code") is True
 
     count = memory_service.delete_all_memories()
     assert count == 2
@@ -164,38 +246,18 @@ def test_delete_all_memories(memory_service: MemoryService) -> None:
     memories = memory_service.get_memories()
     assert len(memories) == 0
 
-    assert memory_service.is_session_processed("session-1", "/project1") is False
+    assert memory_service.is_session_processed("session-1", "/project1", source="claude_code") is False
 
 
-def test_mark_session_processed(memory_service: MemoryService) -> None:
-    """Marks session as processed."""
-    memory_service.mark_session_processed("session-test", "/test/project", 5)
+def test_mark_session_processed__marks_session_for_source(memory_service: MemoryService) -> None:
+    memory_service.mark_session_processed("session-test", "/test/project", 5, source="claude_code")
 
-    assert memory_service.is_session_processed("session-test", "/test/project") is True
-
-
-def test_is_session_processed(memory_service: MemoryService) -> None:
-    """Checks if session was processed."""
-    assert memory_service.is_session_processed("unprocessed-session", "/any/project") is False
-
-    memory_service.mark_session_processed("processed-session", "/any/project", 3)
-
-    assert memory_service.is_session_processed("processed-session", "/any/project") is True
+    assert memory_service.is_session_processed("session-test", "/test/project", source="claude_code") is True
 
 
-def test_get_memories_limit(memory_service: MemoryService) -> None:
-    """Test that get_memories respects limit parameter."""
-    for i in range(10):
-        memory_service.save_memory(
-            MemoryEntry(
-                id=f"mem-{i}",
-                session_id="session-1",
-                project_dir="/test/project",
-                memory_type=MemoryType.USER,
-                content=f"Memory {i}",
-                created_at=datetime.now(),
-            )
-        )
+def test_is_session_processed__returns_false_before_true_after_marking(memory_service: MemoryService) -> None:
+    assert memory_service.is_session_processed("unprocessed-session", "/any/project", source="claude_code") is False
 
-    memories = memory_service.get_memories(limit=5)
-    assert len(memories) == 5
+    memory_service.mark_session_processed("processed-session", "/any/project", 3, source="claude_code")
+
+    assert memory_service.is_session_processed("processed-session", "/any/project", source="claude_code") is True

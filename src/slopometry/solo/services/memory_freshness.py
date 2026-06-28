@@ -23,12 +23,13 @@ import logging
 import statistics
 from dataclasses import dataclass
 
-from slopometry.core.models.memory import MemoryCandidate, MemoryEntry
+from slopometry.core.models.memory import FreshnessAction, FreshnessVerdict, MemoryCandidate, MemoryEntry
+from slopometry.solo.services.llm_text import parse_llm_json
 
 logger = logging.getLogger(__name__)
 
-FLOOR_THRESHOLD = 0.45
-CEILING_THRESHOLD = 0.95
+DEFAULT_FLOOR_THRESHOLD = 0.45
+DEFAULT_CEILING_THRESHOLD = 0.95
 
 RECONCILIATION_PROMPT = """You are reconciling two memory candidates about the same subject.
 
@@ -72,20 +73,22 @@ class ProjectSimilarityDistribution:
     p75: float
     p90: float
     p95: float
+    floor_threshold: float = DEFAULT_FLOOR_THRESHOLD
+    ceiling_threshold: float = DEFAULT_CEILING_THRESHOLD
 
     @property
     def derived_threshold(self) -> float:
         """Data-driven dedupe threshold from the project's own distribution.
 
         Uses p75 of pairwise similarity as the candidate-relevance threshold.
-        Falls back to FLOOR_THRESHOLD when the project has too few memories to
-        estimate a distribution. Capped at CEILING_THRESHOLD so that even in
-        projects with very similar memories, only genuinely redundant pairs
-        are sent to the LLM.
+        Falls back to ``floor_threshold`` when the project has too few
+        memories to estimate a distribution. Capped at ``ceiling_threshold``
+        so that even in projects with very similar memories, only genuinely
+        redundant pairs are sent to the LLM.
         """
         if self.n_pairs == 0:
-            return FLOOR_THRESHOLD
-        return max(min(self.p75, CEILING_THRESHOLD), FLOOR_THRESHOLD)
+            return self.floor_threshold
+        return max(min(self.p75, self.ceiling_threshold), self.floor_threshold)
 
 
 @dataclass(frozen=True)
@@ -95,7 +98,7 @@ class FreshnessDecision:
     new_candidate: MemoryCandidate
     existing_memory: MemoryEntry
     similarity: float
-    action: str
+    action: FreshnessAction
     reason: str
     merged_content: str | None = None
 
@@ -125,7 +128,11 @@ def _project_pairwise_similarities(existing: list[MemoryEntry]) -> list[float]:
     return sims
 
 
-def compute_project_distribution(existing: list[MemoryEntry]) -> ProjectSimilarityDistribution:
+def compute_project_distribution(
+    existing: list[MemoryEntry],
+    floor_threshold: float = DEFAULT_FLOOR_THRESHOLD,
+    ceiling_threshold: float = DEFAULT_CEILING_THRESHOLD,
+) -> ProjectSimilarityDistribution:
     """Compute similarity distribution statistics for the project's memory bank.
 
     Used to derive a data-informed threshold for which new candidate / existing
@@ -133,7 +140,11 @@ def compute_project_distribution(existing: list[MemoryEntry]) -> ProjectSimilari
     """
     sims = _project_pairwise_similarities(existing)
     if not sims:
-        return ProjectSimilarityDistribution(0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        return ProjectSimilarityDistribution(
+            0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            floor_threshold=floor_threshold,
+            ceiling_threshold=ceiling_threshold,
+        )
     sims_sorted = sorted(sims)
     n = len(sims_sorted)
 
@@ -148,6 +159,8 @@ def compute_project_distribution(existing: list[MemoryEntry]) -> ProjectSimilari
         p75=quantile(0.75),
         p90=quantile(0.90),
         p95=quantile(0.95),
+        floor_threshold=floor_threshold,
+        ceiling_threshold=ceiling_threshold,
     )
 
 
@@ -176,6 +189,7 @@ def _judge_reconciliation(
     llm_endpoint: str,
     llm_model: str,
     api_key: str,
+    similarity: float,
 ) -> FreshnessDecision:
     """Ask the LLM how to reconcile the pair. Always returns a decision."""
     from openai import OpenAI
@@ -198,92 +212,66 @@ def _judge_reconciliation(
         max_tokens=200,
     )
     content = response.choices[0].message.content or ""
-    text = content.strip()
-    if text.startswith("```"):
-        text = text.strip("`").removeprefix("json").strip()
-        if text.endswith("```"):
-            text = text[:-3].strip()
 
     try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
-        logger.debug("Could not parse reconciliation response: %s", text[:80])
+        data = parse_llm_json(content)
+        verdict = FreshnessVerdict.model_validate(data)
+    except (json.JSONDecodeError, ValueError, TypeError):
+        logger.debug("Could not parse reconciliation response: %s", content[:80])
         return FreshnessDecision(
             new_candidate=candidate,
             existing_memory=existing,
-            similarity=0.0,
-            action="keep_both",
-            reason=f"Could not parse LLM response: {text[:80]}",
+            similarity=similarity,
+            action=FreshnessAction.KEEP_BOTH,
+            reason=f"Could not parse LLM response: {content[:80]}",
         )
 
-    action = data.get("action", "keep_both")
-    if action not in ("keep_both", "merge", "supersede", "dedupe"):
-        action = "keep_both"
-    reason = data.get("reason", "")
-    merged = data.get("merged_content") if action == "merge" else None
+    merged = verdict.merged_content if verdict.action == FreshnessAction.MERGE else None
     return FreshnessDecision(
         new_candidate=candidate,
         existing_memory=existing,
-        similarity=0.0,
-        action=action,
-        reason=reason,
+        similarity=similarity,
+        action=verdict.action,
+        reason=verdict.reason,
         merged_content=merged,
     )
 
 
-class MemoryFreshnessValidator:
-    """Reconciles newly-extracted candidates against existing project memories.
+def validate_freshness(
+    candidates: list[MemoryCandidate],
+    existing: list[MemoryEntry],
+    llm_endpoint: str,
+    llm_model: str,
+    api_key: str,
+    floor_threshold: float = DEFAULT_FLOOR_THRESHOLD,
+    ceiling_threshold: float = DEFAULT_CEILING_THRESHOLD,
+) -> tuple[list[FreshnessDecision], ProjectSimilarityDistribution]:
+    """Reconcile newly-extracted candidates against existing project memories.
 
     For each project, computes the existing memory bank's pairwise similarity
     distribution and derives a threshold from it (p75 of pairwise similarity,
-    clamped between FLOOR_THRESHOLD and CEILING_THRESHOLD). Each new candidate
-    is paired with existing memories above this threshold and sent to the LLM
-    for a reconciliation verdict (keep_both / merge / supersede / dedupe).
+    clamped between ``floor_threshold`` and ``ceiling_threshold``). Each new
+    candidate is paired with existing memories above this threshold and sent
+    to the LLM for a reconciliation verdict (keep_both / merge / supersede /
+    dedupe).
     """
+    distribution = compute_project_distribution(
+        existing,
+        floor_threshold=floor_threshold,
+        ceiling_threshold=ceiling_threshold,
+    )
+    threshold = distribution.derived_threshold
 
-    def __init__(
-        self,
-        llm_endpoint: str,
-        llm_model: str,
-        api_key: str = "dummy",
-    ) -> None:
-        self.llm_endpoint = llm_endpoint
-        self.llm_model = llm_model
-        self.api_key = api_key
-
-    def validate(
-        self,
-        candidates: list[MemoryCandidate],
-        existing: list[MemoryEntry],
-    ) -> tuple[list[FreshnessDecision], ProjectSimilarityDistribution]:
-        """Return reconciliation decisions plus the project's similarity distribution.
-
-        Each candidate is paired with existing memories whose cosine similarity
-        to the candidate is >= the project's derived threshold. Each pair is
-        sent to the LLM for a reconciliation verdict.
-        """
-        distribution = compute_project_distribution(existing)
-        threshold = distribution.derived_threshold
-
-        decisions: list[FreshnessDecision] = []
-        for candidate in candidates:
-            similar = _find_above_threshold(candidate, existing, threshold)
-            for memory, similarity in similar:
-                try:
-                    decision = _judge_reconciliation(
-                        candidate, memory, self.llm_endpoint, self.llm_model, self.api_key
-                    )
-                except Exception as e:
-                    logger.debug("Reconciliation judge failed for candidate vs %s: %s", memory.id, e)
-                    continue
-                decisions.append(
-                    FreshnessDecision(
-                        new_candidate=decision.new_candidate,
-                        existing_memory=decision.existing_memory,
-                        similarity=similarity,
-                        action=decision.action,
-                        reason=decision.reason,
-                        merged_content=decision.merged_content,
-                    )
+    decisions: list[FreshnessDecision] = []
+    for candidate in candidates:
+        similar = _find_above_threshold(candidate, existing, threshold)
+        for memory, similarity in similar:
+            try:
+                decision = _judge_reconciliation(
+                    candidate, memory, llm_endpoint, llm_model, api_key, similarity
                 )
-        return decisions, distribution
+            except Exception as e:
+                logger.debug("Reconciliation judge failed for candidate vs %s: %s", memory.id, e)
+                continue
+            decisions.append(decision)
+    return decisions, distribution
