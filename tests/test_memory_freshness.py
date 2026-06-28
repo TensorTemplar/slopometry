@@ -1,11 +1,17 @@
-"""Tests for validate_freshness."""
+"""Tests for validate_freshness and audit_staleness."""
 
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from slopometry.core.models.memory import FreshnessAction, MemoryCandidate, MemoryEntry, MemoryType
+from slopometry.core.models.memory import (
+    FreshnessAction,
+    MemoryCandidate,
+    MemoryEntry,
+    MemoryType,
+    StalenessVerdict,
+)
 from slopometry.solo.services.memory_freshness import (
     DEFAULT_CEILING_THRESHOLD,
     DEFAULT_FLOOR_THRESHOLD,
@@ -14,6 +20,7 @@ from slopometry.solo.services.memory_freshness import (
     _cosine_similarity,
     _find_above_threshold,
     _judge_reconciliation,
+    audit_staleness,
     compute_project_distribution,
     validate_freshness,
 )
@@ -131,7 +138,7 @@ class TestJudgeReconciliation:
         mock_response.choices = [
             MagicMock(message=MagicMock(content='{"action": "keep_both", "reason": "different topics"}'))
         ]
-        with patch("openai.OpenAI") as mock_openai:
+        with patch("slopometry.solo.services.memory_freshness.OpenAI") as mock_openai:
             mock_openai.return_value.chat.completions.create.return_value = mock_response
             decision = _judge_reconciliation(
                 _candidate("uses rust-code-analysis"),
@@ -152,7 +159,7 @@ class TestJudgeReconciliation:
                 )
             )
         ]
-        with patch("openai.OpenAI") as mock_openai:
+        with patch("slopometry.solo.services.memory_freshness.OpenAI") as mock_openai:
             mock_openai.return_value.chat.completions.create.return_value = mock_response
             decision = _judge_reconciliation(
                 _candidate("uses rust-code-analysis"),
@@ -169,7 +176,7 @@ class TestJudgeReconciliation:
         mock_response.choices = [
             MagicMock(message=MagicMock(content='{"action": "supersede", "reason": "newer version"}'))
         ]
-        with patch("openai.OpenAI") as mock_openai:
+        with patch("slopometry.solo.services.memory_freshness.OpenAI") as mock_openai:
             mock_openai.return_value.chat.completions.create.return_value = mock_response
             decision = _judge_reconciliation(
                 _candidate("Python 3.13"),
@@ -185,7 +192,7 @@ class TestJudgeReconciliation:
         mock_response.choices = [
             MagicMock(message=MagicMock(content='{"action": "dedupe", "reason": "same info"}'))
         ]
-        with patch("openai.OpenAI") as mock_openai:
+        with patch("slopometry.solo.services.memory_freshness.OpenAI") as mock_openai:
             mock_openai.return_value.chat.completions.create.return_value = mock_response
             decision = _judge_reconciliation(
                 _candidate("user uses pyright type checker"),
@@ -203,7 +210,7 @@ class TestJudgeReconciliation:
                 message=MagicMock(content='```json\n{"action": "merge", "reason": "old outdated", "merged_content": "merged"}\n```')
             )
         ]
-        with patch("openai.OpenAI") as mock_openai:
+        with patch("slopometry.solo.services.memory_freshness.OpenAI") as mock_openai:
             mock_openai.return_value.chat.completions.create.return_value = mock_response
             decision = _judge_reconciliation(
                 _candidate("X"),
@@ -220,7 +227,7 @@ class TestJudgeReconciliation:
         mock_response.choices = [
             MagicMock(message=MagicMock(content='{"action": "maybe", "reason": "unsure"}'))
         ]
-        with patch("openai.OpenAI") as mock_openai:
+        with patch("slopometry.solo.services.memory_freshness.OpenAI") as mock_openai:
             mock_openai.return_value.chat.completions.create.return_value = mock_response
             decision = _judge_reconciliation(
                 _candidate("X"),
@@ -245,7 +252,7 @@ class TestValidateFreshness:
         candidates = [_candidate("X", [1.0, 0.0])]
         existing = [_memory("orthogonal", [0.0, 1.0], "m1")]
 
-        with patch("openai.OpenAI") as mock_openai:
+        with patch("slopometry.solo.services.memory_freshness.OpenAI") as mock_openai:
             decisions, _ = validate_freshness(candidates, existing, "https://llm.example/v1", "model-x", "test-key")
             mock_openai.assert_not_called()
 
@@ -263,7 +270,7 @@ class TestValidateFreshness:
         candidates = [_candidate("uses rust-code-analysis", [1.0, 0.0])]
         existing = [_memory("uses radon", [0.99, 0.14], "m1")]
 
-        with patch("openai.OpenAI") as mock_openai:
+        with patch("slopometry.solo.services.memory_freshness.OpenAI") as mock_openai:
             mock_openai.return_value.chat.completions.create.return_value = mock_response
             decisions, distribution = validate_freshness(
                 candidates, existing, "https://llm.example/v1", "model-x", "test-key"
@@ -284,7 +291,7 @@ class TestValidateFreshness:
         candidates = [_candidate("uses rust-code-analysis for complexity", [1.0, 0.0])]
         existing = [_memory("user prefers dark mode", [0.99, 0.14], "m1")]
 
-        with patch("openai.OpenAI") as mock_openai:
+        with patch("slopometry.solo.services.memory_freshness.OpenAI") as mock_openai:
             mock_openai.return_value.chat.completions.create.return_value = mock_response
             decisions, _ = validate_freshness(
                 candidates, existing, "https://llm.example/v1", "model-x", "test-key"
@@ -319,7 +326,7 @@ class TestValidateFreshness:
             _memory("user prefers light mode in editors", [0.14, 0.99], "m2"),
         ]
 
-        with patch("openai.OpenAI") as mock_openai:
+        with patch("slopometry.solo.services.memory_freshness.OpenAI") as mock_openai:
             mock_openai.return_value.chat.completions.create.side_effect = [
                 mock_response_a,
                 mock_response_b,
@@ -343,7 +350,7 @@ class TestValidateFreshness:
         mock_response.choices = [
             MagicMock(message=MagicMock(content='{"action": "keep_both", "reason": "different"}'))
         ]
-        with patch("openai.OpenAI") as mock_openai:
+        with patch("slopometry.solo.services.memory_freshness.OpenAI") as mock_openai:
             mock_openai.return_value.chat.completions.create.return_value = mock_response
             _, distribution = validate_freshness(
                 candidates, existing, "https://llm.example/v1", "model-x", "test-key"
@@ -354,10 +361,208 @@ class TestValidateFreshness:
         candidates = [_candidate("X", [1.0, 0.0])]
         existing = [_memory("Y", [0.99, 0.14], "m1")]
 
-        with patch("openai.OpenAI") as mock_openai:
+        with patch("slopometry.solo.services.memory_freshness.OpenAI") as mock_openai:
             mock_openai.return_value.chat.completions.create.side_effect = RuntimeError("llm down")
             decisions, _ = validate_freshness(
                 candidates, existing, "https://llm.example/v1", "model-x", "test-key"
             )
 
         assert decisions == []
+
+
+def _staleness_response(content: str) -> MagicMock:
+    mock = MagicMock()
+    mock.choices = [MagicMock(message=MagicMock(content=content))]
+    return mock
+
+
+class TestAuditStaleness:
+    def test_audit_staleness__returns_empty_list_when_no_existing_memories(self):
+        with patch("slopometry.solo.services.memory_freshness.OpenAI") as mock_openai:
+            result = audit_staleness([], "some transcript", "https://llm.example/v1", "model-x", "key")
+            mock_openai.assert_not_called()
+        assert result == []
+
+    def test_audit_staleness__returns_empty_list_when_transcript_is_empty(self):
+        existing = [_memory("describes a bug")]
+        result = audit_staleness(existing, "", "https://llm.example/v1", "model-x", "key")
+        assert result == []
+
+    def test_audit_staleness__returns_empty_list_when_transcript_is_whitespace_only(self):
+        existing = [_memory("describes a bug")]
+        result = audit_staleness(existing, "   \n\n  ", "https://llm.example/v1", "model-x", "key")
+        assert result == []
+
+    def test_audit_staleness__returns_memory_and_reason_pairs_when_llm_identifies_stale(self):
+        existing = [
+            _memory("There is a bug in the parser", mem_id="m1"),
+            _memory("User prefers dark mode", mem_id="m2"),
+        ]
+        llm_response = _staleness_response(
+            '[{"ref": 1, "reason": "parser bug was fixed in this session"}]'
+        )
+        with patch("slopometry.solo.services.memory_freshness.OpenAI") as mock_openai:
+            mock_openai.return_value.chat.completions.create.return_value = llm_response
+            result = audit_staleness(existing, "transcript showing bug fix", "https://llm.example/v1", "model-x", "key")
+
+        assert len(result) == 1
+        memory, reason = result[0]
+        assert memory.id == "m1"
+        assert reason == "parser bug was fixed in this session"
+
+    def test_audit_staleness__returns_multiple_pairs_when_llm_identifies_multiple_stale(self):
+        existing = [
+            _memory("Bug in parser", mem_id="m1"),
+            _memory("TODO: refactor database layer", mem_id="m2"),
+            _memory("User prefers dark mode", mem_id="m3"),
+        ]
+        llm_response = _staleness_response(
+            '[{"ref": 1, "reason": "parser bug fixed"}, {"ref": 2, "reason": "database refactor completed"}]'
+        )
+        with patch("slopometry.solo.services.memory_freshness.OpenAI") as mock_openai:
+            mock_openai.return_value.chat.completions.create.return_value = llm_response
+            result = audit_staleness(existing, "transcript", "https://llm.example/v1", "model-x", "key")
+
+        assert len(result) == 2
+        retired_ids = {m.id for m, _ in result}
+        assert retired_ids == {"m1", "m2"}
+
+    def test_audit_staleness__returns_empty_list_when_llm_says_nothing_is_stale(self):
+        existing = [_memory("User prefers dark mode", mem_id="m1")]
+        llm_response = _staleness_response("[]")
+        with patch("slopometry.solo.services.memory_freshness.OpenAI") as mock_openai:
+            mock_openai.return_value.chat.completions.create.return_value = llm_response
+            result = audit_staleness(existing, "transcript about unrelated work", "https://llm.example/v1", "model-x", "key")
+
+        assert result == []
+
+    def test_audit_staleness__strips_markdown_fences_from_llm_response(self):
+        existing = [_memory("describes a bug", mem_id="m1")]
+        llm_response = _staleness_response(
+            '```json\n[{"ref": 1, "reason": "bug was fixed"}]\n```'
+        )
+        with patch("slopometry.solo.services.memory_freshness.OpenAI") as mock_openai:
+            mock_openai.return_value.chat.completions.create.return_value = llm_response
+            result = audit_staleness(existing, "transcript", "https://llm.example/v1", "model-x", "key")
+
+        assert len(result) == 1
+        assert result[0][0].id == "m1"
+
+    def test_audit_staleness__skips_verdicts_with_out_of_range_refs(self):
+        existing = [_memory("describes a bug", mem_id="m1")]
+        llm_response = _staleness_response(
+            '[{"ref": 0, "reason": "invalid zero-based ref"}, {"ref": 5, "reason": "out of range"}, {"ref": 1, "reason": "valid ref"}]'
+        )
+        with patch("slopometry.solo.services.memory_freshness.OpenAI") as mock_openai:
+            mock_openai.return_value.chat.completions.create.return_value = llm_response
+            result = audit_staleness(existing, "transcript", "https://llm.example/v1", "model-x", "key")
+
+        assert len(result) == 1
+        assert result[0][0].id == "m1"
+        assert result[0][1] == "valid ref"
+
+    def test_audit_staleness__returns_empty_list_when_llm_response_is_not_a_json_array(self):
+        existing = [_memory("describes a bug", mem_id="m1")]
+        llm_response = _staleness_response('{"not": "an array"}')
+        with patch("slopometry.solo.services.memory_freshness.OpenAI") as mock_openai:
+            mock_openai.return_value.chat.completions.create.return_value = llm_response
+            result = audit_staleness(existing, "transcript", "https://llm.example/v1", "model-x", "key")
+
+        assert result == []
+
+    def test_audit_staleness__returns_empty_list_on_invalid_json_response(self):
+        existing = [_memory("describes a bug", mem_id="m1")]
+        llm_response = _staleness_response("this is not json at all")
+        with patch("slopometry.solo.services.memory_freshness.OpenAI") as mock_openai:
+            mock_openai.return_value.chat.completions.create.return_value = llm_response
+            result = audit_staleness(existing, "transcript", "https://llm.example/v1", "model-x", "key")
+
+        assert result == []
+
+    def test_audit_staleness__skips_invalid_verdict_objects_missing_required_fields(self):
+        existing = [_memory("describes a bug", mem_id="m1")]
+        llm_response = _staleness_response(
+            '[{"reason": "missing ref field"}, {"ref": 1, "reason": "valid"}]'
+        )
+        with patch("slopometry.solo.services.memory_freshness.OpenAI") as mock_openai:
+            mock_openai.return_value.chat.completions.create.return_value = llm_response
+            result = audit_staleness(existing, "transcript", "https://llm.example/v1", "model-x", "key")
+
+        assert len(result) == 1
+        assert result[0][1] == "valid"
+
+    def test_audit_staleness__truncates_transcript_to_configured_char_limit(self):
+        existing = [_memory("describes a bug", mem_id="m1")]
+        long_transcript = "x" * 30000
+        llm_response = _staleness_response("[]")
+        with patch("slopometry.solo.services.memory_freshness.OpenAI") as mock_openai:
+            mock_openai.return_value.chat.completions.create.return_value = llm_response
+            audit_staleness(
+                existing,
+                long_transcript,
+                "https://llm.example/v1",
+                "model-x",
+                "key",
+                transcript_truncation_chars=500,
+            )
+
+            call_args = mock_openai.return_value.chat.completions.create.call_args
+            user_message = call_args.kwargs["messages"][1]["content"]
+            assert "x" * 600 not in user_message
+
+    def test_audit_staleness__uses_1_based_indexing_for_memory_refs(self):
+        existing = [
+            _memory("first memory", mem_id="m1"),
+            _memory("second memory", mem_id="m2"),
+            _memory("third memory", mem_id="m3"),
+        ]
+        llm_response = _staleness_response('[{"ref": 3, "reason": "third is stale"}]')
+        with patch("slopometry.solo.services.memory_freshness.OpenAI") as mock_openai:
+            mock_openai.return_value.chat.completions.create.return_value = llm_response
+            result = audit_staleness(existing, "transcript", "https://llm.example/v1", "model-x", "key")
+
+        assert len(result) == 1
+        assert result[0][0].id == "m3"
+
+    def test_audit_staleness__includes_memory_type_and_content_in_prompt(self):
+        existing = [
+            _memory("describes a bug in parser", mem_id="m1"),
+        ]
+        llm_response = _staleness_response("[]")
+        with patch("slopometry.solo.services.memory_freshness.OpenAI") as mock_openai:
+            mock_openai.return_value.chat.completions.create.return_value = llm_response
+            audit_staleness(existing, "transcript", "https://llm.example/v1", "model-x", "key")
+
+            call_args = mock_openai.return_value.chat.completions.create.call_args
+            user_message = call_args.kwargs["messages"][1]["content"]
+            assert "[1]" in user_message
+            assert "describes a bug in parser" in user_message
+            assert "project" in user_message  # memory_type value
+
+    def test_audit_staleness__only_receives_memories_passed_by_caller_not_external(self):
+        existing = [
+            _memory("describes a bug", mem_id="m1"),
+            _memory("user prefers dark mode", mem_id="m2"),
+        ]
+        llm_response = _staleness_response('[{"ref": 1, "reason": "bug fixed"}]')
+        with patch("slopometry.solo.services.memory_freshness.OpenAI") as mock_openai:
+            mock_openai.return_value.chat.completions.create.return_value = llm_response
+            result = audit_staleness(existing, "transcript", "https://llm.example/v1", "model-x", "key")
+
+        assert len(result) == 1
+        assert result[0][0].id == "m1"
+        call_args = mock_openai.return_value.chat.completions.create.call_args
+        user_message = call_args.kwargs["messages"][1]["content"]
+        assert "[1]" in user_message
+        assert "[2]" in user_message
+
+
+class TestStalenessVerdictModel:
+    def test_staleness_verdict__accepts_positive_ref_and_reason(self):
+        verdict = StalenessVerdict(ref=1, reason="bug was fixed")
+        assert verdict.ref == 1
+        assert verdict.reason == "bug was fixed"
+
+    def test_staleness_verdict__defaults_reason_to_empty_string(self):
+        verdict = StalenessVerdict(ref=1)
+        assert verdict.reason == ""

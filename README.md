@@ -122,6 +122,8 @@ A: There are advanced features for temporal and cross-project measurement of slo
 
 Seriously, please do not open PRs with support for any kind of unserious languages. Just fork and pretend you made it. We are ok with that. Thank you.
 
+**Concurrent sessions**: Stop hook feedback is designed for a single active session per project. Running two OpenCode or Claude Code sessions in the same project directory simultaneously may cause feedback suppression (shared per-project cache), dropped stop events (per-project lock contention), and incorrect `edited_files` scoping between sessions.
+
 # Installation
 
 Both Anthropic models and MiniMax-M2 are fully supported as the `claude code` drivers.  
@@ -172,6 +174,15 @@ slopometry latest
 # Save session artifacts (transcript, plans, tasks) to .slopometry/<session_id>/
 slopometry solo save-transcript  # latest
 slopometry solo save-transcript <session_id>
+
+# Memory extraction: scan transcripts and extract durable facts (requires LLM)
+slopometry solo find-memories
+
+# Audit existing memories for staleness — fixed bugs, completed work (requires LLM)
+slopometry solo prune-memories
+
+# Browse and manage memories
+slopometry solo show-memories
 ```
 
 ![slopometry-roles.png](assets/slopometry-roles.png)  
@@ -231,7 +242,7 @@ curl -o ~/.config/slopometry/.env https://raw.githubusercontent.com/TensorTempla
 ```
 
 
-Customize via `.env` file or environment variables:
+Core settings:
 
 - `SLOPOMETRY_DATABASE_PATH`: Custom database location (optional)
   - Default locations:
@@ -240,6 +251,32 @@ Customize via `.env` file or environment variables:
     - Windows: `%LOCALAPPDATA%\slopometry\slopometry.db`
 - `SLOPOMETRY_ENABLE_COMPLEXITY_ANALYSIS`: Collect complexity metrics (default: `true`)
 - `SLOPOMETRY_ENABLE_COMPLEXITY_FEEDBACK`: Provide feedback to Claude (default: `false`)
+
+### LLM-dependent features
+
+By default, slopometry runs in **offline mode** (`SLOPOMETRY_OFFLINE_MODE=true`), which disables all external LLM calls. The following features require an LLM endpoint and will refuse to run until you set `SLOPOMETRY_OFFLINE_MODE=false` and configure endpoints:
+
+- **`solo find-memories`** — scans transcripts, extracts memory candidates via LLM, runs freshness reconciliation against existing memories, and retires stale ones
+- **`solo prune-memories`** — audits existing memories for staleness against recent transcripts
+- **`summoner userstorify`** — generates user stories from git diffs
+- **`summoner user-story-export --upload-to-hf`** — uploads dataset to Hugging Face
+
+To enable:
+
+```bash
+# Disable offline mode
+SLOPOMETRY_OFFLINE_MODE=false
+
+# Chat LLM endpoint (OpenAI-compatible API)
+SLOPOMETRY_MEMORY_LLM_ENDPOINT=https://your-llm-endpoint.com/v1
+SLOPOMETRY_MEMORY_LLM_MODEL=your-model-name
+SLOPOMETRY_MEMORY_LLM_API_KEY=your-api-key
+
+# Embedding endpoint (for memory similarity and uniqueness scoring)
+SLOPOMETRY_MEMORY_EMBEDDING_ENDPOINT=https://your-embedding-endpoint.com/v1
+SLOPOMETRY_MEMORY_EMBEDDING_MODEL=your-embedding-model
+SLOPOMETRY_MEMORY_EMBEDDING_API_KEY=your-embedding-api-key
+```
 
 # Development
 
@@ -277,5 +314,5 @@ uv tool install . --reinstall --find-links "https://github.com/Droidcraft/rust-c
 [x] - Add plan evolution log based on claude's todo shenanigans   
 [ ] - Rename the readme.md to wontreadme.md because it takes more than 15 seconds or whatever the attention span is nowadays to read it all. Maybe make it all one giant picture? Anyway, stop talking to yourself in the roadmap.  
 [ ] - Finish git worktree-based [NFP-CLI](https://tensortemplar.substack.com/p/humans-are-no-longer-embodied-amortization) (TM) training objective implementation so complexity metrics can be used as additional process reward for training code agents  
-[ ] - Extend stop hook feedback with LLM-as-Judge to support guiding agents based on smells and style guide  
+[x] - Memory extraction with LLM-driven freshness reconciliation and staleness auditing
 [ ] - Not go bankrupt from having to maintain open source in my free time, no wait...

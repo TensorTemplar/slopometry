@@ -376,6 +376,7 @@ class EventDatabase:
                     updated_at TEXT,
                     retained INTEGER NOT NULL DEFAULT 0,
                     superseded_by TEXT,
+                    retired_reason TEXT,
                     embedding TEXT,
                     metadata TEXT
                 )
@@ -2186,8 +2187,8 @@ class EventDatabase:
                 INSERT OR REPLACE INTO memories (
                     id, session_id, project_dir, memory_type, content,
                     source_context, created_at, updated_at,
-                    retained, superseded_by, embedding, metadata
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    retained, superseded_by, retired_reason, embedding, metadata
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     memory.id,
@@ -2200,43 +2201,11 @@ class EventDatabase:
                     memory.updated_at.isoformat() if memory.updated_at else None,
                     int(memory.retained),
                     memory.superseded_by,
+                    memory.retired_reason,
                     json.dumps(memory.embedding) if memory.embedding else None,
                     json.dumps(memory.metadata) if memory.metadata else None,
                 ),
             )
-
-    def save_memories(self, memories: list["MemoryEntry"]) -> int:
-        """Save multiple memory entries.
-
-        Returns:
-            Number of memories saved
-        """
-        with self._get_db_connection() as conn:
-            for memory in memories:
-                conn.execute(
-                    """
-                    INSERT INTO memories (
-                        id, session_id, project_dir, memory_type, content,
-                        source_context, created_at, updated_at,
-                        retained, superseded_by, embedding, metadata
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        memory.id,
-                        memory.session_id,
-                        memory.project_dir,
-                        memory.memory_type.value,
-                        memory.content,
-                        memory.source_context,
-                        memory.created_at.isoformat(),
-                        memory.updated_at.isoformat() if memory.updated_at else None,
-                        int(memory.retained),
-                        memory.superseded_by,
-                        json.dumps(memory.embedding) if memory.embedding else None,
-                        json.dumps(memory.metadata) if memory.metadata else None,
-                    ),
-                )
-            return len(memories)
 
     def get_memories(
         self,
@@ -2249,7 +2218,8 @@ class EventDatabase:
 
         Args:
             include_superseded: When False (default), exclude memories that
-                have been linked to a newer replacement via ``superseded_by``.
+                have been superseded by a newer replacement (``superseded_by``)
+                or retired by the staleness audit (``retired_reason``).
                 The freshness validator must pass False so it compares new
                 candidates only against the current truth, not stale chain
                 predecessors.
@@ -2259,7 +2229,7 @@ class EventDatabase:
             params: list = []
 
             if not include_superseded:
-                query += " AND superseded_by IS NULL"
+                query += " AND superseded_by IS NULL AND retired_reason IS NULL"
 
             if project_dir:
                 query += " AND project_dir = ?"
@@ -2289,6 +2259,7 @@ class EventDatabase:
                         updated_at=datetime.fromisoformat(row["updated_at"]) if row["updated_at"] else None,
                         retained=bool(row["retained"]),
                         superseded_by=row["superseded_by"],
+                        retired_reason=row["retired_reason"],
                         embedding=json.loads(row["embedding"]) if row["embedding"] else None,
                         metadata=json.loads(row["metadata"]) if row["metadata"] else None,
                     )
@@ -2371,6 +2342,20 @@ class EventDatabase:
             conn.commit()
             return bool(cursor.rowcount and cursor.rowcount > 0)
 
+    def retire_memory(self, memory_id: str, reason: str) -> bool:
+        """Mark a memory as retired (stale) without a direct replacement.
+
+        Returns:
+            True if a memory was retired, False otherwise
+        """
+        with self._get_db_connection() as conn:
+            cursor = conn.execute(
+                "UPDATE memories SET retired_reason = ?, updated_at = ? WHERE id = ?",
+                (reason, datetime.now().isoformat(), memory_id),
+            )
+            conn.commit()
+            return bool(cursor.rowcount and cursor.rowcount > 0)
+
     def mark_session_processed(
         self, session_id: str, project_dir: str, memory_count: int, source: str
     ) -> None:
@@ -2395,9 +2380,9 @@ class EventDatabase:
             return cursor.fetchone() is not None
 
     def get_memory_stats(self, project_dir: str | None = None) -> dict:
-        """Get statistics about stored memories (excludes superseded)."""
+        """Get statistics about stored memories (excludes superseded and retired)."""
         with self._get_db_connection() as conn:
-            base_query = "SELECT memory_type, COUNT(*) as count FROM memories WHERE superseded_by IS NULL"
+            base_query = "SELECT memory_type, COUNT(*) as count FROM memories WHERE superseded_by IS NULL AND retired_reason IS NULL"
             params: list = []
 
             if project_dir:
@@ -2409,7 +2394,7 @@ class EventDatabase:
             rows = conn.execute(base_query, params).fetchall()
             type_distribution = {row[0]: row[1] for row in rows}
 
-            total_query = "SELECT COUNT(*) FROM memories WHERE superseded_by IS NULL"
+            total_query = "SELECT COUNT(*) FROM memories WHERE superseded_by IS NULL AND retired_reason IS NULL"
             if project_dir:
                 total_query += " AND project_dir = ?"
             total = conn.execute(total_query, params).fetchone()[0] or 0

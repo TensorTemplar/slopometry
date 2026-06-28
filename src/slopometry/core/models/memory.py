@@ -38,7 +38,15 @@ class FreshnessAction(StrEnum):
 
 
 class MemoryEntry(BaseModel):
-    """Represents a stored memory entry."""
+    """Represents a stored memory entry.
+
+    A memory is visible in queries when both ``superseded_by`` and
+    ``retired_reason`` are ``None``.  ``superseded_by`` is set when a
+    newer memory replaces this one (SUPERSEDE / MERGE action).
+    ``retired_reason`` is set when the memory is stale (describes a
+    fixed bug, completed work, or outdated state) and is retired by
+    the staleness audit without a direct replacement.
+    """
 
     id: str
     session_id: str
@@ -50,6 +58,7 @@ class MemoryEntry(BaseModel):
     updated_at: datetime | None = None
     retained: bool = False
     superseded_by: str | None = None
+    retired_reason: str | None = None
     embedding: list[float] | None = None
     metadata: dict | None = None
 
@@ -97,3 +106,14 @@ class FreshnessVerdict(BaseModel):
         default=None,
         description="Only present when action == merge",
     )
+
+
+class StalenessVerdict(BaseModel):
+    """LLM verdict for a single existing memory during the staleness audit.
+
+    ``ref`` is the 1-based index into the existing-memories list that was
+    sent to the LLM.  The caller maps it back to the ``MemoryEntry``.
+    """
+
+    ref: int
+    reason: str = ""

@@ -1,4 +1,4 @@
-"""Freshness validation for newly-extracted memory candidates.
+"""Freshness validation and staleness auditing for memory candidates.
 
 After LLM extraction, each new candidate is paired with semantically similar
 existing memories in the same project. Pairing is gated by a per-project
@@ -16,20 +16,38 @@ Actions:
 - merge: synthesize a single updated version that supersedes both
 - supersede: the new candidate wins, mark the old as outdated
 - dedupe: they say the same thing; skip the new and confirm the old
+
+A separate **staleness audit** runs after extraction + reconciliation. It
+sends the full transcript alongside the existing (active) memories and asks
+the LLM which memories are now stale — describing fixed bugs, completed
+work, or outdated state. Stale memories are retired via ``retired_reason``
+without a direct replacement.
 """
 
 import json
 import logging
 import statistics
 from dataclasses import dataclass
+from typing import Any
 
-from slopometry.core.models.memory import FreshnessAction, FreshnessVerdict, MemoryCandidate, MemoryEntry
+from openai import OpenAI
+
+from slopometry.core.models.memory import (
+    FreshnessAction,
+    FreshnessVerdict,
+    MemoryCandidate,
+    MemoryEntry,
+    StalenessVerdict,
+)
 from slopometry.solo.services.llm_text import parse_llm_json
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_FLOOR_THRESHOLD = 0.45
 DEFAULT_CEILING_THRESHOLD = 0.95
+DEFAULT_RECONCILIATION_MAX_TOKENS = 200
+DEFAULT_STALENESS_AUDIT_MAX_TOKENS = 1000
+DEFAULT_TRANSCRIPT_TRUNCATION_CHARS = 15000
 
 RECONCILIATION_PROMPT = """You are reconciling two memory candidates about the same subject.
 
@@ -183,6 +201,34 @@ def _find_above_threshold(
     return matches
 
 
+def _call_llm_json(
+    llm_endpoint: str,
+    llm_model: str,
+    api_key: str,
+    system_prompt: str,
+    user_prompt: str,
+    max_tokens: int,
+) -> Any:
+    """Call an OpenAI-compatible LLM and return the parsed JSON response.
+
+    Returns the raw parsed JSON (dict or list) on success, or raises
+    ``json.JSONDecodeError`` / ``ValueError`` / ``TypeError`` on parse failure.
+    Network errors propagate to the caller.
+    """
+    client = OpenAI(base_url=llm_endpoint, api_key=api_key)
+    response = client.chat.completions.create(
+        model=llm_model,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        temperature=0.0,
+        max_tokens=max_tokens,
+    )
+    content = response.choices[0].message.content or ""
+    return parse_llm_json(content)
+
+
 def _judge_reconciliation(
     candidate: MemoryCandidate,
     existing: MemoryEntry,
@@ -190,40 +236,31 @@ def _judge_reconciliation(
     llm_model: str,
     api_key: str,
     similarity: float,
+    max_tokens: int = DEFAULT_RECONCILIATION_MAX_TOKENS,
 ) -> FreshnessDecision:
     """Ask the LLM how to reconcile the pair. Always returns a decision."""
-    from openai import OpenAI
-
     prompt = RECONCILIATION_PROMPT.format(
         new_content=candidate.content,
         existing_content=existing.content,
     )
-    client = OpenAI(base_url=llm_endpoint, api_key=api_key)
-    response = client.chat.completions.create(
-        model=llm_model,
-        messages=[
-            {
-                "role": "system",
-                "content": "You reconcile memory pairs. Always reply with valid JSON containing action, reason, and (only when merging) merged_content.",
-            },
-            {"role": "user", "content": prompt},
-        ],
-        temperature=0.0,
-        max_tokens=200,
-    )
-    content = response.choices[0].message.content or ""
-
     try:
-        data = parse_llm_json(content)
+        data = _call_llm_json(
+            llm_endpoint,
+            llm_model,
+            api_key,
+            system_prompt="You reconcile memory pairs. Always reply with valid JSON containing action, reason, and (only when merging) merged_content.",
+            user_prompt=prompt,
+            max_tokens=max_tokens,
+        )
         verdict = FreshnessVerdict.model_validate(data)
     except (json.JSONDecodeError, ValueError, TypeError):
-        logger.debug("Could not parse reconciliation response: %s", content[:80])
+        logger.debug("Could not parse reconciliation response for candidate vs %s", existing.id)
         return FreshnessDecision(
             new_candidate=candidate,
             existing_memory=existing,
             similarity=similarity,
             action=FreshnessAction.KEEP_BOTH,
-            reason=f"Could not parse LLM response: {content[:80]}",
+            reason="Could not parse LLM response",
         )
 
     merged = verdict.merged_content if verdict.action == FreshnessAction.MERGE else None
@@ -275,3 +312,85 @@ def validate_freshness(
                 continue
             decisions.append(decision)
     return decisions, distribution
+
+
+STALENESS_AUDIT_PROMPT = """You are auditing existing memories for staleness after analyzing a new session transcript.
+
+A memory is STALE and should be retired if:
+- It describes a bug that was fixed in this session
+- It describes work that was completed in this session
+- It references a state that was changed in this session
+- It describes a temporary issue that was resolved
+
+A memory is NOT stale if:
+- It describes a stable preference, design decision, or user behavior pattern
+- It references external resources, infrastructure, or tool locations
+- The session doesn't touch the area the memory describes
+- It's a general project description that remains accurate
+
+EXISTING MEMORIES:
+{memories_block}
+
+SESSION TRANSCRIPT:
+{transcript}
+
+Return JSON only — a list of memories to retire, referencing each by its [N] number:
+[{{"ref": 1, "reason": "<one sentence why this is now stale>"}}]
+
+If no memories are stale, return an empty array: []"""
+
+
+def audit_staleness(
+    existing: list[MemoryEntry],
+    transcript: str,
+    llm_endpoint: str,
+    llm_model: str,
+    api_key: str,
+    max_tokens: int = DEFAULT_STALENESS_AUDIT_MAX_TOKENS,
+    transcript_truncation_chars: int = DEFAULT_TRANSCRIPT_TRUNCATION_CHARS,
+) -> list[tuple[MemoryEntry, str]]:
+    """Ask the LLM which existing memories are now stale given the session transcript.
+
+    Returns:
+        List of (memory_entry, reason) pairs for memories to retire.
+    """
+    if not existing or not transcript.strip():
+        return []
+
+    memories_block = "\n".join(
+        f"[{i + 1}] ({m.memory_type.value}) {m.content}" for i, m in enumerate(existing)
+    )
+    prompt = STALENESS_AUDIT_PROMPT.format(
+        memories_block=memories_block,
+        transcript=transcript[:transcript_truncation_chars],
+    )
+
+    try:
+        data = _call_llm_json(
+            llm_endpoint,
+            llm_model,
+            api_key,
+            system_prompt="You audit memory staleness. Always reply with valid JSON only.",
+            user_prompt=prompt,
+            max_tokens=max_tokens,
+        )
+    except (json.JSONDecodeError, ValueError, TypeError):
+        logger.debug("Could not parse staleness audit response")
+        return []
+
+    if not isinstance(data, list):
+        logger.debug("Staleness audit expected JSON array, got %s", type(data).__name__)
+        return []
+
+    results: list[tuple[MemoryEntry, str]] = []
+    for item in data:
+        try:
+            verdict = StalenessVerdict.model_validate(item)
+        except (ValueError, TypeError) as e:
+            logger.debug("Skipping invalid staleness verdict: %s", e)
+            continue
+        idx = verdict.ref - 1
+        if 0 <= idx < len(existing):
+            results.append((existing[idx], verdict.reason))
+
+    return results

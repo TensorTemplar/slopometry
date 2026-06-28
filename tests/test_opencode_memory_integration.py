@@ -97,7 +97,7 @@ class TestEndToEndFreshnessPipeline:
             embedding=[0.99, 0.14, 0.0],
         )
 
-        with patch("openai.OpenAI") as mock_openai:
+        with patch("slopometry.solo.services.memory_freshness.OpenAI") as mock_openai:
             mock_openai.return_value.chat.completions.create.return_value = self._stub_judge("supersede")
             decisions, _ = validate_freshness([new_candidate], [existing], "https://llm.example/v1", "model-x", "test-key")
 
@@ -143,7 +143,7 @@ class TestEndToEndFreshnessPipeline:
 
         merged_text = "Project uses rust-code-analysis (switched from radon in 2026)"
 
-        with patch("openai.OpenAI") as mock_openai:
+        with patch("slopometry.solo.services.memory_freshness.OpenAI") as mock_openai:
             mock_openai.return_value.chat.completions.create.return_value = self._stub_judge(
                 "merge", merged_content=merged_text
             )
@@ -186,7 +186,7 @@ class TestEndToEndFreshnessPipeline:
             embedding=[0.99, 0.14, 0.0],
         )
 
-        with patch("openai.OpenAI") as mock_openai:
+        with patch("slopometry.solo.services.memory_freshness.OpenAI") as mock_openai:
             mock_openai.return_value.chat.completions.create.return_value = self._stub_judge("dedupe")
             decisions, _ = validate_freshness([new_candidate], [existing], "https://llm.example/v1", "model-x", "test-key")
 
@@ -225,7 +225,7 @@ class TestEndToEndFreshnessPipeline:
             embedding=[0.95, 0.31, 0.0],
         )
 
-        with patch("openai.OpenAI") as mock_openai:
+        with patch("slopometry.solo.services.memory_freshness.OpenAI") as mock_openai:
             mock_openai.return_value.chat.completions.create.return_value = self._stub_judge("keep_both")
             decisions, _ = validate_freshness([new_candidate], [existing], "https://llm.example/v1", "model-x", "test-key")
 

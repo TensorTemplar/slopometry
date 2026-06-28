@@ -267,6 +267,27 @@ class Settings(BaseSettings):
         description="Maximum dedupe similarity threshold; derived threshold never goes above this",
     )
 
+    memory_query_limit: int = Field(
+        default=200,
+        description="Maximum number of memories to load for freshness validation and staleness audit",
+    )
+    memory_transcript_truncation_chars: int = Field(
+        default=15000,
+        description="Maximum characters of transcript text sent to the LLM for staleness audit",
+    )
+    memory_prune_transcript_window: int = Field(
+        default=3,
+        description="Number of most recent transcripts to use as context for prune-memories",
+    )
+    memory_reconciliation_max_tokens: int = Field(
+        default=200,
+        description="Max tokens for LLM reconciliation judge responses",
+    )
+    memory_staleness_audit_max_tokens: int = Field(
+        default=1000,
+        description="Max tokens for LLM staleness audit responses",
+    )
+
     stdin_timeout_seconds: float = Field(
         default=5.0,
         description="Seconds to wait for stdin input in hook dispatch before giving up",

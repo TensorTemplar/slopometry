@@ -261,3 +261,103 @@ def test_is_session_processed__returns_false_before_true_after_marking(memory_se
     memory_service.mark_session_processed("processed-session", "/any/project", 3, source="claude_code")
 
     assert memory_service.is_session_processed("processed-session", "/any/project", source="claude_code") is True
+
+
+def _make_memory(mem_id: str, content: str = "content", project: str = "/proj") -> MemoryEntry:
+    return MemoryEntry(
+        id=mem_id,
+        session_id="s1",
+        project_dir=project,
+        memory_type=MemoryType.PROJECT,
+        content=content,
+        created_at=datetime.now(),
+    )
+
+
+def test_retire_memory__marks_memory_with_retired_reason_and_hides_from_default_query(
+    memory_service: MemoryService,
+) -> None:
+    memory_service.save_memory(_make_memory("mem-active"))
+    memory_service.save_memory(_make_memory("mem-stale", content="describes a fixed bug"))
+
+    result = memory_service.retire_memory("mem-stale", reason="bug was fixed in session abc")
+
+    assert result is True
+    visible = memory_service.get_memories(project_dir="/proj", limit=100)
+    assert {m.id for m in visible} == {"mem-active"}
+
+
+def test_retire_memory__returns_false_when_memory_id_does_not_exist(memory_service: MemoryService) -> None:
+    result = memory_service.retire_memory("nonexistent-id", reason="no such memory")
+    assert result is False
+
+
+def test_get_memories__includes_retired_when_include_superseded_is_true(memory_service: MemoryService) -> None:
+    memory_service.save_memory(_make_memory("mem-active"))
+    memory_service.save_memory(_make_memory("mem-retired", content="stale"))
+    memory_service.retire_memory("mem-retired", reason="no longer relevant")
+
+    all_memories = memory_service.get_memories(project_dir="/proj", limit=100, include_superseded=True)
+    ids = {m.id for m in all_memories}
+    assert ids == {"mem-active", "mem-retired"}
+
+
+def test_get_memories__excludes_both_superseded_and_retired_by_default(memory_service: MemoryService) -> None:
+    memory_service.save_memory(_make_memory("mem-active"))
+    memory_service.save_memory(_make_memory("mem-superseded", content="old version"))
+    memory_service.save_memory(_make_memory("mem-retired", content="fixed bug"))
+    memory_service.update_memory("mem-superseded", superseded_by="mem-active")
+    memory_service.retire_memory("mem-retired", reason="bug was fixed")
+
+    visible = memory_service.get_memories(project_dir="/proj", limit=100)
+    assert {m.id for m in visible} == {"mem-active"}
+
+
+def test_get_memories__retired_memory_carries_retired_reason_when_included(memory_service: MemoryService) -> None:
+    memory_service.save_memory(_make_memory("mem-retired", content="stale"))
+    memory_service.retire_memory("mem-retired", reason="work was completed")
+
+    all_memories = memory_service.get_memories(project_dir="/proj", limit=100, include_superseded=True)
+    retired = next(m for m in all_memories if m.id == "mem-retired")
+    assert retired.retired_reason == "work was completed"
+
+
+def test_get_memory_stats__excludes_retired_memories_from_count(memory_service: MemoryService) -> None:
+    memory_service.save_memory(_make_memory("mem-active", content="active"))
+    memory_service.save_memory(_make_memory("mem-retired", content="stale"))
+    memory_service.retire_memory("mem-retired", reason="stale")
+
+    stats = memory_service.get_memory_stats(project_dir="/proj")
+    assert stats["total"] == 1
+
+
+def test_retire_memory__does_not_interfere_with_supersede_chain(memory_service: MemoryService) -> None:
+    memory_service.save_memory(_make_memory("mem-old", content="version 1"))
+    memory_service.save_memory(_make_memory("mem-new", content="version 2"))
+    memory_service.update_memory("mem-old", superseded_by="mem-new")
+    memory_service.retire_memory("mem-new", reason="superseded work was completed")
+
+    visible = memory_service.get_memories(project_dir="/proj", limit=100)
+    assert visible == []
+
+
+def test_retire_memory__can_be_called_multiple_times_on_same_memory(memory_service: MemoryService) -> None:
+    memory_service.save_memory(_make_memory("mem-stale"))
+    assert memory_service.retire_memory("mem-stale", reason="first reason") is True
+    assert memory_service.retire_memory("mem-stale", reason="updated reason") is True
+
+    all_memories = memory_service.get_memories(project_dir="/proj", limit=100, include_superseded=True)
+    retired = next(m for m in all_memories if m.id == "mem-stale")
+    assert retired.retired_reason == "updated reason"
+
+
+def test_retire_memory__does_not_clobber_superseded_by_field(memory_service: MemoryService) -> None:
+    memory_service.save_memory(_make_memory("mem-old", content="old version"))
+    memory_service.save_memory(_make_memory("mem-new", content="new version"))
+    memory_service.update_memory("mem-old", superseded_by="mem-new")
+    memory_service.retire_memory("mem-old", reason="also stale")
+
+    all_memories = memory_service.get_memories(project_dir="/proj", limit=100, include_superseded=True)
+    old = next(m for m in all_memories if m.id == "mem-old")
+    assert old.superseded_by == "mem-new"
+    assert old.retired_reason == "also stale"

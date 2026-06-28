@@ -98,7 +98,7 @@ def test_user_story_generation_cli_integration() -> None:
 
     result = runner.invoke(cli, ["summoner", "userstorify", "--help"])
     assert result.exit_code == 0
-    assert "Generate user stories from commits using configured AI agents" in result.output
+    assert "Generate user stories from commits using the configured AI agent" in result.output
     assert "--base-commit" in result.output
     assert "--head-commit" in result.output
 

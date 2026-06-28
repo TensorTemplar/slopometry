@@ -45,8 +45,9 @@ uv tool install . --reinstall
 - **CLI** (`src/slopometry/cli.py`): Hybrid CLI with flat core commands (install, uninstall, status, latest, shell-completion) and persona subcommands (solo, summoner)
 - **Database** (`src/slopometry/core/database.py`): SQLite storage with platform-specific default locations
 - **Hook Handler** (`src/slopometry/core/hook_handler.py`): Script invoked by Claude Code hooks to capture events
-- **Models** (`src/slopometry/core/models.py`): Pydantic models for HookEvent, SessionStatistics
+- **Models** (`src/slopometry/core/models/`): Pydantic models for HookEvent, SessionStatistics, MemoryEntry
 - **Settings** (`src/slopometry/core/settings.py`): Pydantic-settings configuration with .env support
+- **Memory Freshness** (`src/slopometry/solo/services/memory_freshness.py`): LLM-driven reconciliation (keep_both/merge/supersede/dedupe) and staleness audit for memory candidates
 - **LLM Wrapper** (`src/slopometry/summoner/services/llm_wrapper.py`): AI agents for analyzing git diffs and generating user stories
 
 ### How It Works
@@ -127,7 +128,7 @@ echo '{"session_id": "test123", "transcript_path": "/tmp/transcript.jsonl", "too
 
 ## Adding New Tool Types
 
-1. Add to `ToolType` enum in models.py
+1. Add to `ToolType` enum in `src/slopometry/core/models/core.py`
 2. Update `TOOL_TYPE_MAP` in hook_handler.py
 3. No database migration needed (sqlite-utils handles schema)
 
@@ -148,6 +149,9 @@ The experiment tracking feature includes:
 - `solo ls`: List recent sessions
 - `solo show <session-id>`: Show detailed session statistics
 - `latest`: Show latest session statistics
+- `solo find-memories`: Scan transcripts, extract memory candidates, run freshness validation, and save
+- `solo prune-memories`: Audit existing memories for staleness and retire stale ones
+- `solo show-memories`: List and manage memories for a project
 
 ### Key Components
 - **CLI Calculator**: Measures "Completeness Likelihood Improval" (0-1.0 scale)

@@ -547,6 +547,28 @@ class Migration015AbstractEventTypeValues(Migration):
             )
 
 
+class Migration016AddRetiredReasonToMemories(Migration):
+    """Add retired_reason column to memories for staleness audit retirement."""
+
+    @property
+    def version(self) -> str:
+        return "016"
+
+    @property
+    def description(self) -> str:
+        return "Add retired_reason column to memories for staleness audit retirement"
+
+    def up(self, conn: sqlite3.Connection) -> None:
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='memories'")
+        if not cursor.fetchone():
+            return
+        try:
+            conn.execute("ALTER TABLE memories ADD COLUMN retired_reason TEXT")
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" not in str(e).lower():
+                raise
+
+
 class MigrationRunner:
     """Manages database migrations."""
 
@@ -568,6 +590,7 @@ class MigrationRunner:
             Migration013AddSourceAndParentSession(),
             Migration014AddBehavioralPatternHistory(),
             Migration015AbstractEventTypeValues(),
+            Migration016AddRetiredReasonToMemories(),
         ]
 
     @contextmanager

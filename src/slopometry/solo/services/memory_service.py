@@ -112,6 +112,14 @@ class MemoryService:
             embedding=embedding,
         )
 
+    def retire_memory(self, memory_id: str, reason: str) -> bool:
+        """Retire a memory (mark as stale without a direct replacement).
+
+        Returns:
+            True if retired, False if not found
+        """
+        return self.db.retire_memory(memory_id, reason)
+
     def mark_session_processed(
         self, session_id: str, project_dir: str, memory_count: int, source: str
     ) -> None:

@@ -9,12 +9,11 @@ import click
 
 from slopometry.core.models.memory import FreshnessAction
 from slopometry.display.console import console, styled_pager
+from slopometry.solo.services.memory_freshness import audit_staleness
 
 if TYPE_CHECKING:
     from slopometry.core.models import ImpactAssessment, RepoBaseline, SessionStatistics
     from slopometry.core.models.session import BehavioralPatternTrends
-
-# Imports moved inside functions to optimize startup time
 
 logger = logging.getLogger(__name__)
 
@@ -784,6 +783,25 @@ def save_transcript(session_id: str | None, output_dir: str, yes: bool) -> None:
     console.print("[green]✓[/green] Saved session metadata to: session_metadata.json")
 
 
+_ACTION_PRIORITY: dict[FreshnessAction, int] = {
+    FreshnessAction.SUPERSEDE: 3,
+    FreshnessAction.MERGE: 2,
+    FreshnessAction.DEDUPE: 1,
+    FreshnessAction.KEEP_BOTH: 0,
+}
+
+
+def _highest_priority_action(group: list) -> FreshnessAction:
+    """Pick the most consequential action from a candidate's reconciliation group.
+
+    When a candidate matches multiple existing memories, the LLM may return
+    different actions for each pair. A single priority resolves conflicts:
+    SUPERSEDE > MERGE > DEDUPE > KEEP_BOTH. Only the winning action's side
+    effects are applied.
+    """
+    return max(group, key=lambda d: _ACTION_PRIORITY[d.action]).action
+
+
 @solo.command(name="find-memories")
 @click.option(
     "--project-dir",
@@ -963,7 +981,7 @@ def find_memories(
 
             from slopometry.solo.services.memory_freshness import validate_freshness
 
-            existing_memories = memory_service.get_memories(project_dir=proj_dir_str, limit=200)
+            existing_memories = memory_service.get_memories(project_dir=proj_dir_str, limit=settings.memory_query_limit)
             decisions: list = []
             if existing_memories:
                 decisions, distribution = validate_freshness(
@@ -1001,21 +1019,30 @@ def find_memories(
                     decisions_by_candidate = defaultdict(list)
                     for decision in decisions:
                         decisions_by_candidate[id(decision.new_candidate)].append(decision)
+
+                    deduped_candidate_ids: set[int] = set()
+                    merge_links: list[tuple[str, int]] = []
                     for group in decisions_by_candidate.values():
                         candidate = group[0].new_candidate
-                        for decision in group:
-                            if decision.action == FreshnessAction.MERGE and decision.merged_content:
-                                candidate.content = decision.merged_content
-                            elif decision.action == FreshnessAction.DEDUPE:
-                                if candidate.metadata is None:
-                                    candidate.metadata = {}
-                                candidate.metadata["deduped_against"] = decision.existing_memory.id
+                        primary_action = _highest_priority_action(group)
+                        if primary_action == FreshnessAction.MERGE:
+                            merge_decision = next(
+                                d for d in group if d.action == FreshnessAction.MERGE and d.merged_content
+                            )
+                            candidate.content = merge_decision.merged_content
+                            merge_links.append((merge_decision.existing_memory.id, id(candidate)))
+                        elif primary_action == FreshnessAction.DEDUPE:
+                            deduped_candidate_ids.add(id(candidate))
                         if candidate.metadata is None:
                             candidate.metadata = {}
-                        candidate.metadata["freshness_action"] = group[0].action
+                        candidate.metadata["freshness_action"] = primary_action
                         candidate.metadata["freshness_reason"] = group[0].reason
-                        if group[0].action != FreshnessAction.KEEP_BOTH:
+                        if primary_action != FreshnessAction.KEEP_BOTH:
                             candidate.metadata["freshness_pair_with"] = group[0].existing_memory.id
+
+                    if deduped_candidate_ids:
+                        candidates = [c for c in candidates if id(c) not in deduped_candidate_ids]
+                        console.print(f"  [dim]Skipped {len(deduped_candidate_ids)} duplicate candidate(s)[/dim]")
 
             from slopometry.core.models.memory import MemoryCreateRequest
 
@@ -1027,6 +1054,7 @@ def find_memories(
 
             saved = memory_service.save_memories(request)
             candidate_id_map: dict[int, str] = {id(c): e.id for c, e in zip(candidates, saved)}
+
             for decision in decisions:
                 if decision.action == FreshnessAction.SUPERSEDE:
                     new_id = candidate_id_map.get(id(decision.new_candidate))
@@ -1036,8 +1064,37 @@ def find_memories(
                         decision.existing_memory.id, superseded_by=new_id
                     )
                     console.print(
-                        f"      [dim]Linked {decision.existing_memory.id} -> superseded_by={new_id}[/dim]"
+                        f"      [dim]Superseded {decision.existing_memory.id} -> {new_id}[/dim]"
                     )
+
+            for existing_id, cand_obj_id in merge_links:
+                new_id = candidate_id_map.get(cand_obj_id)
+                if new_id is None:
+                    continue
+                memory_service.update_memory(existing_id, superseded_by=new_id)
+                console.print(
+                    f"      [dim]Merged {existing_id} -> {new_id}[/dim]"
+                )
+
+            saved_ids = {m.id for m in saved}
+            current_memories = memory_service.get_memories(project_dir=proj_dir_str, limit=settings.memory_query_limit)
+            pre_existing_memories = [m for m in current_memories if m.id not in saved_ids]
+            if pre_existing_memories:
+                stale_pairs = audit_staleness(
+                    pre_existing_memories,
+                    cleaned_transcript,
+                    llm_endpoint=endpoint,
+                    llm_model=model,
+                    api_key=api_key,
+                    max_tokens=settings.memory_staleness_audit_max_tokens,
+                    transcript_truncation_chars=settings.memory_transcript_truncation_chars,
+                )
+                for memory_entry, reason in stale_pairs:
+                    memory_service.retire_memory(memory_entry.id, reason)
+                    console.print(
+                        f"  [yellow]Retired {memory_entry.id}: {reason}[/yellow]"
+                    )
+
             memory_service.mark_session_processed(
                 t.session_id, proj_dir_str, len(saved), source=t.source.value
             )
@@ -1057,6 +1114,145 @@ def find_memories(
         console.print(
             f"[bold yellow]Dry run complete. Would process {len(sessions_to_process)} sessions.[/bold yellow]"
         )
+
+
+@solo.command(name="prune-memories")
+@click.option(
+    "--project-dir",
+    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
+    default=None,
+    help="Project directory (default: cwd)",
+)
+@click.option(
+    "--llm-endpoint",
+    type=str,
+    default=None,
+    help="LLM endpoint URL (default: from settings)",
+)
+@click.option(
+    "--llm-model",
+    type=str,
+    default=None,
+    help="Model name (default: from settings)",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Show what would be retired without making changes",
+)
+def prune_memories(
+    project_dir: Path | None,
+    llm_endpoint: str | None,
+    llm_model: str | None,
+    dry_run: bool,
+) -> None:
+    """Audit existing memories for staleness and retire stale ones.
+
+    Sends all active (non-superseded, non-retired) memories for the project
+    to the LLM alongside the most recent session transcripts and asks which
+    memories describe fixed bugs, completed work, or outdated state.
+
+    Stale memories are marked with a ``retired_reason`` and excluded from
+    future queries. Use --dry-run to preview without changes (the LLM is
+    still called to identify stale memories; only the DB write is skipped).
+    """
+    from slopometry.core.settings import settings
+    from slopometry.solo.services.memory_service import MemoryService
+    from slopometry.solo.services.transcript_finder import TranscriptFinder
+
+    if project_dir is None:
+        project_dir = Path.cwd()
+
+    endpoint = llm_endpoint or settings.memory_llm_endpoint
+    model = llm_model or settings.memory_llm_model
+    api_key = settings.memory_llm_api_key.get_secret_value()
+
+    console.print("[bold]Slopometry Memory Pruning[/bold]")
+    console.print(f"Project: {project_dir}")
+    console.print(f"LLM: {endpoint} / {model}")
+    console.print()
+
+    if settings.offline_mode and not llm_endpoint:
+        raise click.ClickException(
+            "Memory pruning requires external LLM calls, which are disabled (offline_mode=True). "
+            "Set SLOPOMETRY_OFFLINE_MODE=false to enable."
+        )
+
+    from slopometry.solo.cli.preflight import preflight_endpoints
+
+    preflight_endpoints(
+        chat_endpoint=endpoint,
+        embedding_endpoint=settings.memory_embedding_endpoint,
+        chat_api_key=api_key,
+        embedding_api_key=settings.memory_embedding_api_key.get_secret_value(),
+    )
+
+    memory_service = MemoryService()
+    proj_dir_str = str(project_dir)
+
+    existing = memory_service.get_memories(project_dir=proj_dir_str, limit=settings.memory_query_limit)
+    if not existing:
+        console.print("[yellow]No active memories to audit.[/yellow]")
+        return
+
+    console.print(f"[cyan]Auditing {len(existing)} active memories for staleness...[/cyan]")
+
+    transcript_finder = TranscriptFinder()
+    transcripts = transcript_finder.discover_transcripts(project_dir)
+
+    from slopometry.core.models.protocol.events import AbstractEventSource
+    from slopometry.solo.services.memory_extractor import MemoryExtractor
+
+    memory_extractor = MemoryExtractor(endpoint, model, api_key)
+
+    transcript_texts: list[str] = []
+    for t in transcripts[: settings.memory_prune_transcript_window]:
+        if t.source == AbstractEventSource.OPENCODE:
+            storage_root = transcript_finder.find_opencode_storage_root()
+            if not storage_root.is_dir():
+                continue
+            text = memory_extractor.extract_memories_from_opencode_session(t.session_id, storage_root)
+        else:
+            text = memory_extractor.extract_memories_from_transcript(t.transcript_path)
+        if text.strip():
+            transcript_texts.append(text)
+
+    combined_transcript = "\n---\n".join(transcript_texts)
+    if not combined_transcript.strip():
+        console.print("[yellow]No transcripts found to audit against.[/yellow]")
+        return
+
+    console.print(f"[dim]Using {len(transcript_texts)} transcript(s) for context[/dim]")
+
+    stale_pairs = audit_staleness(
+        existing,
+        combined_transcript,
+        llm_endpoint=endpoint,
+        llm_model=model,
+        api_key=api_key,
+        max_tokens=settings.memory_staleness_audit_max_tokens,
+        transcript_truncation_chars=settings.memory_transcript_truncation_chars,
+    )
+
+    if not stale_pairs:
+        console.print("[green]No stale memories found.[/green]")
+        return
+
+    console.print(f"\n[yellow]Found {len(stale_pairs)} stale memor(ies):[/yellow]")
+    for memory_entry, reason in stale_pairs:
+        console.print(f"  [yellow]RETIRE[/yellow] [{memory_entry.memory_type.value}] {memory_entry.content[:100]}")
+        console.print(f"    [dim]REASON:[/dim] {reason}")
+
+    if dry_run:
+        console.print(f"\n[yellow]--dry-run: would retire {len(stale_pairs)} memor(ies)[/yellow]")
+        return
+
+    retired_count = 0
+    for memory_entry, reason in stale_pairs:
+        if memory_service.retire_memory(memory_entry.id, reason):
+            retired_count += 1
+
+    console.print(f"\n[bold green]Retired {retired_count} memor(ies).[/bold green]")
 
 
 @solo.command(name="show-memories")
