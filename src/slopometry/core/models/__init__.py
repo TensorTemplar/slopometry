@@ -65,8 +65,6 @@ from slopometry.core.models.hook import (
     Project,
     ProjectLanguage,
 )
-
-# Memory types
 from slopometry.core.models.memory import (
     MemoryCandidate,
     MemoryCreateRequest,
@@ -170,7 +168,6 @@ __all__ = [
     "UserStoryDisplayData",
     "UserStoryEntry",
     "UserStoryStatistics",
-    # Memory
     "MemoryCandidate",
     "MemoryCreateRequest",
     "MemoryEntry",

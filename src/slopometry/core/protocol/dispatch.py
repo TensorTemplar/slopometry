@@ -130,7 +130,7 @@ def emit_event_from_stdin(
 
     try:
         dispatch_event(source, raw_payload, event_type_override=event_type_override)
-    except Exception as e:
+    except Exception as e:  # slopometry: allow-silent - hook subprocess must not crash the harness session
         if settings.debug_mode:
             print(f"Slopometry dispatch error: {e}", file=sys.stderr)
         return 0

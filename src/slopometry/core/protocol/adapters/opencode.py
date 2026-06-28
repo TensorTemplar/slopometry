@@ -44,10 +44,6 @@ class OpenCodeAdapter:
     source = AbstractEventSource.OPENCODE
     tool_type_map: dict[str, str] = {name: enum.value for name, enum in _TOOL_NAME_TO_TYPE.items()}
 
-    @classmethod
-    def map_tool_name(cls, tool_name: str) -> str:
-        return resolve_tool_type(tool_name)
-
     def detect_event_type(self, raw_payload: dict[str, Any]) -> AbstractEventType:
         event_type = raw_payload.get("event_type")
         if not isinstance(event_type, str):
