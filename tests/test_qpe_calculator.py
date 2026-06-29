@@ -9,6 +9,7 @@ from conftest import make_test_metrics
 
 from slopometry.core.models.baseline import QPEScore
 from slopometry.core.models.complexity import ExtendedComplexityMetrics
+from slopometry.core.models.core import SmellCounts
 from slopometry.summoner.services.qpe_calculator import (
     calculate_qpe,
     compare_project_metrics,
@@ -306,14 +307,14 @@ def test_smell_advantage__negative_delta_when_candidate_reduces_smells() -> None
         mi_normalized=0.6,
         smell_penalty=0.2,
         adjusted_quality=0.5,
-        smell_counts={"swallowed_exception": 5},
+        smell_counts=SmellCounts.model_validate({"swallowed_exception": 5}),
     )
     candidate = QPEScore(
         qpe=0.6,
         mi_normalized=0.7,
         smell_penalty=0.1,
         adjusted_quality=0.6,
-        smell_counts={"swallowed_exception": 2},
+        smell_counts=SmellCounts.model_validate({"swallowed_exception": 2}),
     )
 
     result = smell_advantage(baseline, candidate)
@@ -332,14 +333,14 @@ def test_smell_advantage__positive_delta_when_candidate_adds_smells() -> None:
         mi_normalized=0.7,
         smell_penalty=0.1,
         adjusted_quality=0.6,
-        smell_counts={"hasattr_getattr": 2},
+        smell_counts=SmellCounts.model_validate({"hasattr_getattr": 2}),
     )
     candidate = QPEScore(
         qpe=0.5,
         mi_normalized=0.6,
         smell_penalty=0.2,
         adjusted_quality=0.5,
-        smell_counts={"hasattr_getattr": 7},
+        smell_counts=SmellCounts.model_validate({"hasattr_getattr": 7}),
     )
 
     result = smell_advantage(baseline, candidate)
@@ -355,14 +356,14 @@ def test_smell_advantage__handles_asymmetric_smell_sets() -> None:
         mi_normalized=0.6,
         smell_penalty=0.2,
         adjusted_quality=0.5,
-        smell_counts={"swallowed_exception": 3},
+        smell_counts=SmellCounts.model_validate({"swallowed_exception": 3}),
     )
     candidate = QPEScore(
         qpe=0.6,
         mi_normalized=0.7,
         smell_penalty=0.1,
         adjusted_quality=0.6,
-        smell_counts={"hasattr_getattr": 2},
+        smell_counts=SmellCounts.model_validate({"hasattr_getattr": 2}),
     )
 
     result = smell_advantage(baseline, candidate)
@@ -388,14 +389,14 @@ def test_smell_advantage__sorted_by_impact_magnitude() -> None:
         mi_normalized=0.6,
         smell_penalty=0.2,
         adjusted_quality=0.5,
-        smell_counts={"swallowed_exception": 10, "orphan_comment": 5, "hasattr_getattr": 3},
+        smell_counts=SmellCounts.model_validate({"swallowed_exception": 10, "orphan_comment": 5, "hasattr_getattr": 3}),
     )
     candidate = QPEScore(
         qpe=0.6,
         mi_normalized=0.7,
         smell_penalty=0.1,
         adjusted_quality=0.6,
-        smell_counts={"swallowed_exception": 2, "orphan_comment": 4, "hasattr_getattr": 3},
+        smell_counts=SmellCounts.model_validate({"swallowed_exception": 2, "orphan_comment": 4, "hasattr_getattr": 3}),
     )
 
     result = smell_advantage(baseline, candidate)
@@ -412,14 +413,14 @@ def test_smell_advantage__uses_correct_weights_from_registry() -> None:
         mi_normalized=0.6,
         smell_penalty=0.2,
         adjusted_quality=0.5,
-        smell_counts={"swallowed_exception": 1},
+        smell_counts=SmellCounts.model_validate({"swallowed_exception": 1}),
     )
     candidate = QPEScore(
         qpe=0.6,
         mi_normalized=0.7,
         smell_penalty=0.1,
         adjusted_quality=0.6,
-        smell_counts={"swallowed_exception": 2},
+        smell_counts=SmellCounts.model_validate({"swallowed_exception": 2}),
     )
 
     result = smell_advantage(baseline, candidate)
@@ -601,7 +602,7 @@ class TestQPEIntegration:
             mi_normalized=0.7,
             smell_penalty=0.1,
             adjusted_quality=0.63,
-            smell_counts={"hasattr_getattr": 5, "type_ignore": 3},
+            smell_counts=SmellCounts.model_validate({"hasattr_getattr": 5, "type_ignore": 3}),
         )
 
         json_output = qpe_score.model_dump_json()

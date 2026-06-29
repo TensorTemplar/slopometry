@@ -43,7 +43,7 @@ def cli() -> None:
 
 @cli.command("hook-handler", hidden=True)
 def hook_handler() -> None:
-    """Internal command for processing hook events."""
+    """Internal command for processing hook events (auto-detect event type)."""
     from slopometry.core.hook_handler import handle_hook
 
     sys.exit(handle_hook())
@@ -51,47 +51,47 @@ def hook_handler() -> None:
 
 @cli.command("hook-pre-tool-use", hidden=True)
 def hook_pre_tool_use() -> None:
-    """Internal command for processing PreToolUse hook events."""
+    """Internal command for processing Claude Code PreToolUse hook events."""
     from slopometry.core.hook_handler import handle_hook
-    from slopometry.core.models.hook import HookEventType
+    from slopometry.core.models.protocol.events import AbstractEventType
 
-    sys.exit(handle_hook(event_type_override=HookEventType.PRE_TOOL_USE))
+    sys.exit(handle_hook(event_type_override=AbstractEventType.TOOL_CALL_STARTED))
 
 
 @cli.command("hook-post-tool-use", hidden=True)
 def hook_post_tool_use() -> None:
-    """Internal command for processing PostToolUse hook events."""
+    """Internal command for processing Claude Code PostToolUse hook events."""
     from slopometry.core.hook_handler import handle_hook
-    from slopometry.core.models.hook import HookEventType
+    from slopometry.core.models.protocol.events import AbstractEventType
 
-    sys.exit(handle_hook(event_type_override=HookEventType.POST_TOOL_USE))
+    sys.exit(handle_hook(event_type_override=AbstractEventType.TOOL_CALL_COMPLETED))
 
 
 @cli.command("hook-notification", hidden=True)
 def hook_notification() -> None:
-    """Internal command for processing Notification hook events."""
+    """Internal command for processing Claude Code Notification hook events."""
     from slopometry.core.hook_handler import handle_hook
-    from slopometry.core.models.hook import HookEventType
+    from slopometry.core.models.protocol.events import AbstractEventType
 
-    sys.exit(handle_hook(event_type_override=HookEventType.NOTIFICATION))
+    sys.exit(handle_hook(event_type_override=AbstractEventType.NOTIFICATION))
 
 
 @cli.command("hook-stop", hidden=True)
 def hook_stop() -> None:
-    """Internal command for processing Stop hook events."""
+    """Internal command for processing Claude Code Stop hook events."""
     from slopometry.core.hook_handler import handle_hook
-    from slopometry.core.models.hook import HookEventType
+    from slopometry.core.models.protocol.events import AbstractEventType
 
-    sys.exit(handle_hook(event_type_override=HookEventType.STOP))
+    sys.exit(handle_hook(event_type_override=AbstractEventType.TURN_COMPLETED))
 
 
 @cli.command("hook-subagent-stop", hidden=True)
 def hook_subagent_stop() -> None:
-    """Internal command for processing SubagentStop hook events."""
+    """Internal command for processing Claude Code SubagentStop hook events."""
     from slopometry.core.hook_handler import handle_hook
-    from slopometry.core.models.hook import HookEventType
+    from slopometry.core.models.protocol.events import AbstractEventType
 
-    sys.exit(handle_hook(event_type_override=HookEventType.SUBAGENT_STOP))
+    sys.exit(handle_hook(event_type_override=AbstractEventType.SUBAGENT_COMPLETED))
 
 
 @cli.command("hook-opencode", hidden=True)
@@ -111,6 +111,46 @@ def hook_opencode(event_type: str) -> None:
     from slopometry.core.opencode_handler import handle_opencode_hook
 
     sys.exit(handle_opencode_hook(event_type))
+
+
+@cli.command("emit-event", hidden=True)
+@click.option(
+    "--source",
+    required=True,
+    type=click.Choice(["claude_code", "opencode"]),
+    help="Which harness produced the event on stdin.",
+)
+@click.option(
+    "--type",
+    "event_type",
+    required=False,
+    type=click.Choice(
+        [
+            "tool_call_started",
+            "tool_call_completed",
+            "notification",
+            "turn_completed",
+            "subagent_completed",
+            "todo_updated",
+            "message_updated",
+            "subagent_started",
+        ]
+    ),
+    help="Override the event type (skips adapter inference).",
+)
+def emit_event(source: str, event_type: str | None) -> None:
+    """Generic event ingestion entrypoint.
+
+    Reads JSON from stdin and dispatches through the named harness adapter.
+    New harnesses should write an adapter + register a source, then invoke
+    this command from their hook glue.
+    """
+    from slopometry.core.models.protocol.events import AbstractEventSource, AbstractEventType
+    from slopometry.core.protocol.dispatch import emit_event_from_stdin
+
+    abstract_source = AbstractEventSource(source)
+    abstract_type = AbstractEventType(event_type) if event_type else None
+    sys.exit(emit_event_from_stdin(abstract_source, event_type_override=abstract_type))
 
 
 @cli.command("shell-completion")

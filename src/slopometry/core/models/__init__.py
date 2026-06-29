@@ -55,7 +55,6 @@ from slopometry.core.models.experiment import (
     ExperimentRun,
     ExperimentStatus,
     FeatureBoundary,
-    MergeCommit,
 )
 
 # Hook types
@@ -63,10 +62,20 @@ from slopometry.core.models.hook import (
     AgentTool,
     AnalysisSource,
     GitState,
-    HookEventType,
     Project,
     ProjectLanguage,
-    ToolType,
+)
+from slopometry.core.models.memory import (
+    MemoryCandidate,
+    MemoryCreateRequest,
+    MemoryEntry,
+    MemoryType,
+)
+from slopometry.core.models.protocol import (
+    AbstractEventSource,
+    AbstractEventType,
+    AbstractHookEvent,
+    ToolCallPayload,
 )
 
 # Session types
@@ -106,13 +115,15 @@ __all__ = [
     "ComplexityEvolution",
     "FileAnalysisResult",
     # Hook
+    "AbstractEventSource",
+    "AbstractEventType",
+    "AbstractHookEvent",
+    "ToolCallPayload",
     "AgentTool",
     "AnalysisSource",
     "GitState",
-    "HookEventType",
     "Project",
     "ProjectLanguage",
-    "ToolType",
     # Session
     "CompactEvent",
     "ContextCoverage",
@@ -145,7 +156,6 @@ __all__ = [
     "ExperimentRun",
     "ExperimentStatus",
     "FeatureBoundary",
-    "MergeCommit",
     # Display
     "ExperimentDisplayData",
     "FeatureDisplayData",
@@ -158,4 +168,8 @@ __all__ = [
     "UserStoryDisplayData",
     "UserStoryEntry",
     "UserStoryStatistics",
+    "MemoryCandidate",
+    "MemoryCreateRequest",
+    "MemoryEntry",
+    "MemoryType",
 ]

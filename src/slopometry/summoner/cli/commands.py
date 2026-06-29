@@ -633,7 +633,7 @@ def show_experiment(experiment_id: str) -> None:
 def userstorify(
     base_commit: str | None, head_commit: str | None, feature_id: str | None, repo_path: Path | None
 ) -> None:
-    """Generate user stories from commits using configured AI agents and save permanently to user story collection."""
+    """Generate user stories from commits using the configured AI agent and save permanently to user story collection."""
     from slopometry.core.database import EventDatabase
     from slopometry.summoner.services.llm_service import LLMService
 
@@ -686,7 +686,7 @@ def userstorify(
         sys.exit(1)
 
     console.print(f"Repository: {repo_path}")
-    console.print(f"Using agent: {llm_service.get_configured_agent()}")
+    console.print(f"Using model: {llm_service.get_configured_model()}")
 
     commit_info = llm_service.get_commit_info_for_display(base_commit, head_commit)
 

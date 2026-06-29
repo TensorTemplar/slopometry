@@ -21,7 +21,7 @@ class TestExtendedComplexityMetrics:
     def test_model_creation_without_required_fields__raises_validation_error(self) -> None:
         """Test that ValidationError is raised when required Halstead fields are missing."""
         with pytest.raises(ValidationError) as exc_info:
-            ExtendedComplexityMetrics()  # pyrefly: ignore[missing-argument]
+            ExtendedComplexityMetrics()  # pyrefly: ignore[missing-argument]  # pyright: ignore[reportCallIssue]
 
         errors = exc_info.value.errors()
         missing_fields = {e["loc"][0] for e in errors}
@@ -115,8 +115,6 @@ def test_context_coverage_has_gaps__returns_false_when_perfect():
             FileCoverageStatus(
                 file_path="src/foo.py",
                 was_read_before_edit=True,
-                imports_coverage=100.0,
-                dependents_coverage=100.0,
             )
         ],
         blind_spots=[],
@@ -134,8 +132,6 @@ def test_context_coverage_has_gaps__returns_true_when_read_ratio_low():
             FileCoverageStatus(
                 file_path="src/foo.py",
                 was_read_before_edit=False,
-                imports_coverage=100.0,
-                dependents_coverage=100.0,
             )
         ],
         blind_spots=[],
@@ -153,8 +149,6 @@ def test_context_coverage_has_gaps__returns_true_when_blind_spots():
             FileCoverageStatus(
                 file_path="src/foo.py",
                 was_read_before_edit=True,
-                imports_coverage=100.0,
-                dependents_coverage=100.0,
             )
         ],
         blind_spots=["src/bar.py"],

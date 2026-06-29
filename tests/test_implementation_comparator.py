@@ -11,6 +11,7 @@ from conftest import make_test_metrics
 
 from slopometry.core.models.baseline import QPEScore
 from slopometry.core.models.complexity import ExtendedComplexityMetrics
+from slopometry.core.models.core import SmellCounts
 from slopometry.summoner.services.implementation_comparator import (
     SubtreeExtractionError,
     _extract_subtree,
@@ -163,14 +164,14 @@ def test_compare_subtrees__includes_smell_advantages(tmp_path: Path) -> None:
         mi_normalized=0.6,
         smell_penalty=0.2,
         adjusted_quality=0.5,
-        smell_counts={"swallowed_exception": 5},
+        smell_counts=SmellCounts.model_validate({"swallowed_exception": 5}),
     )
     qpe_b = QPEScore(
         qpe=0.7,
         mi_normalized=0.8,
         smell_penalty=0.05,
         adjusted_quality=0.7,
-        smell_counts={"swallowed_exception": 1},
+        smell_counts=SmellCounts.model_validate({"swallowed_exception": 1}),
     )
 
     with (

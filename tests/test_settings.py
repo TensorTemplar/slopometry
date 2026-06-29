@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import pytest
 from pydantic import ValidationError
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from slopometry.core.settings import Settings
 
@@ -17,8 +18,6 @@ class TestSettingsOverridePriority:
 
     def _create_test_settings(self, global_config_path: Path, local_config_path: Path):
         """Create a Settings class with custom config paths for testing."""
-        from pydantic_settings import BaseSettings, SettingsConfigDict
-
         class TestSettings(BaseSettings):
             model_config = SettingsConfigDict(
                 env_file=[str(global_config_path), str(local_config_path)],
@@ -39,11 +38,11 @@ class TestSettingsOverridePriority:
             enable_complexity_feedback: bool = False
             llm_proxy_url: str = ""
             llm_proxy_api_key: str = ""
+            llm_model_name: str = "olka-fi/MiniMax-M3-MXFP4"
             interactive_rating_enabled: bool = False
             hf_token: str = ""
             hf_default_repo: str = ""
             offline_mode: bool = True
-            user_story_agent: str = "gemini"
 
         return TestSettings
 

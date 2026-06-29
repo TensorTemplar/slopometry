@@ -137,3 +137,86 @@ class TestMigrations:
                 columns = [row[1] for row in cursor.fetchall()]
                 transcript_path_count = columns.count("transcript_path")
                 assert transcript_path_count == 1
+
+    def test_migration_016__adds_retired_reason_column_to_memories(self):
+        """Test that migration 016 adds the retired_reason column to the memories table."""
+        with TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "test.db"
+            runner = MigrationRunner(db_path)
+
+            with runner._get_db_connection() as conn:
+                conn.execute("""
+                    CREATE TABLE hook_events (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        session_id TEXT NOT NULL,
+                        timestamp TEXT NOT NULL
+                    )
+                """)
+                conn.execute("""
+                    CREATE TABLE memories (
+                        id TEXT PRIMARY KEY,
+                        session_id TEXT NOT NULL,
+                        project_dir TEXT NOT NULL,
+                        memory_type TEXT NOT NULL,
+                        content TEXT NOT NULL,
+                        source_context TEXT,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT,
+                        retained INTEGER DEFAULT 0,
+                        superseded_by TEXT,
+                        embedding TEXT,
+                        metadata TEXT
+                    )
+                """)
+                conn.commit()
+
+            applied = runner.run_migrations()
+
+            assert any("016" in m and "retired_reason" in m for m in applied)
+
+            with runner._get_db_connection() as conn:
+                cursor = conn.execute("PRAGMA table_info(memories)")
+                columns = [row[1] for row in cursor.fetchall()]
+                assert "retired_reason" in columns
+
+    def test_migration_016__is_idempotent_when_column_already_exists(self):
+        """Test that migration 016 does not fail if retired_reason already exists."""
+        with TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "test.db"
+            runner = MigrationRunner(db_path)
+
+            with runner._get_db_connection() as conn:
+                conn.execute("""
+                    CREATE TABLE hook_events (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        session_id TEXT NOT NULL,
+                        timestamp TEXT NOT NULL
+                    )
+                """)
+                conn.execute("""
+                    CREATE TABLE memories (
+                        id TEXT PRIMARY KEY,
+                        session_id TEXT NOT NULL,
+                        project_dir TEXT NOT NULL,
+                        memory_type TEXT NOT NULL,
+                        content TEXT NOT NULL,
+                        source_context TEXT,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT,
+                        retained INTEGER DEFAULT 0,
+                        superseded_by TEXT,
+                        retired_reason TEXT,
+                        embedding TEXT,
+                        metadata TEXT
+                    )
+                """)
+                conn.commit()
+
+            applied = runner.run_migrations()
+
+            assert len(applied) == EXPECTED_MIGRATION_COUNT
+
+            with runner._get_db_connection() as conn:
+                cursor = conn.execute("PRAGMA table_info(memories)")
+                columns = [row[1] for row in cursor.fetchall()]
+                assert columns.count("retired_reason") == 1

@@ -43,6 +43,33 @@ def get_default_config_dir() -> Path:
         return Path.home() / ".config" / app_name
 
 
+def get_claude_projects_dirs() -> list[Path]:
+    """Platform-specific directories where Claude Code stores project transcripts."""
+    if sys.platform == "win32":
+        base = Path(os.environ["LOCALAPPDATA"]) if os.environ.get("LOCALAPPDATA") else Path.home() / "AppData" / "Local"
+        return [base / "Claude" / "projects"]
+    elif sys.platform == "darwin":
+        return [Path.home() / "Library" / "Application Support" / "Claude" / "projects"]
+    else:
+        xdg_data_home = os.environ.get("XDG_DATA_HOME")
+        claude_xdg = Path(xdg_data_home) / "claude" / "projects" if xdg_data_home else None
+        default_claude = Path.home() / ".claude" / "projects"
+        if claude_xdg and claude_xdg.exists():
+            return [claude_xdg]
+        return [default_claude]
+
+
+def get_opencode_storage_root() -> Path:
+    """Platform-specific path to OpenCode's storage root directory."""
+    if sys.platform == "win32":
+        base = Path(os.environ["LOCALAPPDATA"]) if os.environ.get("LOCALAPPDATA") else Path.home() / "AppData" / "Local"
+        return base / "opencode" / "storage"
+    xdg_data_home = os.environ.get("XDG_DATA_HOME")
+    if xdg_data_home:
+        return Path(xdg_data_home) / "opencode" / "storage"
+    return Path.home() / ".local" / "share" / "opencode" / "storage"
+
+
 class Settings(BaseSettings):
     """Application settings with support for .env files."""
 
@@ -97,13 +124,15 @@ class Settings(BaseSettings):
         description="Extract '## Development guidelines' from CLAUDE.md in stop hook feedback",
     )
 
-    llm_proxy_url: str = ""
-    llm_proxy_api_key: str = ""
-    llm_responses_url: str = ""
-    anthropic_url: str = Field(
-        default="", description="Base URL for Anthropic-compatible API endpoint (e.g. sglang MiniMax endpoint)"
+    llm_proxy_url: str = Field(
+        default="",
+        description="OpenAI-compatible base URL for the MiniMax-M3 vLLM endpoint",
     )
-    anthropic_api_key: SecretStr = Field(default=SecretStr(""), description="API key for Anthropic-compatible provider")
+    llm_proxy_api_key: str = ""
+    llm_model_name: str = Field(
+        default="olka-fi/MiniMax-M3-MXFP4",
+        description="Served model name on the MiniMax-M3 vLLM endpoint",
+    )
     interactive_rating_enabled: bool = False
 
     hf_token: str = ""
@@ -112,11 +141,6 @@ class Settings(BaseSettings):
     offline_mode: bool = Field(
         default=True,
         description="Disables all external LLM requests from slopometry. Set to False to enable AI features.",
-    )
-
-    user_story_agent: str = Field(
-        default="gpt_oss_120b",
-        description="Agent to use for user story generation. Options: gpt_oss_120b, gemini, minimax",
     )
 
     enable_working_at_microsoft: bool = Field(
@@ -202,6 +226,71 @@ class Settings(BaseSettings):
     )
     impact_mi_weight: float = Field(
         default=0.50, description="Weight for Maintainability Index in impact score calculation"
+    )
+
+    memory_llm_endpoint: str = Field(
+        default="",
+        description="LLM endpoint for memory extraction; must be set explicitly",
+    )
+    memory_llm_model: str = Field(
+        default="",
+        description="Model for memory extraction; must be set explicitly",
+    )
+    memory_llm_api_key: SecretStr = Field(
+        default=SecretStr(""),
+        description="API key for memory LLM endpoint",
+    )
+    memory_retention_days: int = Field(
+        default=365,
+        description="Days to retain memories",
+    )
+
+    memory_embedding_api_key: SecretStr = Field(
+        default=SecretStr(""),
+        description="API key for memory embedding endpoint",
+    )
+    memory_embedding_endpoint: str = Field(
+        default="",
+        description="Embedding model endpoint for memory similarity; must be set explicitly",
+    )
+    memory_embedding_model: str = Field(
+        default="",
+        description="Embedding model name; must be set explicitly",
+    )
+
+    freshness_threshold_floor: float = Field(
+        default=0.45,
+        description="Minimum dedupe similarity threshold; derived threshold never goes below this",
+    )
+    freshness_threshold_ceiling: float = Field(
+        default=0.95,
+        description="Maximum dedupe similarity threshold; derived threshold never goes above this",
+    )
+
+    memory_query_limit: int = Field(
+        default=200,
+        description="Maximum number of memories to load for freshness validation and staleness audit",
+    )
+    memory_transcript_truncation_chars: int = Field(
+        default=15000,
+        description="Maximum characters of transcript text sent to the LLM for staleness audit",
+    )
+    memory_prune_transcript_window: int = Field(
+        default=3,
+        description="Number of most recent transcripts to use as context for prune-memories",
+    )
+    memory_reconciliation_max_tokens: int = Field(
+        default=200,
+        description="Max tokens for LLM reconciliation judge responses",
+    )
+    memory_staleness_audit_max_tokens: int = Field(
+        default=1000,
+        description="Max tokens for LLM staleness audit responses",
+    )
+
+    stdin_timeout_seconds: float = Field(
+        default=5.0,
+        description="Seconds to wait for stdin input in hook dispatch before giving up",
     )
 
     @field_validator("baseline_strategy", mode="before")

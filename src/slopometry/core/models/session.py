@@ -5,7 +5,8 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 from slopometry.core.models.complexity import ComplexityDelta, ExtendedComplexityMetrics
-from slopometry.core.models.hook import AgentTool, GitState, HookEventType, Project, ToolType
+from slopometry.core.models.hook import AgentTool, GitState, Project
+from slopometry.core.models.protocol.events import AbstractEventType
 
 
 class TodoItem(BaseModel):
@@ -248,8 +249,11 @@ class SessionStatistics(BaseModel):
     end_time: datetime | None = None
     total_events: int = 0
     working_directory: str
-    events_by_type: dict[HookEventType, int] = Field(default_factory=dict)
-    tool_usage: dict[ToolType, int] = Field(default_factory=dict)
+    events_by_type: dict[AbstractEventType, int] = Field(default_factory=dict)
+    tool_usage: dict[str, int] = Field(
+        default_factory=dict,
+        description="Tool usage counts keyed by PascalCase tool type string (e.g., 'Bash', 'Read')",
+    )
     error_count: int = 0
     total_duration_ms: int = 0
     average_tool_duration_ms: float = 0.0

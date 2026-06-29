@@ -1,15 +1,21 @@
-"""Integration test for NotebookRead hook handling."""
+"""Integration test for NotebookRead hook handling via ClaudeCodeAdapter.
 
-from slopometry.core.hook_handler import parse_hook_input
-from slopometry.core.models.hook import PostToolUseInput
+Migrated from `parse_hook_input(raw)` + `PostToolUseInput` validation. The
+adapter handles list-typed tool_response internally — these tests verify
+end-to-end that a NotebookRead payload (list-shaped tool_response) round-trips
+through parse() with the cells preserved.
+"""
+
+from slopometry.core.models.protocol.events import AbstractEventType
+from slopometry.core.protocol.adapters.claude_code import ClaudeCodeAdapter
 
 
 class TestNotebookReadIntegration:
-    """Test NotebookRead integration with hook handler."""
+    """Test NotebookRead integration with the Claude Code adapter."""
 
-    def test_parse_hook_input_with_notebookread_response__handles_list_correctly(self):
-        """Test that parse_hook_input can handle NotebookRead responses with lists."""
-        # This simulates the exact data structure that was causing the validation error
+    def test_parse_notebookread_response__preserves_cells_correctly(self):
+        """Adapter.parse() preserves the full NotebookRead list response."""
+        adapter = ClaudeCodeAdapter()
         raw_hook_data = {
             "session_id": "test_session_123",
             "transcript_path": "/path/to/transcript.jsonl",
@@ -27,21 +33,21 @@ class TestNotebookReadIntegration:
             ],
         }
 
-        # This should not raise a ValidationError anymore
-        parsed_input = parse_hook_input(raw_hook_data)
+        event = adapter.parse(raw_hook_data, working_directory="/repo")
 
-        # PostToolUse data should parse to PostToolUseInput
-        assert isinstance(parsed_input, PostToolUseInput)
-        assert parsed_input.session_id == "test_session_123"
-        assert parsed_input.tool_name == "NotebookRead"
-        assert isinstance(parsed_input.tool_response, list)
-        assert len(parsed_input.tool_response) == 2
-        assert parsed_input.tool_response[0]["cellType"] == "markdown"
-        assert parsed_input.tool_response[1]["cellType"] == "code"
-        assert "python" in parsed_input.tool_response[1]["language"]
+        assert event.session_id == "test_session_123"
+        assert event.event_type == AbstractEventType.TOOL_CALL_COMPLETED
+        assert event.tool_call is not None
+        assert event.tool_call.tool_name == "NotebookRead"
+        assert isinstance(event.tool_call.output, list)
+        assert len(event.tool_call.output) == 2
+        assert event.tool_call.output[0]["cellType"] == "markdown"
+        assert event.tool_call.output[1]["cellType"] == "code"
+        assert "python" in event.tool_call.output[1]["language"]
 
-    def test_parse_hook_input_with_notebookread_empty_response__handles_empty_list(self):
-        """Test that parse_hook_input can handle empty NotebookRead responses."""
+    def test_parse_notebookread_empty_response__preserves_empty_list(self):
+        """Adapter.parse() handles empty NotebookRead responses (no cells)."""
+        adapter = ClaudeCodeAdapter()
         raw_hook_data = {
             "session_id": "test_session_456",
             "transcript_path": "/path/to/transcript.jsonl",
@@ -50,12 +56,10 @@ class TestNotebookReadIntegration:
             "tool_response": [],
         }
 
-        # This should not raise a ValidationError
-        parsed_input = parse_hook_input(raw_hook_data)
+        event = adapter.parse(raw_hook_data, working_directory="/repo")
 
-        # PostToolUse data should parse to PostToolUseInput
-        assert isinstance(parsed_input, PostToolUseInput)
-        assert parsed_input.session_id == "test_session_456"
-        assert parsed_input.tool_name == "NotebookRead"
-        assert isinstance(parsed_input.tool_response, list)
-        assert len(parsed_input.tool_response) == 0
+        assert event.session_id == "test_session_456"
+        assert event.tool_call is not None
+        assert event.tool_call.tool_name == "NotebookRead"
+        assert isinstance(event.tool_call.output, list)
+        assert len(event.tool_call.output) == 0

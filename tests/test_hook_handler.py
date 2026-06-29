@@ -1,4 +1,10 @@
-"""Tests for hook handler functionality."""
+"""Tests for hook handler functionality — feedback pipeline, smoke tests, working-tree probes.
+
+Pure handler-level tests. Detailed wire-format parsing/detection lives in
+`test_claude_code_adapter.py` since the wire-validation models (PreToolUseInput,
+PostToolUseInput, NotificationInput, StopInput, SubagentStopInput) have been
+replaced by `ClaudeCodeAdapter.parse()` / `ClaudeCodeAdapter.detect_event_type()`.
+"""
 
 import json
 import subprocess
@@ -14,179 +20,20 @@ from slopometry.core.hook_handler import (
     _has_analyzable_source_files,
     _has_source_changes,
     _resolve_working_directory,
-    detect_event_type_from_parsed,
     extract_dev_guidelines_from_claude_md,
     format_code_smell_feedback,
     format_context_coverage_feedback,
     handle_hook,
     handle_stop_event,
-    parse_hook_input,
     scope_smells_for_session,
 )
 from slopometry.core.models.baseline import ImpactAssessment, ImpactCategory, ZScoreInterpretation
 from slopometry.core.models.complexity import ComplexityDelta, ExtendedComplexityMetrics
-from slopometry.core.models.hook import (
-    FeedbackCacheState,
-    HookEventType,
-    NotificationInput,
-    PostToolUseInput,
-    PreToolUseInput,
-    StopInput,
-    SubagentStopInput,
-)
+from slopometry.core.models.hook import FeedbackCacheState
+from slopometry.core.models.protocol.events import AbstractEventType
 from slopometry.core.models.session import ContextCoverage, FileCoverageStatus
 from slopometry.core.models.smell import SmellField
 from slopometry.display.formatters import _interpret_z_score
-
-
-class TestEventTypeDetection:
-    """Test the pattern match logic for detecting event types."""
-
-    def test_pre_tool_use_input_detection(self):
-        """Test that PreToolUseInput maps to PRE_TOOL_USE event type."""
-        input_data = PreToolUseInput(
-            session_id="test-session",
-            transcript_path="/tmp/test.jsonl",
-            tool_name="Bash",
-            tool_input={"command": "ls"},
-        )
-
-        result = detect_event_type_from_parsed(input_data)
-
-        assert result == HookEventType.PRE_TOOL_USE
-
-    def test_post_tool_use_input_detection(self):
-        """Test that PostToolUseInput maps to POST_TOOL_USE event type."""
-        input_data = PostToolUseInput(
-            session_id="test-session",
-            transcript_path="/tmp/test.jsonl",
-            tool_name="Bash",
-            tool_input={"command": "ls"},
-            tool_response={"success": True},
-        )
-
-        result = detect_event_type_from_parsed(input_data)
-
-        assert result == HookEventType.POST_TOOL_USE
-
-    def test_notification_input_detection(self):
-        """Test that NotificationInput maps to NOTIFICATION event type."""
-        input_data = NotificationInput(
-            session_id="test-session",
-            transcript_path="/tmp/test.jsonl",
-            message="Test notification",
-            title="Test Title",
-        )
-
-        result = detect_event_type_from_parsed(input_data)
-
-        assert result == HookEventType.NOTIFICATION
-
-    def test_stop_input_detection(self):
-        """Test that StopInput maps to STOP event type."""
-        input_data = StopInput(
-            session_id="test-session",
-            transcript_path="/tmp/test.jsonl",
-            stop_hook_active=True,
-        )
-
-        result = detect_event_type_from_parsed(input_data)
-
-        assert result == HookEventType.STOP
-
-    def test_subagent_stop_input_detection(self):
-        """Test that SubagentStopInput maps to SUBAGENT_STOP event type."""
-        input_data = SubagentStopInput(
-            session_id="test-session",
-            transcript_path="/tmp/test.jsonl",
-            stop_hook_active=True,
-        )
-
-        result = detect_event_type_from_parsed(input_data)
-
-        assert result == HookEventType.SUBAGENT_STOP
-
-    def test_all_input_types_are_handled(self):
-        """Test that all defined input types have corresponding pattern matches.
-
-        This test ensures we don't forget to update the pattern match when adding new input types.
-        """
-        input_types = [
-            PreToolUseInput(
-                session_id="test",
-                transcript_path="/tmp/test.jsonl",
-                tool_name="Test",
-            ),
-            PostToolUseInput(
-                session_id="test",
-                transcript_path="/tmp/test.jsonl",
-                tool_name="Test",
-                tool_response="success",
-            ),
-            NotificationInput(
-                session_id="test",
-                transcript_path="/tmp/test.jsonl",
-                message="test",
-            ),
-            StopInput(
-                session_id="test",
-                transcript_path="/tmp/test.jsonl",
-            ),
-            SubagentStopInput(
-                session_id="test",
-                transcript_path="/tmp/test.jsonl",
-            ),
-        ]
-
-        expected_types = [
-            HookEventType.PRE_TOOL_USE,
-            HookEventType.POST_TOOL_USE,
-            HookEventType.NOTIFICATION,
-            HookEventType.STOP,
-            HookEventType.SUBAGENT_STOP,
-        ]
-
-        for input_data, expected_type in zip(input_types, expected_types):
-            result = detect_event_type_from_parsed(input_data)
-            assert result == expected_type, f"Input {type(input_data).__name__} should map to {expected_type}"
-
-
-def test_parse_hook_input__stop_hook_active_true_returns_subagent_stop():
-    """Test that stop_hook_active=true is parsed as SubagentStopInput."""
-    raw_data = {
-        "session_id": "test-session",
-        "transcript_path": "/tmp/test.jsonl",
-        "stop_hook_active": True,
-    }
-
-    result = parse_hook_input(raw_data)
-
-    assert isinstance(result, SubagentStopInput)
-
-
-def test_parse_hook_input__stop_hook_active_false_returns_stop():
-    """Test that stop_hook_active=false is parsed as StopInput."""
-    raw_data = {
-        "session_id": "test-session",
-        "transcript_path": "/tmp/test.jsonl",
-        "stop_hook_active": False,
-    }
-
-    result = parse_hook_input(raw_data)
-
-    assert isinstance(result, StopInput)
-
-
-def test_parse_hook_input__stop_hook_active_omitted_returns_stop():
-    """Test that missing stop_hook_active is parsed as StopInput."""
-    raw_data = {
-        "session_id": "test-session",
-        "transcript_path": "/tmp/test.jsonl",
-    }
-
-    result = parse_hook_input(raw_data)
-
-    assert isinstance(result, StopInput)
 
 
 class TestExtractDevGuidelines:
@@ -234,20 +81,20 @@ class TestFormatCodeSmellFeedback:
 
     def _make_metrics(self, **kwargs) -> ExtendedComplexityMetrics:
         """Create metrics with sensible defaults."""
-        defaults = dict(
-            total_complexity=0,
-            average_complexity=0,
-            total_volume=0,
-            total_effort=0,
-            total_difficulty=0,
-            average_volume=0,
-            average_effort=0,
-            average_difficulty=0,
-            total_mi=0,
-            average_mi=0,
-        )
+        defaults: dict[str, object] = {
+            "total_complexity": 0,
+            "average_complexity": 0.0,
+            "total_volume": 0.0,
+            "total_effort": 0.0,
+            "total_difficulty": 0.0,
+            "average_volume": 0.0,
+            "average_effort": 0.0,
+            "average_difficulty": 0.0,
+            "total_mi": 0.0,
+            "average_mi": 0.0,
+        }
         defaults.update(kwargs)
-        return ExtendedComplexityMetrics(**defaults)
+        return ExtendedComplexityMetrics.model_validate(defaults)
 
     def test_format_code_smell_feedback__returns_empty_when_no_smells(self):
         """Test returns empty when no smells detected."""
@@ -340,6 +187,81 @@ class TestFormatCodeSmellFeedback:
             assert "Swallowed Exceptions" in feedback
             assert "BLOCKING" in feedback
             assert "table" in feedback
+
+    def test_format_code_smell_feedback__swallow_hint_shown_when_swallowed_blocking(self):
+        """Concrete marker comment format appears after ACTION REQUIRED when swallow-related smell blocks."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            subprocess.run(["git", "init"], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=tmppath, capture_output=True)
+
+            src_dir = tmppath / "src"
+            src_dir.mkdir()
+            (src_dir / "bar.py").write_text("def bar(): pass")
+            subprocess.run(["git", "add", "."], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=tmppath, capture_output=True)
+
+            metrics = self._make_metrics(
+                swallowed_exception_count=1,
+                swallowed_exception_files=["src/bar.py"],
+            )
+            scoped = scope_smells_for_session(metrics, None, {"src/bar.py"}, str(tmppath))
+            feedback, _, _ = format_code_smell_feedback(scoped)
+
+            assert "# slopometry: allow-silent" in feedback
+            assert "lock already released on context exit" in feedback
+            assert "**To acknowledge after review**" in feedback
+            assert "Place `# slopometry: allow-silent - <short reason>`" in feedback
+
+    def test_format_code_smell_feedback__swallow_hint_shown_when_acknowledged_increased(self):
+        """Hint also appears when acknowledged_silent_except increases (potential mass-suppression)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            subprocess.run(["git", "init"], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=tmppath, capture_output=True)
+
+            src_dir = tmppath / "src"
+            src_dir.mkdir()
+            (src_dir / "bar.py").write_text("def bar(): pass")
+            subprocess.run(["git", "add", "."], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=tmppath, capture_output=True)
+
+            metrics = self._make_metrics(
+                acknowledged_silent_except_count=3,
+                acknowledged_silent_except_files=["src/bar.py"],
+            )
+            delta = ComplexityDelta(acknowledged_silent_except_change=2)
+            scoped = scope_smells_for_session(metrics, delta, {"src/bar.py"}, str(tmppath))
+            feedback, _, _ = format_code_smell_feedback(scoped)
+
+            assert "# slopometry: allow-silent" in feedback
+            assert "lock already released on context exit" in feedback
+
+    def test_format_code_smell_feedback__swallow_hint_absent_when_no_swallow_smell(self):
+        """Hint does NOT appear when a non-swallow smell is blocking."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmppath = Path(tmpdir)
+            subprocess.run(["git", "init"], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "config", "user.name", "Test"], cwd=tmppath, capture_output=True)
+
+            src_dir = tmppath / "src"
+            src_dir.mkdir()
+            (src_dir / "bar.py").write_text("def bar(): pass")
+            subprocess.run(["git", "add", "."], cwd=tmppath, capture_output=True)
+            subprocess.run(["git", "commit", "-m", "init"], cwd=tmppath, capture_output=True)
+
+            metrics = self._make_metrics(
+                test_skip_count=1,
+                test_skip_files=["src/bar.py"],
+            )
+            scoped = scope_smells_for_session(metrics, None, {"src/bar.py"}, str(tmppath))
+            feedback, _, _ = format_code_smell_feedback(scoped)
+
+            assert "**To acknowledge after review**" not in feedback
+            assert "lock already released on context exit" not in feedback
 
     def test_format_code_smell_feedback__test_skips_are_blocking(self):
         """Test that test skips are marked as blocking when related file edited."""
@@ -574,20 +496,20 @@ class TestScopeSmellsForSession:
 
     def _make_metrics(self, **kwargs) -> ExtendedComplexityMetrics:
         """Create metrics with sensible defaults."""
-        defaults = dict(
-            total_complexity=0,
-            average_complexity=0,
-            total_volume=0,
-            total_effort=0,
-            total_difficulty=0,
-            average_volume=0,
-            average_effort=0,
-            average_difficulty=0,
-            total_mi=0,
-            average_mi=0,
-        )
+        defaults: dict[str, object] = {
+            "total_complexity": 0,
+            "average_complexity": 0.0,
+            "total_volume": 0.0,
+            "total_effort": 0.0,
+            "total_difficulty": 0.0,
+            "average_volume": 0.0,
+            "average_effort": 0.0,
+            "average_difficulty": 0.0,
+            "total_mi": 0.0,
+            "average_mi": 0.0,
+        }
         defaults.update(kwargs)
-        return ExtendedComplexityMetrics(**defaults)
+        return ExtendedComplexityMetrics.model_validate(defaults)
 
     def test_scope_smells_for_session__returns_empty_when_no_smells(self):
         """Test returns empty list when metrics have no smells."""
@@ -991,8 +913,8 @@ class TestHookHandlerSmokeTests:
 
         original_init = SessionManager.__init__
 
-        def _isolated_init(self_inner):
-            original_init(self_inner)
+        def _isolated_init(self_inner, source: str, state_root=None):
+            original_init(self_inner, source, state_root=state_dir)
             self_inner.state_dir = state_dir
 
         with (
@@ -1034,7 +956,7 @@ class TestHookHandlerSmokeTests:
         }
 
         with patch("slopometry.core.hook_handler._read_stdin_with_timeout", return_value=json.dumps(input_data)):
-            result = handle_hook(event_type_override=HookEventType.PRE_TOOL_USE)
+            result = handle_hook(event_type_override=AbstractEventType.TOOL_CALL_STARTED)
 
         assert result == 0
 
@@ -1050,7 +972,7 @@ class TestHookHandlerSmokeTests:
         }
 
         with patch("slopometry.core.hook_handler._read_stdin_with_timeout", return_value=json.dumps(input_data)):
-            result = handle_hook(event_type_override=HookEventType.POST_TOOL_USE)
+            result = handle_hook(event_type_override=AbstractEventType.TOOL_CALL_COMPLETED)
 
         assert result == 0
 
@@ -1064,7 +986,7 @@ class TestHookHandlerSmokeTests:
         }
 
         with patch("slopometry.core.hook_handler._read_stdin_with_timeout", return_value=json.dumps(input_data)):
-            result = handle_hook(event_type_override=HookEventType.NOTIFICATION)
+            result = handle_hook(event_type_override=AbstractEventType.NOTIFICATION)
 
         assert result == 0
 
@@ -1088,7 +1010,7 @@ class TestHookHandlerSmokeTests:
                 patch("slopometry.core.hook_handler._read_stdin_with_timeout", return_value=json.dumps(input_data)),
                 patch("os.getcwd", return_value=str(tmppath)),
             ):
-                result = handle_hook(event_type_override=HookEventType.STOP)
+                result = handle_hook(event_type_override=AbstractEventType.TURN_COMPLETED)
 
             # Stop hook returns 0 (no feedback) or 2 (with feedback) - both are valid
             assert result in (0, 2)
@@ -1103,7 +1025,7 @@ class TestHookHandlerSmokeTests:
         }
 
         with patch("slopometry.core.hook_handler._read_stdin_with_timeout", return_value=json.dumps(input_data)):
-            result = handle_hook(event_type_override=HookEventType.STOP)
+            result = handle_hook(event_type_override=AbstractEventType.TURN_COMPLETED)
 
         # Subagent stops should return 0 (no feedback for subagents)
         assert result == 0
@@ -1206,27 +1128,28 @@ class TestHasAnalyzableSourceFiles:
 class TestHandleStopEventEarlyExits:
     """Tests for handle_stop_event early exit paths."""
 
-    def test_handle_stop_event__returns_zero_when_stop_hook_active(self):
-        """Subagent stops (stop_hook_active=True) should exit immediately."""
-        parsed = SubagentStopInput(
-            session_id="test",
-            transcript_path="/tmp/t.jsonl",
-            stop_hook_active=True,
-        )
-        assert handle_stop_event("test", parsed) == 0
+    def test_handle_stop_event__returns_zero_when_no_session_data(self):
+        """Subagent stops (stop_hook_active=True) and any other stop event with no DB data exit 0.
 
-    def test_handle_stop_event__returns_zero_when_no_working_directory(self):
-        """Returns 0 when session has no events (no working directory found)."""
-        parsed = StopInput(
-            session_id="nonexistent-session-xyz",
-            transcript_path="/tmp/t.jsonl",
-            stop_hook_active=False,
-        )
+        Original test passed SubagentStopInput; legacy early-exit is now folded into
+        handle_stop_event's "no working_directory" path. The semantic guarantee
+        preserved: when there's nothing to analyze, return 0 without expensive work.
+        """
         with patch("slopometry.core.hook_handler.EventDatabase") as mock_db_cls:
             mock_db = mock_db_cls.return_value
             mock_db.get_session_working_directory.return_value = None
 
-            assert handle_stop_event("nonexistent-session-xyz", parsed) == 0
+            assert handle_stop_event("test") == 0
+            mock_db.get_session_working_directory.assert_called_once_with("test")
+            mock_db.get_session_statistics.assert_not_called()
+
+    def test_handle_stop_event__returns_zero_when_no_working_directory(self):
+        """Returns 0 when session has no events (no working directory found)."""
+        with patch("slopometry.core.hook_handler.EventDatabase") as mock_db_cls:
+            mock_db = mock_db_cls.return_value
+            mock_db.get_session_working_directory.return_value = None
+
+            assert handle_stop_event("nonexistent-session-xyz") == 0
             mock_db.get_session_working_directory.assert_called_once_with("nonexistent-session-xyz")
             # get_session_statistics should NOT have been called
             mock_db.get_session_statistics.assert_not_called()
@@ -1238,11 +1161,6 @@ class TestHandleStopEventEarlyExits:
         content key hashes every source file. The fast-path uses only a few git
         commands and bails before reading any file content.
         """
-        parsed = StopInput(
-            session_id="test-fast-cache",
-            transcript_path="/tmp/t.jsonl",
-            stop_hook_active=False,
-        )
         with (
             patch("slopometry.core.hook_handler.EventDatabase") as mock_db_cls,
             patch("slopometry.core.hook_handler._load_feedback_cache") as mock_cache,
@@ -1258,18 +1176,13 @@ class TestHandleStopEventEarlyExits:
             mock_sha.return_value = "abc123def"  # Same commit
             mock_changes.return_value = False  # No source delta (no mods, no new files)
 
-            assert handle_stop_event("test-fast-cache", parsed) == 0
+            assert handle_stop_event("test-fast-cache") == 0
             # The expensive full key computation should NOT have been called
             mock_full_key.assert_not_called()
             mock_db.get_session_statistics.assert_not_called()
 
     def test_handle_stop_event__falls_through_when_commit_sha_differs(self, tmp_path):
         """When commit SHA changed, fast-path doesn't match, falls to full check."""
-        parsed = StopInput(
-            session_id="test-new-commit",
-            transcript_path="/tmp/t.jsonl",
-            stop_hook_active=False,
-        )
         with (
             patch("slopometry.core.hook_handler.EventDatabase") as mock_db_cls,
             patch("slopometry.core.hook_handler._load_feedback_cache") as mock_cache,
@@ -1287,17 +1200,12 @@ class TestHandleStopEventEarlyExits:
             # Make it bail at the source files check for simplicity
             mock_has_src.return_value = False
 
-            assert handle_stop_event("test-new-commit", parsed) == 0
+            assert handle_stop_event("test-new-commit") == 0
             # _has_source_changes should NOT be called (SHA mismatch short-circuits)
             mock_has_src.assert_called_once()
 
     def test_handle_stop_event__legacy_cache_without_commit_sha_falls_through(self, tmp_path):
         """Caches from before the commit_sha field skip the fast-path gracefully."""
-        parsed = StopInput(
-            session_id="test-legacy-cache",
-            transcript_path="/tmp/t.jsonl",
-            stop_hook_active=False,
-        )
         with (
             patch("slopometry.core.hook_handler.EventDatabase") as mock_db_cls,
             patch("slopometry.core.hook_handler._load_feedback_cache") as mock_cache,
@@ -1313,17 +1221,12 @@ class TestHandleStopEventEarlyExits:
             # Make it bail at source files check
             mock_has_src.return_value = False
 
-            assert handle_stop_event("test-legacy-cache", parsed) == 0
+            assert handle_stop_event("test-legacy-cache") == 0
             # Should fall through to _has_analyzable_source_files, not crash
             mock_has_src.assert_called_once()
 
     def test_handle_stop_event__full_cache_key_hit_after_fast_path_miss(self, tmp_path):
         """When fast-path misses (source modifications) but full key matches, still returns 0."""
-        parsed = StopInput(
-            session_id="test-full-key-hit",
-            transcript_path="/tmp/t.jsonl",
-            stop_hook_active=False,
-        )
         with (
             patch("slopometry.core.hook_handler.EventDatabase") as mock_db_cls,
             patch("slopometry.core.hook_handler._load_feedback_cache") as mock_cache,
@@ -1342,17 +1245,12 @@ class TestHandleStopEventEarlyExits:
             mock_has_src.return_value = True
             mock_full_key.return_value = "full_key_abc"  # But full key matches
 
-            assert handle_stop_event("test-full-key-hit", parsed) == 0
+            assert handle_stop_event("test-full-key-hit") == 0
             mock_full_key.assert_called_once()
             mock_db.get_session_statistics.assert_not_called()
 
     def test_handle_stop_event__returns_zero_when_no_source_files(self, tmp_path):
         """Returns 0 without computing stats when repo has no analyzable source files."""
-        parsed = StopInput(
-            session_id="test-no-source",
-            transcript_path="/tmp/t.jsonl",
-            stop_hook_active=False,
-        )
         with (
             patch("slopometry.core.hook_handler.EventDatabase") as mock_db_cls,
             patch("slopometry.core.hook_handler._load_feedback_cache") as mock_cache,
@@ -1364,7 +1262,7 @@ class TestHandleStopEventEarlyExits:
             mock_cache.return_value = None  # No cache (first run)
             mock_has_src.return_value = False  # No Python/Rust files
 
-            assert handle_stop_event("test-no-source", parsed) == 0
+            assert handle_stop_event("test-no-source") == 0
             mock_db.get_session_statistics.assert_not_called()
             mock_has_src.assert_called_once_with(str(tmp_path))
 

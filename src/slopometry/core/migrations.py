@@ -508,6 +508,67 @@ class Migration014AddBehavioralPatternHistory(Migration):
         )
 
 
+class Migration015AbstractEventTypeValues(Migration):
+    """Translate legacy PascalCase event_type values into the new snake_case
+    abstract protocol values. Existing rows are rewritten; the column type is
+    unchanged (TEXT), only the string content shifts.
+    """
+
+    _RENAMES: dict[str, str] = {
+        "PreToolUse": "tool_call_started",
+        "PostToolUse": "tool_call_completed",
+        "Notification": "notification",
+        "Stop": "turn_completed",
+        "SubagentStop": "subagent_completed",
+        "TodoUpdated": "todo_updated",
+        "MessageUpdated": "message_updated",
+        "SubagentStart": "subagent_started",
+    }
+
+    @property
+    def version(self) -> str:
+        return "015"
+
+    @property
+    def description(self) -> str:
+        return "Translate event_type values from PascalCase (legacy Claude Code/OpenCode wire names) to snake_case (abstract protocol)"
+
+    def up(self, conn: sqlite3.Connection) -> None:
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='hook_events'")
+        if not cursor.fetchone():
+            return
+        cursor = conn.execute("PRAGMA table_info(hook_events)")
+        if not any(row[1] == "event_type" for row in cursor.fetchall()):
+            return
+        for legacy, abstract in self._RENAMES.items():
+            conn.execute(
+                "UPDATE hook_events SET event_type = ? WHERE event_type = ?",
+                (abstract, legacy),
+            )
+
+
+class Migration016AddRetiredReasonToMemories(Migration):
+    """Add retired_reason column to memories for staleness audit retirement."""
+
+    @property
+    def version(self) -> str:
+        return "016"
+
+    @property
+    def description(self) -> str:
+        return "Add retired_reason column to memories for staleness audit retirement"
+
+    def up(self, conn: sqlite3.Connection) -> None:
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='memories'")
+        if not cursor.fetchone():
+            return
+        try:
+            conn.execute("ALTER TABLE memories ADD COLUMN retired_reason TEXT")
+        except sqlite3.OperationalError as e:
+            if "duplicate column name" not in str(e).lower():
+                raise
+
+
 class MigrationRunner:
     """Manages database migrations."""
 
@@ -528,6 +589,8 @@ class MigrationRunner:
             Migration012AddNFPObjectiveToExperimentRuns(),
             Migration013AddSourceAndParentSession(),
             Migration014AddBehavioralPatternHistory(),
+            Migration015AbstractEventTypeValues(),
+            Migration016AddRetiredReasonToMemories(),
         ]
 
     @contextmanager

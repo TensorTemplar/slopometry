@@ -1,7 +1,7 @@
 """Baseline computation, impact assessment, and statistical models."""
 
 from datetime import datetime
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -10,7 +10,7 @@ from slopometry.core.models.hook import AnalysisSource
 from slopometry.core.models.smell import SmellCounts
 
 
-class BaselineStrategy(str, Enum):
+class BaselineStrategy(StrEnum):
     """How to select commits for building the historic quality baseline.
 
     MERGE_ANCHORED: Follows first-parent (trunk) history, so each delta represents
@@ -185,7 +185,7 @@ class RepoBaseline(BaseModel):
     )
 
 
-class ImpactCategory(str, Enum):
+class ImpactCategory(StrEnum):
     """Categories for staged changes impact assessment."""
 
     SIGNIFICANT_IMPROVEMENT = "significant_improvement"
@@ -195,7 +195,7 @@ class ImpactCategory(str, Enum):
     SIGNIFICANT_DEGRADATION = "significant_degradation"
 
 
-class ZScoreInterpretation(str, Enum):
+class ZScoreInterpretation(StrEnum):
     """Human-readable interpretation of Z-score values."""
 
     MUCH_BETTER = "much better than avg"

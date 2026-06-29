@@ -1,0 +1,7 @@
+{
+  "include": ["src/slopometry", "tests"],
+  "exclude": ["**/__pycache__"],
+  "extraPaths": [".venv/lib/python3.13/site-packages", "src/slopometry"],
+  "pythonVersion": "3.13",
+  "typeCheckingMode": "basic"
+}

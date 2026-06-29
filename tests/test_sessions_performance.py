@@ -5,7 +5,14 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from slopometry.core.database import EventDatabase
-from slopometry.core.models.hook import HookEvent, HookEventType, Project, ProjectSource, ToolType
+from slopometry.core.models.hook import Project, ProjectSource
+from slopometry.core.models.protocol.events import (
+    AbstractEventSource,
+    AbstractEventType,
+    AbstractHookEvent,
+    ToolCallPayload,
+)
+from slopometry.core.protocol.adapters.claude_code import ToolType
 from slopometry.solo.services.session_service import SessionService
 
 
@@ -21,28 +28,40 @@ class TestSessionsPerformance:
             base_time = datetime.now()
 
             for i in range(5):
-                event = HookEvent(
+                tool_name = "bash" if i < 3 else ("read" if i == 3 else "write")
+                tool_type = ToolType.BASH if i < 3 else (ToolType.READ if i == 3 else ToolType.WRITE)
+                event = AbstractHookEvent(
                     session_id="session-001",
-                    event_type=HookEventType.PRE_TOOL_USE,
+                    event_type=AbstractEventType.TOOL_CALL_STARTED,
+                    source=AbstractEventSource.CLAUDE_CODE,
                     timestamp=base_time + timedelta(minutes=i),
                     sequence_number=i + 1,
                     working_directory="/test",
                     project=Project(name="project-a", source=ProjectSource.GIT),
-                    tool_name="bash" if i < 3 else ("read" if i == 3 else "write"),
-                    tool_type=ToolType.BASH if i < 3 else (ToolType.READ if i == 3 else ToolType.WRITE),
+                    tool_call=ToolCallPayload(
+                        tool_name=tool_name,
+                        tool_type=tool_type.value,
+                        input={},
+                    ),
                 )
                 db.save_event(event)
 
             for i in range(3):
-                event = HookEvent(
+                tool_name = "grep" if i < 2 else "ls"
+                tool_type = ToolType.GREP if i < 2 else ToolType.LS
+                event = AbstractHookEvent(
                     session_id="session-002",
-                    event_type=HookEventType.PRE_TOOL_USE,
+                    event_type=AbstractEventType.TOOL_CALL_STARTED,
+                    source=AbstractEventSource.CLAUDE_CODE,
                     timestamp=base_time + timedelta(hours=1, minutes=i),
                     sequence_number=i + 1,
                     working_directory="/test2",
                     project=Project(name="project-b", source=ProjectSource.PYPROJECT),
-                    tool_name="grep" if i < 2 else "ls",
-                    tool_type=ToolType.GREP if i < 2 else ToolType.LS,
+                    tool_call=ToolCallPayload(
+                        tool_name=tool_name,
+                        tool_type=tool_type.value,
+                        input={},
+                    ),
                 )
                 db.save_event(event)
 
@@ -77,14 +96,18 @@ class TestSessionsPerformance:
 
             base_time = datetime.now()
             for session_num in range(5):
-                event = HookEvent(
+                event = AbstractHookEvent(
                     session_id=f"session-{session_num:03d}",
-                    event_type=HookEventType.PRE_TOOL_USE,
+                    event_type=AbstractEventType.TOOL_CALL_STARTED,
+                    source=AbstractEventSource.CLAUDE_CODE,
                     timestamp=base_time + timedelta(minutes=session_num),
                     sequence_number=1,
                     working_directory="/test",
-                    tool_name="bash",
-                    tool_type=ToolType.BASH,
+                    tool_call=ToolCallPayload(
+                        tool_name="bash",
+                        tool_type=ToolType.BASH.value,
+                        input={},
+                    ),
                 )
                 db.save_event(event)
 
@@ -117,14 +140,13 @@ class TestSessionsPerformance:
             db_path = Path(temp_dir) / "test.db"
             db = EventDatabase(db_path)
 
-            event = HookEvent(
+            event = AbstractHookEvent(
                 session_id="session-001",
-                event_type=HookEventType.NOTIFICATION,
+                event_type=AbstractEventType.NOTIFICATION,
+                source=AbstractEventSource.CLAUDE_CODE,
                 timestamp=datetime.now(),
                 sequence_number=1,
                 working_directory="/test",
-                tool_name=None,
-                tool_type=None,
             )
             db.save_event(event)
 

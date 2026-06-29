@@ -49,7 +49,7 @@ def _analyze_single_file(file_path: Path) -> FileAnalysisResult:
     from slopometry.core.tokenizer import count_file_tokens
 
     try:
-        result = rca.analyze_file(str(file_path))
+        result = rca.analyze_file(str(file_path))  # pyright: ignore[reportAttributeAccessIssue]  # ty: ignore[unresolved-attribute]
         m = result.metrics
 
         cc_sum = sum(f.metrics.cyclomatic.sum for f in result.get_functions())
@@ -102,7 +102,7 @@ class CodeAnalyzer:
             FileAnalysisResult with metrics.
         """
         try:
-            result = self._rca.analyze_file(str(file_path))
+            result = self._rca.analyze_file(str(file_path))  # pyright: ignore[reportAttributeAccessIssue]  # ty: ignore[unresolved-attribute]
             m = result.metrics
 
             cc_sum = sum(f.metrics.cyclomatic.sum for f in result.get_functions())

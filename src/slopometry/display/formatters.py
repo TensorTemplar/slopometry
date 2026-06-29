@@ -21,7 +21,7 @@ from slopometry.core.models.display import (
     SessionDisplayData,
 )
 from slopometry.core.models.experiment import ProgressDisplayData
-from slopometry.core.models.hook import HookEventType, ToolType
+from slopometry.core.models.protocol.events import AbstractEventType
 from slopometry.core.models.session import (
     BehavioralPatterns,
     BehavioralPatternTrends,
@@ -316,7 +316,7 @@ def _display_behavioral_pattern_trends(trends: BehavioralPatternTrends) -> None:
     console.print(table)
 
 
-def _display_events_by_type_table(events_by_type: dict[HookEventType, int]) -> None:
+def _display_events_by_type_table(events_by_type: dict[AbstractEventType, int]) -> None:
     """Display events by type table."""
     table = Table(title="Events by Type")
     table.add_column("Event Type", style="cyan")
@@ -328,14 +328,14 @@ def _display_events_by_type_table(events_by_type: dict[HookEventType, int]) -> N
     console.print(table)
 
 
-def _display_tool_usage_table(tool_usage: dict[ToolType, int]) -> None:
+def _display_tool_usage_table(tool_usage: dict[str, int]) -> None:
     """Display tool usage table."""
     table = Table(title="Tool Usage")
     table.add_column("Tool", style="green")
     table.add_column("Count", justify="right")
 
     for tool_type, count in sorted(tool_usage.items(), key=lambda x: x[1], reverse=True):
-        table.add_row(tool_type.value, str(count))
+        table.add_row(tool_type, str(count))
 
     console.print(table)
 
@@ -576,60 +576,58 @@ def _display_complexity_delta(
     if not delta:
         return
 
-    has_baseline = baseline is not None and assessment is not None
-
     title = "Complexity Delta (vs Session Start)"
-    if has_baseline:
+    if baseline is not None:
         title += f" - Baseline: {baseline.total_commits_analyzed} commits"
     console.print(f"\n[bold]{title}[/bold]")
 
     changes_table = Table()
     changes_table.add_column("Metric", style="cyan")
     changes_table.add_column("Change", justify="right")
-    if has_baseline:
+    if baseline is not None:
         changes_table.add_column("vs Baseline", justify="right")
 
     cc_color = _color_for_positive_negative(delta.avg_complexity_change)
-    cc_baseline = _format_baseline_cell(assessment.cc_z_score, invert=True) if has_baseline else None
+    cc_baseline = _format_baseline_cell(assessment.cc_z_score, invert=True) if assessment is not None else None
     changes_table.add_row(
         "Average Cyclomatic Complexity",
         f"[{cc_color}]{delta.avg_complexity_change:+.2f}[/{cc_color}]",
-        cc_baseline if has_baseline else None,
+        cc_baseline if baseline is not None else None,
     )
 
     effort_color = _color_for_positive_negative(delta.avg_effort_change)
-    effort_baseline = _format_baseline_cell(assessment.effort_z_score, invert=True) if has_baseline else None
+    effort_baseline = _format_baseline_cell(assessment.effort_z_score, invert=True) if assessment is not None else None
     changes_table.add_row(
         "Average Effort",
         f"[{effort_color}]{delta.avg_effort_change:+.2f}[/{effort_color}]",
-        effort_baseline if has_baseline else None,
+        effort_baseline if baseline is not None else None,
     )
 
     mi_color = _color_for_positive_negative(delta.avg_mi_change, invert=True)
-    mi_baseline = _format_baseline_cell(assessment.mi_z_score, invert=False) if has_baseline else None
+    mi_baseline = _format_baseline_cell(assessment.mi_z_score, invert=False) if assessment is not None else None
     changes_table.add_row(
         "Maintainability (file avg)",
         f"[{mi_color}]{delta.avg_mi_change:+.2f}[/{mi_color}]",
-        mi_baseline if has_baseline else None,
+        mi_baseline if baseline is not None else None,
     )
 
     token_color = _color_for_positive_negative(delta.total_tokens_change, invert=True)
     changes_table.add_row(
         "Total Tokens",
         f"[{token_color}]{delta.total_tokens_change:+d}[/{token_color}]",
-        "" if has_baseline else None,
+        "" if baseline is not None else None,
     )
 
     file_color = _color_for_positive_negative(delta.net_files_change)
     changes_table.add_row(
         "Files changed",
         f"[{file_color}]{delta.net_files_change:+d}[/{file_color}] ({len(delta.files_added)} added, {len(delta.files_removed)} removed)",
-        "" if has_baseline else None,
+        "" if baseline is not None else None,
     )
 
     console.print(changes_table)
 
-    if has_baseline and assessment:
+    if assessment is not None:
         impact_color = _get_impact_color(assessment.impact_category)
         console.print(
             f"\n[bold]Overall Impact:[/bold] [{impact_color}]{assessment.impact_category.value.upper()}[/{impact_color}] "

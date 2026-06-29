@@ -1,27 +1,33 @@
-"""Hook-related models for Claude Code integration."""
+"""Hook-related base models — non-protocol types shared across the system.
 
-from datetime import datetime
-from enum import Enum
-from typing import Any
+The protocol-layer types (AbstractHookEvent, AbstractEventType, AbstractEventSource,
+ToolCallPayload) live in `core/protocol/events.py`. The Claude-Code-specific tool
+vocabulary (ToolType enum) lives in `core/protocol/adapters/claude_code.py`.
 
-from pydantic import BaseModel, Field
+Models kept here are harness-agnostic: project identification, git state, language
+guard, feedback cache, hook response shape.
+"""
+
+from enum import StrEnum
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
-class AgentTool(str, Enum):
+class AgentTool(StrEnum):
     """Agent tool that produced the session."""
 
     CLAUDE_CODE = "claude_code"
     OPENCODE = "opencode"
 
 
-class ProjectLanguage(str, Enum):
+class ProjectLanguage(StrEnum):
     """Supported languages for complexity analysis."""
 
     PYTHON = "python"
     RUST = "rust"
 
 
-class ProjectSource(str, Enum):
+class ProjectSource(StrEnum):
     """Source of project identification."""
 
     GIT = "git"
@@ -35,83 +41,6 @@ class Project(BaseModel):
     source: ProjectSource
 
 
-class EventSource(str, Enum):
-    """Source agent tool that generated the event."""
-
-    CLAUDE_CODE = "claude_code"
-    OPENCODE = "opencode"
-
-
-class HookEventType(str, Enum):
-    """Types of hook events from Claude Code and OpenCode."""
-
-    PRE_TOOL_USE = "PreToolUse"
-    POST_TOOL_USE = "PostToolUse"
-    NOTIFICATION = "Notification"
-    STOP = "Stop"
-    SUBAGENT_STOP = "SubagentStop"
-    # OpenCode-specific event types
-    TODO_UPDATED = "TodoUpdated"
-    MESSAGE_UPDATED = "MessageUpdated"
-    SUBAGENT_START = "SubagentStart"
-
-
-class ToolType(str, Enum):
-    """Known tool types in Claude Code."""
-
-    BASH = "Bash"
-    READ = "Read"
-    WRITE = "Write"
-    EDIT = "Edit"
-    MULTI_EDIT = "MultiEdit"
-    GREP = "Grep"
-    GLOB = "Glob"
-    LS = "LS"
-    TASK = "Task"
-    TODO_READ = "TodoRead"
-    TODO_WRITE = "TodoWrite"
-    TASK_CREATE = "TaskCreate"
-    TASK_UPDATE = "TaskUpdate"
-    TASK_LIST = "TaskList"
-    TASK_GET = "TaskGet"
-    WEB_FETCH = "WebFetch"
-    WEB_SEARCH = "WebSearch"
-    NOTEBOOK_READ = "NotebookRead"
-    NOTEBOOK_EDIT = "NotebookEdit"
-    EXIT_PLAN_MODE = "exit_plan_mode"
-
-    MCP_IDE_GET_DIAGNOSTICS = "mcp__ide__getDiagnostics"
-    MCP_IDE_EXECUTE_CODE = "mcp__ide__executeCode"
-    MCP_IDE_GET_WORKSPACE_INFO = "mcp__ide__getWorkspaceInfo"
-    MCP_IDE_GET_FILE_CONTENTS = "mcp__ide__getFileContents"
-    MCP_IDE_CREATE_FILE = "mcp__ide__createFile"
-    MCP_IDE_DELETE_FILE = "mcp__ide__deleteFile"
-    MCP_IDE_RENAME_FILE = "mcp__ide__renameFile"
-    MCP_IDE_SEARCH_FILES = "mcp__ide__searchFiles"
-    MCP_FILESYSTEM_READ = "mcp__filesystem__read"
-    MCP_FILESYSTEM_WRITE = "mcp__filesystem__write"
-    MCP_FILESYSTEM_LIST = "mcp__filesystem__list"
-    MCP_DATABASE_QUERY = "mcp__database__query"
-    MCP_DATABASE_SCHEMA = "mcp__database__schema"
-    MCP_WEB_SCRAPE = "mcp__web__scrape"
-    MCP_WEB_SEARCH = "mcp__web__search"
-    MCP_GITHUB_GET_REPO = "mcp__github__getRepo"
-    MCP_GITHUB_CREATE_ISSUE = "mcp__github__createIssue"
-    MCP_GITHUB_LIST_ISSUES = "mcp__github__listIssues"
-    MCP_SLACK_SEND_MESSAGE = "mcp__slack__sendMessage"
-    MCP_SLACK_LIST_CHANNELS = "mcp__slack__listChannels"
-    MCP_OTHER = "mcp__other"
-
-    OTHER = "Other"
-
-
-class AnalysisSource(str, Enum):
-    """Source of the impact analysis."""
-
-    UNCOMMITTED_CHANGES = "uncommitted_changes"
-    PREVIOUS_COMMIT = "previous_commit"
-
-
 class GitState(BaseModel):
     """Represents git repository state at a point in time."""
 
@@ -120,6 +49,13 @@ class GitState(BaseModel):
     has_uncommitted_changes: bool = False
     is_git_repo: bool = False
     commit_sha: str | None = None
+
+
+class AnalysisSource(StrEnum):
+    """Source of the impact analysis."""
+
+    UNCOMMITTED_CHANGES = "uncommitted_changes"
+    PREVIOUS_COMMIT = "previous_commit"
 
 
 class FeedbackCacheState(BaseModel):
@@ -141,90 +77,13 @@ class FeedbackCacheState(BaseModel):
     )
 
 
-class HookEvent(BaseModel):
-    """Represents a single hook invocation event."""
-
-    id: int | None = None
-    session_id: str
-    event_type: HookEventType
-    timestamp: datetime = Field(default_factory=datetime.now)
-    sequence_number: int
-    tool_name: str | None = None
-    tool_type: ToolType | None = None
-    metadata: dict = Field(default_factory=dict)
-    duration_ms: int | None = None
-    exit_code: int | None = None
-    error_message: str | None = None
-    git_state: GitState | None = None
-    working_directory: str
-    project: Project | None = None
-    transcript_path: str | None = None
-    source: EventSource = Field(default=EventSource.CLAUDE_CODE, description="Agent tool that generated this event")
-    parent_session_id: str | None = Field(default=None, description="Parent session ID for subagent sessions")
-
-
-class PreToolUseInput(BaseModel):
-    """Input structure for PreToolUse hooks based on Claude Code documentation."""
-
-    session_id: str
-    transcript_path: str
-    tool_name: str
-    tool_input: dict[str, Any] = Field(default_factory=dict)
-
-    model_config = {"extra": "allow"}
-
-
-class PostToolUseInput(BaseModel):
-    """Input structure for PostToolUse hooks based on Claude Code documentation."""
-
-    session_id: str
-    transcript_path: str
-    tool_name: str
-    tool_input: dict[str, Any] = Field(default_factory=dict)
-    tool_response: dict[str, Any] | str | list[Any] = Field(
-        default_factory=dict,
-        description="Tool response data. Can be dict (most tools), str (Bash output), or list (NotebookRead cells). Uses Any for list items since different tools return different cell structures.",
-    )
-
-    model_config = {"extra": "allow"}
-
-
-class NotificationInput(BaseModel):
-    """Input structure for Notification hooks based on Claude Code documentation."""
-
-    session_id: str
-    transcript_path: str
-    message: str
-    title: str | None = None
-
-    model_config = {"extra": "allow"}
-
-
-class StopInput(BaseModel):
-    """Input structure for Stop hooks based on Claude Code documentation."""
-
-    session_id: str
-    transcript_path: str
-    stop_hook_active: bool = False
-
-    model_config = {"extra": "allow"}
-
-
-class SubagentStopInput(BaseModel):
-    """Input structure for SubagentStop hooks based on Claude Code documentation."""
-
-    session_id: str
-    transcript_path: str
-    stop_hook_active: bool = False
-
-    model_config = {"extra": "allow"}
-
-
-HookInputUnion = PreToolUseInput | PostToolUseInput | NotificationInput | StopInput | SubagentStopInput
-
-
 class HookOutput(BaseModel):
-    """Output structure for hook responses based on Claude Code documentation."""
+    """Output structure for hook responses.
+
+    Mirrors Claude Code's hook output schema. The `decision`/`reason` pair is
+    the canonical blocking feedback shape; `continue`/`stopReason`/`suppressOutput`
+    are Claude-Code-specific extensions tolerated for compatibility.
+    """
 
     continue_: bool | None = Field(None, alias="continue")
     stop_reason: str | None = Field(None, alias="stopReason")
@@ -232,7 +91,7 @@ class HookOutput(BaseModel):
     decision: str | None = Field(default=None, description="Decision outcome: approve, block, or undefined")
     reason: str | None = None
 
-    model_config = {"extra": "allow", "populate_by_name": True}
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
 
 
 class LanguageGuardResult(BaseModel):
@@ -248,7 +107,6 @@ class LanguageGuardResult(BaseModel):
     )
 
     def format_warning(self) -> str | None:
-        """Return warning message if unsupported languages found, else None."""
         if not self.detected_unsupported:
             return None
         return f"Found {', '.join(sorted(self.detected_unsupported))} files but analysis not yet supported"

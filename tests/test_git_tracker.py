@@ -371,6 +371,7 @@ def test_extract_files_from_commit_ctx__cleans_up_on_exception(git_repo):
             raise ValueError("test error")
 
     # After exception, temp dir should still be cleaned up
+    assert temp_dir_path is not None
     assert not temp_dir_path.exists()
 
 

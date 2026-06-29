@@ -1,18 +1,19 @@
 """CLI commands for solo-leveler features."""
 
 import logging
+from collections import Counter, defaultdict
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import click
 
+from slopometry.core.models.memory import FreshnessAction
 from slopometry.display.console import console, styled_pager
+from slopometry.solo.services.memory_freshness import audit_staleness
 
 if TYPE_CHECKING:
     from slopometry.core.models import ImpactAssessment, RepoBaseline, SessionStatistics
     from slopometry.core.models.session import BehavioralPatternTrends
-
-# Imports moved inside functions to optimize startup time
 
 logger = logging.getLogger(__name__)
 
@@ -513,57 +514,32 @@ def feedback(enable: bool | None) -> None:
 
     env_file = Path(".env")
     env_var = "SLOPOMETRY_ENABLE_STOP_FEEDBACK"
+    env_value = "true" if enable else "false"
 
     if enable:
         console.print("[green]Enabling[/green] complexity feedback on stop events")
-        console.print("")
-        console.print("To persist this setting, add to your .env file:")
-        console.print(f"  {env_var}=true")
-
-        if env_file.exists():
-            content = env_file.read_text()
-            if env_var in content:
-                lines = content.split("\n")
-                new_lines: list[str] = []
-                for line in lines:
-                    if line.startswith(f"{env_var}="):
-                        new_lines.append(f"{env_var}=true")
-                    else:
-                        new_lines.append(line)
-                env_file.write_text("\n".join(new_lines))
-            else:
-                with env_file.open("a") as f:
-                    f.write(f"\n{env_var}=true\n")
-        else:
-            env_file.write_text(f"{env_var}=true\n")
-
-        console.print(f"[green]Added {env_var}=true to .env file[/green]")
-
     else:
         console.print("[yellow]Disabling[/yellow] complexity feedback on stop events")
-        console.print("")
-        console.print("To persist this setting, add to your .env file:")
-        console.print(f"  {env_var}=false")
+    console.print("")
+    console.print("To persist this setting, add to your .env file:")
+    console.print(f"  {env_var}={env_value}")
 
-        if env_file.exists():
-            content = env_file.read_text()
-            if env_var in content:
-                lines = content.split("\n")
-                new_lines: list[str] = []
-                for line in lines:
-                    if line.startswith(f"{env_var}="):
-                        new_lines.append(f"{env_var}=false")
-                    else:
-                        new_lines.append(line)
-                env_file.write_text("\n".join(new_lines))
-            else:
-                with env_file.open("a") as f:
-                    f.write(f"\n{env_var}=false\n")
+    if env_file.exists():
+        content = env_file.read_text()
+        if env_var in content:
+            lines = content.split("\n")
+            new_lines = [
+                f"{env_var}={env_value}" if line.startswith(f"{env_var}=") else line
+                for line in lines
+            ]
+            env_file.write_text("\n".join(new_lines))
         else:
-            env_file.write_text(f"{env_var}=false\n")
+            with env_file.open("a") as f:
+                f.write(f"\n{env_var}={env_value}\n")
+    else:
+        env_file.write_text(f"{env_var}={env_value}\n")
 
-        console.print(f"[green]Added {env_var}=false to .env file[/green]")
-
+    console.print(f"[green]Added {env_var}={env_value} to .env file[/green]")
     console.print("")
     console.print("[bold]Note:[/bold] You may need to restart Claude Code for changes to take effect.")
 
@@ -805,3 +781,680 @@ def save_transcript(session_id: str | None, output_dir: str, yes: bool) -> None:
     metadata_file = session_dir / "session_metadata.json"
     metadata_file.write_text(metadata.model_dump_json(indent=2))
     console.print("[green]✓[/green] Saved session metadata to: session_metadata.json")
+
+
+_ACTION_PRIORITY: dict[FreshnessAction, int] = {
+    FreshnessAction.SUPERSEDE: 3,
+    FreshnessAction.MERGE: 2,
+    FreshnessAction.DEDUPE: 1,
+    FreshnessAction.KEEP_BOTH: 0,
+}
+
+
+def _highest_priority_action(group: list) -> FreshnessAction:
+    """Pick the most consequential action from a candidate's reconciliation group.
+
+    When a candidate matches multiple existing memories, the LLM may return
+    different actions for each pair. A single priority resolves conflicts:
+    SUPERSEDE > MERGE > DEDUPE > KEEP_BOTH. Only the winning action's side
+    effects are applied.
+    """
+    return max(group, key=lambda d: _ACTION_PRIORITY[d.action]).action
+
+
+@solo.command(name="find-memories")
+@click.option(
+    "--project-dir",
+    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
+    default=None,
+    help="Project directory (default: cwd)",
+)
+@click.option(
+    "--llm-endpoint",
+    type=str,
+    default=None,
+    help="LLM endpoint URL (default: from settings)",
+)
+@click.option(
+    "--llm-model",
+    type=str,
+    default=None,
+    help="Model name (default: from settings)",
+)
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Re-process already processed sessions",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Show what would be done without doing it",
+)
+def find_memories(
+    project_dir: Path | None,
+    llm_endpoint: str | None,
+    llm_model: str | None,
+    force: bool,
+    dry_run: bool,
+) -> None:
+    """Scan transcripts, extract memory candidates, and save to database.
+
+    This command:
+    1. Validates LLM + embedding endpoints are reachable (skipped with --dry-run)
+    2. Discovers transcripts across all configured harnesses
+    3. Filters to sessions not yet processed
+    4. Parses and cleans conversation data
+    5. Generates memory candidates via LLM
+    6. Runs freshness validation against existing memories
+    7. Saves memories to database
+
+    Aborts explicitly (no partial completion) if either endpoint is
+    unreachable. Use --dry-run to verify transcript discovery without
+    touching the LLM.
+    """
+    from slopometry.core.settings import settings
+    from slopometry.solo.services.memory_extractor import MemoryExtractor
+    from slopometry.solo.services.memory_service import MemoryService
+    from slopometry.solo.services.transcript_finder import TranscriptFinder
+
+    if project_dir is None:
+        project_dir = Path.cwd()
+
+    endpoint = llm_endpoint or settings.memory_llm_endpoint
+    model = llm_model or settings.memory_llm_model
+    api_key = settings.memory_llm_api_key.get_secret_value()
+
+    console.print("[bold]Slopometry Memory Extraction[/bold]")
+    console.print(f"Project: {project_dir}")
+    console.print(f"LLM: {endpoint} / {model}")
+    console.print()
+
+    if dry_run:
+        console.print("[yellow]--dry-run mode, no changes will be made--[/yellow]\n")
+
+    if settings.offline_mode and not llm_endpoint:
+        raise click.ClickException(
+            "Memory extraction requires external LLM calls, which are disabled (offline_mode=True). "
+            "Set SLOPOMETRY_OFFLINE_MODE=false to enable."
+        )
+
+    from slopometry.solo.cli.preflight import preflight_endpoints
+
+    if not dry_run:
+        preflight_endpoints(
+            chat_endpoint=endpoint,
+            embedding_endpoint=settings.memory_embedding_endpoint,
+            chat_api_key=api_key,
+            embedding_api_key=settings.memory_embedding_api_key.get_secret_value(),
+        )
+
+    transcript_finder = TranscriptFinder()
+    memory_service = MemoryService()
+    memory_extractor = MemoryExtractor(endpoint, model, api_key)
+
+    from slopometry.solo.services.embedding_service import EmbeddingService
+
+    embedding_service = EmbeddingService(
+        endpoint=settings.memory_embedding_endpoint,
+        model=settings.memory_embedding_model,
+        api_key=settings.memory_embedding_api_key.get_secret_value(),
+    )
+
+    console.print("[dim]Discovering transcripts...[/dim]")
+    transcripts = transcript_finder.discover_transcripts(project_dir)
+
+    if not transcripts:
+        console.print("[yellow]No transcripts found for this project.[/yellow]")
+        return
+
+    source_counts: Counter[str] = Counter(t.source.value for t in transcripts)
+    source_breakdown = ", ".join(f"{src}={n}" for src, n in sorted(source_counts.items()))
+    console.print(f"[green]Found {len(transcripts)} transcript(s)[/green] [dim]({source_breakdown})[/dim]\n")
+
+    sessions_to_process: list = []
+    for t in transcripts:
+        if not force and memory_service.is_session_processed(t.session_id, str(t.project_dir), source=t.source.value):
+            console.print(f"[dim]Skipping {t.source.value} {t.session_id}: already processed[/dim]")
+            continue
+        sessions_to_process.append(t)
+
+    if not sessions_to_process:
+        console.print("[yellow]No new sessions to process.[/yellow]")
+        return
+
+    console.print(f"[cyan]Processing {len(sessions_to_process)} session(s)...[/cyan]\n")
+
+    total_memories = 0
+    for t in sessions_to_process:
+        console.print(f"[bold]Session: {t.session_id}[/bold] [dim]({t.source.value})[/dim]")
+        console.print(f"  Transcript: {t.transcript_path}")
+
+        if dry_run:
+            console.print("  [yellow]-- dry-run: would extract and save memories --[/yellow]")
+            continue
+
+        try:
+            from slopometry.core.models.protocol.events import AbstractEventSource
+
+            if t.source == AbstractEventSource.OPENCODE:
+                from slopometry.solo.services.transcript_finder import TranscriptFinder
+
+                storage_root = TranscriptFinder().find_opencode_storage_root()
+                if not storage_root.is_dir():
+                    console.print("  [yellow]OpenCode storage not found[/yellow]")
+                    continue
+                cleaned_transcript = memory_extractor.extract_memories_from_opencode_session(
+                    t.session_id, storage_root
+                )
+            else:
+                cleaned_transcript = memory_extractor.extract_memories_from_transcript(t.transcript_path)
+
+            if not cleaned_transcript.strip():
+                console.print("  [yellow]Warning: Empty transcript[/yellow]")
+                continue
+
+            console.print(f"  [dim]Extracted {len(cleaned_transcript)} chars of conversation[/dim]")
+
+            candidates = memory_extractor.generate_memory_candidates(cleaned_transcript)
+
+            proj_dir_str = str(t.project_dir)
+
+            if not candidates:
+                console.print("  [yellow]No memory candidates generated[/yellow]")
+                memory_service.mark_session_processed(t.session_id, proj_dir_str, 0, source=t.source.value)
+                continue
+
+            console.print(f"  [green]Generated {len(candidates)} candidates[/green]")
+
+            console.print("  [dim]Generating embeddings...[/dim]")
+            for i, candidate in enumerate(candidates):
+                try:
+                    embedding = embedding_service.get_embedding(candidate.content)
+                    if embedding:
+                        candidate.embedding = embedding
+                    else:
+                        console.print(f"  [yellow]Warning: Failed to get embedding for candidate {i+1}, continuing without[/yellow]")
+                except Exception as e:
+                    console.print(f"  [red]Embedding error for candidate {i+1}: {e}[/red]")
+                    raise
+
+            from slopometry.solo.services.memory_freshness import validate_freshness
+
+            existing_memories = memory_service.get_memories(project_dir=proj_dir_str, limit=settings.memory_query_limit)
+            decisions: list = []
+            if existing_memories:
+                decisions, distribution = validate_freshness(
+                    candidates,
+                    existing_memories,
+                    llm_endpoint=endpoint,
+                    llm_model=model,
+                    api_key=api_key,
+                    floor_threshold=settings.freshness_threshold_floor,
+                    ceiling_threshold=settings.freshness_threshold_ceiling,
+                )
+                console.print(
+                    f"  [dim]Project similarity distribution: "
+                    f"n={distribution.n_pairs} "
+                    f"mean={distribution.mean:.2f} "
+                    f"p50={distribution.p50:.2f} "
+                    f"p75={distribution.p75:.2f} "
+                    f"p90={distribution.p90:.2f} "
+                    f"p95={distribution.p95:.2f}[/dim]"
+                )
+                console.print(
+                    f"  [dim]Derived dedupe threshold: {distribution.derived_threshold:.2f}[/dim]"
+                )
+                if decisions:
+                    console.print(f"  [yellow]Freshness: {len(decisions)} similar pair(s) reviewed:[/yellow]")
+                    for decision in decisions:
+                        action_color = decision.action.color
+                        console.print(
+                            f"    [{action_color}]{decision.action.value.upper()}[/{action_color}]"
+                            f" (sim={decision.similarity:.2f}): "
+                            f"[dim]new=[/dim]{decision.new_candidate.content[:80]!r} "
+                            f"[dim]existing=[/dim]{decision.existing_memory.content[:80]!r}"
+                        )
+                        console.print(f"      [dim]REASON:[/dim] {decision.reason}")
+                    decisions_by_candidate = defaultdict(list)
+                    for decision in decisions:
+                        decisions_by_candidate[id(decision.new_candidate)].append(decision)
+
+                    deduped_candidate_ids: set[int] = set()
+                    merge_links: list[tuple[str, int]] = []
+                    for group in decisions_by_candidate.values():
+                        candidate = group[0].new_candidate
+                        primary_action = _highest_priority_action(group)
+                        if primary_action == FreshnessAction.MERGE:
+                            merge_decision = next(
+                                d for d in group if d.action == FreshnessAction.MERGE and d.merged_content
+                            )
+                            candidate.content = merge_decision.merged_content
+                            merge_links.append((merge_decision.existing_memory.id, id(candidate)))
+                        elif primary_action == FreshnessAction.DEDUPE:
+                            deduped_candidate_ids.add(id(candidate))
+                        if candidate.metadata is None:
+                            candidate.metadata = {}
+                        candidate.metadata["freshness_action"] = primary_action
+                        candidate.metadata["freshness_reason"] = group[0].reason
+                        if primary_action != FreshnessAction.KEEP_BOTH:
+                            candidate.metadata["freshness_pair_with"] = group[0].existing_memory.id
+
+                    if deduped_candidate_ids:
+                        candidates = [c for c in candidates if id(c) not in deduped_candidate_ids]
+                        console.print(f"  [dim]Skipped {len(deduped_candidate_ids)} duplicate candidate(s)[/dim]")
+
+            from slopometry.core.models.memory import MemoryCreateRequest
+
+            request = MemoryCreateRequest(
+                session_id=t.session_id,
+                project_dir=proj_dir_str,
+                candidates=candidates,
+            )
+
+            saved = memory_service.save_memories(request)
+            candidate_id_map: dict[int, str] = {id(c): e.id for c, e in zip(candidates, saved)}
+
+            for decision in decisions:
+                if decision.action == FreshnessAction.SUPERSEDE:
+                    new_id = candidate_id_map.get(id(decision.new_candidate))
+                    if new_id is None:
+                        continue
+                    memory_service.update_memory(
+                        decision.existing_memory.id, superseded_by=new_id
+                    )
+                    console.print(
+                        f"      [dim]Superseded {decision.existing_memory.id} -> {new_id}[/dim]"
+                    )
+
+            for existing_id, cand_obj_id in merge_links:
+                new_id = candidate_id_map.get(cand_obj_id)
+                if new_id is None:
+                    continue
+                memory_service.update_memory(existing_id, superseded_by=new_id)
+                console.print(
+                    f"      [dim]Merged {existing_id} -> {new_id}[/dim]"
+                )
+
+            saved_ids = {m.id for m in saved}
+            current_memories = memory_service.get_memories(project_dir=proj_dir_str, limit=settings.memory_query_limit)
+            pre_existing_memories = [m for m in current_memories if m.id not in saved_ids]
+            if pre_existing_memories:
+                stale_pairs = audit_staleness(
+                    pre_existing_memories,
+                    cleaned_transcript,
+                    llm_endpoint=endpoint,
+                    llm_model=model,
+                    api_key=api_key,
+                    max_tokens=settings.memory_staleness_audit_max_tokens,
+                    transcript_truncation_chars=settings.memory_transcript_truncation_chars,
+                )
+                for memory_entry, reason in stale_pairs:
+                    memory_service.retire_memory(memory_entry.id, reason)
+                    console.print(
+                        f"  [yellow]Retired {memory_entry.id}: {reason}[/yellow]"
+                    )
+
+            memory_service.mark_session_processed(
+                t.session_id, proj_dir_str, len(saved), source=t.source.value
+            )
+            total_memories += len(saved)
+            console.print(f"  [green]Saved {len(saved)} memories[/green]")
+
+        except Exception as e:
+            console.print(f"  [red]Error processing session: {e}[/red]")
+            continue
+
+    console.print()
+    if not dry_run:
+        console.print(
+            f"[bold green]Done! Extracted {total_memories} memories from {len(sessions_to_process)} sessions.[/bold green]"
+        )
+    else:
+        console.print(
+            f"[bold yellow]Dry run complete. Would process {len(sessions_to_process)} sessions.[/bold yellow]"
+        )
+
+
+@solo.command(name="prune-memories")
+@click.option(
+    "--project-dir",
+    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
+    default=None,
+    help="Project directory (default: cwd)",
+)
+@click.option(
+    "--llm-endpoint",
+    type=str,
+    default=None,
+    help="LLM endpoint URL (default: from settings)",
+)
+@click.option(
+    "--llm-model",
+    type=str,
+    default=None,
+    help="Model name (default: from settings)",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Show what would be retired without making changes",
+)
+def prune_memories(
+    project_dir: Path | None,
+    llm_endpoint: str | None,
+    llm_model: str | None,
+    dry_run: bool,
+) -> None:
+    """Audit existing memories for staleness and retire stale ones.
+
+    Sends all active (non-superseded, non-retired) memories for the project
+    to the LLM alongside the most recent session transcripts and asks which
+    memories describe fixed bugs, completed work, or outdated state.
+
+    Stale memories are marked with a ``retired_reason`` and excluded from
+    future queries. Use --dry-run to preview without changes (the LLM is
+    still called to identify stale memories; only the DB write is skipped).
+    """
+    from slopometry.core.settings import settings
+    from slopometry.solo.services.memory_service import MemoryService
+    from slopometry.solo.services.transcript_finder import TranscriptFinder
+
+    if project_dir is None:
+        project_dir = Path.cwd()
+
+    endpoint = llm_endpoint or settings.memory_llm_endpoint
+    model = llm_model or settings.memory_llm_model
+    api_key = settings.memory_llm_api_key.get_secret_value()
+
+    console.print("[bold]Slopometry Memory Pruning[/bold]")
+    console.print(f"Project: {project_dir}")
+    console.print(f"LLM: {endpoint} / {model}")
+    console.print()
+
+    if settings.offline_mode and not llm_endpoint:
+        raise click.ClickException(
+            "Memory pruning requires external LLM calls, which are disabled (offline_mode=True). "
+            "Set SLOPOMETRY_OFFLINE_MODE=false to enable."
+        )
+
+    from slopometry.solo.cli.preflight import preflight_endpoints
+
+    preflight_endpoints(
+        chat_endpoint=endpoint,
+        embedding_endpoint=settings.memory_embedding_endpoint,
+        chat_api_key=api_key,
+        embedding_api_key=settings.memory_embedding_api_key.get_secret_value(),
+    )
+
+    memory_service = MemoryService()
+    proj_dir_str = str(project_dir)
+
+    existing = memory_service.get_memories(project_dir=proj_dir_str, limit=settings.memory_query_limit)
+    if not existing:
+        console.print("[yellow]No active memories to audit.[/yellow]")
+        return
+
+    console.print(f"[cyan]Auditing {len(existing)} active memories for staleness...[/cyan]")
+
+    transcript_finder = TranscriptFinder()
+    transcripts = transcript_finder.discover_transcripts(project_dir)
+
+    from slopometry.core.models.protocol.events import AbstractEventSource
+    from slopometry.solo.services.memory_extractor import MemoryExtractor
+
+    memory_extractor = MemoryExtractor(endpoint, model, api_key)
+
+    transcript_texts: list[str] = []
+    for t in transcripts[: settings.memory_prune_transcript_window]:
+        if t.source == AbstractEventSource.OPENCODE:
+            storage_root = transcript_finder.find_opencode_storage_root()
+            if not storage_root.is_dir():
+                continue
+            text = memory_extractor.extract_memories_from_opencode_session(t.session_id, storage_root)
+        else:
+            text = memory_extractor.extract_memories_from_transcript(t.transcript_path)
+        if text.strip():
+            transcript_texts.append(text)
+
+    combined_transcript = "\n---\n".join(transcript_texts)
+    if not combined_transcript.strip():
+        console.print("[yellow]No transcripts found to audit against.[/yellow]")
+        return
+
+    console.print(f"[dim]Using {len(transcript_texts)} transcript(s) for context[/dim]")
+
+    stale_pairs = audit_staleness(
+        existing,
+        combined_transcript,
+        llm_endpoint=endpoint,
+        llm_model=model,
+        api_key=api_key,
+        max_tokens=settings.memory_staleness_audit_max_tokens,
+        transcript_truncation_chars=settings.memory_transcript_truncation_chars,
+    )
+
+    if not stale_pairs:
+        console.print("[green]No stale memories found.[/green]")
+        return
+
+    console.print(f"\n[yellow]Found {len(stale_pairs)} stale memor(ies):[/yellow]")
+    for memory_entry, reason in stale_pairs:
+        console.print(f"  [yellow]RETIRE[/yellow] [{memory_entry.memory_type.value}] {memory_entry.content[:100]}")
+        console.print(f"    [dim]REASON:[/dim] {reason}")
+
+    if dry_run:
+        console.print(f"\n[yellow]--dry-run: would retire {len(stale_pairs)} memor(ies)[/yellow]")
+        return
+
+    retired_count = 0
+    for memory_entry, reason in stale_pairs:
+        if memory_service.retire_memory(memory_entry.id, reason):
+            retired_count += 1
+
+    console.print(f"\n[bold green]Retired {retired_count} memor(ies).[/bold green]")
+
+
+@solo.command(name="show-memories")
+@click.option(
+    "--project-dir",
+    type=click.Path(exists=True, file_okay=False, dir_okay=True, path_type=Path),
+    default=None,
+    help="Project directory (default: cwd)",
+)
+@click.option(
+    "--type",
+    "memory_type",
+    type=click.Choice(["user", "feedback", "project", "reference"]),
+    default=None,
+    help="Filter by memory type",
+)
+@click.option(
+    "--limit",
+    type=int,
+    default=50,
+    help="Maximum number of results (default: 50)",
+)
+def show_memories(
+    project_dir: Path | None,
+    memory_type: str | None,
+    limit: int,
+) -> None:
+    """List and manage memories for a project.
+
+    When run without options, enters interactive mode with actions:
+      (r)etain <id>  - Mark memory as retained
+      (d)elete <id>  - Delete a memory
+      (e)dit <id>    - Edit memory content
+      (f)ilter <type> - Filter by type (user|feedback|project|reference)
+      (q)uit         - Quit
+    """
+    from rich.table import Table
+
+    from slopometry.core.models.memory import MemoryType
+    from slopometry.core.settings import settings
+    from slopometry.solo.services.embedding_service import EmbeddingService
+    from slopometry.solo.services.memory_service import MemoryService
+
+    if project_dir is None:
+        project_dir = Path.cwd()
+
+    memory_service = MemoryService()
+    project_dir_str = str(project_dir.resolve())
+
+    embedding_service = EmbeddingService(
+        endpoint=settings.memory_embedding_endpoint,
+        model=settings.memory_embedding_model,
+        api_key=settings.memory_embedding_api_key.get_secret_value(),
+    )
+
+    current_type_filter = memory_type
+
+    def display_memories(mtype: str | None) -> list:
+        return memory_service.get_memories(
+            project_dir=project_dir_str,
+            memory_type=MemoryType(mtype) if mtype else None,
+            limit=limit,
+        )
+
+    while True:
+        console.print(f"\n[bold]Slopometry Memories: {project_dir}[/bold]\n")
+
+        memories = display_memories(current_type_filter)
+
+        if not memories:
+            console.print("[yellow]No memories found.[/yellow]")
+            try:
+                user_input = console.input("\nPress Enter to continue or 'q' to quit... ").strip()
+            except (KeyboardInterrupt, EOFError):
+                console.print("\n[yellow]Cancelled[/yellow]")
+                return
+            if user_input.lower() == "q":
+                console.print("[green]Goodbye![/green]")
+                return
+            continue
+
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("ID", style="dim", width=8)
+        table.add_column("Type", width=10)
+        table.add_column("Uniqueness", width=10)
+        table.add_column("Content", max_width=60)
+        table.add_column("Session", style="dim")
+
+        for idx, memory in enumerate(memories, 1):
+            content_preview = memory.content[:55] + "..." if len(memory.content) > 55 else memory.content
+            retained_marker = " [retained]" if memory.retained else ""
+
+            uniqueness = "N/A"
+            if memory.embedding:
+                comparison_set = [m.embedding for j, m in enumerate(memories) if j != idx - 1 and m.embedding]
+                uniqueness_score = embedding_service.compute_uniqueness_score(memory.embedding, comparison_set)
+                uniqueness = f"{uniqueness_score:.2f}"
+
+            table.add_row(
+                str(idx),
+                memory.memory_type.value,
+                uniqueness,
+                content_preview + retained_marker,
+                memory.session_id[:8],
+            )
+
+        console.print(table)
+
+        console.print("\n[bold]Actions:[/bold]")
+        console.print("  (r)etain <id>  - Mark memory as retained")
+        console.print("  (d)elete <id>  - Delete a memory")
+        console.print("  (e)dit <id>    - Edit memory content")
+        console.print("  (f)ilter <type> - Filter by type (user|feedback/project|reference)")
+        console.print("  (p)urge        - Delete ALL memories (requires confirmation)")
+        console.print("  (q)uit         - Quit")
+
+        try:
+            user_input = console.input("\n> ").strip()
+        except (KeyboardInterrupt, EOFError):
+            console.print("\n[yellow]Cancelled[/yellow]")
+            return
+
+        if not user_input:
+            continue
+
+        parts = user_input.split()
+        cmd = parts[0].lower()
+        arg = parts[1] if len(parts) > 1 else None
+
+        if cmd == "q":
+            console.print("[green]Goodbye![/green]")
+            return
+
+        if cmd == "f":
+            if not arg:
+                console.print("[yellow]Usage: f <type> (user|feedback|project|reference)[/yellow]")
+                continue
+            if arg not in ["user", "feedback", "project", "reference"]:
+                console.print(f"[red]Invalid type: {arg}[/red]")
+                continue
+            current_type_filter = arg
+            continue
+
+        if cmd == "p":
+            console.print("\n[bold red]WARNING: This will delete ALL memories![/bold red]")
+            try:
+                confirm = console.input("Type 'yes' to confirm: ").strip()
+            except (KeyboardInterrupt, EOFError):
+                console.print("\n[yellow]Cancelled[/yellow]")
+                continue
+
+            if confirm.lower() == "yes":
+                count = memory_service.delete_all_memories()
+                console.print(f"[green]Deleted {count} memories[/green]")
+            else:
+                console.print("[yellow]Purge cancelled[/yellow]")
+            continue
+
+        if not arg or not arg.isdigit():
+            console.print("[yellow]Usage: <action> <id> (e.g., d 1, r 2)[/yellow]")
+            continue
+
+        idx = int(arg) - 1
+        if idx < 0 or idx >= len(memories):
+            console.print(f"[red]Invalid ID: {arg} (must be 1-{len(memories)})[/red]")
+            continue
+
+        memory = memories[idx]
+
+        if cmd == "d":
+            if memory_service.delete_memory(memory.id):
+                console.print(f"[green]Deleted memory {arg}[/green]")
+            else:
+                console.print(f"[red]Failed to delete memory {arg}[/red]")
+            continue
+
+        elif cmd == "r":
+            if memory_service.update_memory(memory.id, retained=True):
+                console.print(f"[green]Marked memory {arg} as retained[/green]")
+            else:
+                console.print(f"[red]Failed to update memory {arg}[/red]")
+            continue
+
+        elif cmd == "e":
+            console.print("[dim]Current content:[/dim]")
+            console.print(f"  {memory.content}")
+            console.print("[dim]Enter new content (or press Enter to cancel):[/dim]")
+            try:
+                new_content = console.input("  New content: ").strip()
+            except (KeyboardInterrupt, EOFError):
+                console.print("\n[yellow]Cancelled[/yellow]")
+                continue
+
+            if new_content:
+                if memory_service.update_memory(memory.id, content=new_content):
+                    console.print(f"[green]Updated memory {arg}[/green]")
+                else:
+                    console.print(f"[red]Failed to update memory {arg}[/red]")
+            else:
+                console.print("[yellow]No changes made[/yellow]")
+            continue
+
+        else:
+            console.print(f"[red]Unknown command: {cmd}[/red]")
+            console.print("Valid commands: r (retain), d (delete), e (edit), f (filter), p (purge), q (quit)")
