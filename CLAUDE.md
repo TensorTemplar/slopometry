@@ -59,7 +59,7 @@ uv tool install . --reinstall
 
 - Session IDs are provided directly by Claude Code (no generated IDs)
 - Hook handler reads JSON from stdin (provided by Claude Code)
-- Tool name mapping is done via `TOOL_TYPE_MAP` in hook_handler.py
+- Tool name mapping is done via `get_tool_type` in core/models/hook.py
 - Database uses raw SQL with migration support for flexibility
 - All timestamps are stored as ISO format strings
 
@@ -127,9 +127,8 @@ echo '{"session_id": "test123", "transcript_path": "/tmp/transcript.jsonl", "too
 
 ## Adding New Tool Types
 
-1. Add to `ToolType` enum in models.py
-2. Update `TOOL_TYPE_MAP` in hook_handler.py
-3. No database migration needed (sqlite-utils handles schema)
+1. Add to `ToolType` enum in src/slopometry/core/models/hook.py
+2. Update `get_tool_type` in src/slopometry/core/models/hook.py
 
 ## Experiment Tracking
 

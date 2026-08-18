@@ -6,8 +6,9 @@ from pathlib import Path
 
 from slopometry.core.database import EventDatabase
 from slopometry.core.models.display import LeaderboardEntry, SessionDisplayData
-from slopometry.core.models.hook import HookEvent, HookEventType, Project, ProjectSource, ToolType
+from slopometry.core.models.hook import HookEvent, Project, ProjectSource, ToolType
 from slopometry.core.models.user_story import UserStoryEntry
+from slopometry.core.protocol.kinds import EventKind
 
 
 def test_user_story_export_functionality() -> None:
@@ -244,7 +245,7 @@ def test_list_sessions_by_repository__filters_correctly() -> None:
         db.save_event(
             HookEvent(
                 session_id="session-repo-a",
-                event_type=HookEventType.PRE_TOOL_USE,
+                event_type=EventKind.TOOL_CALL,
                 sequence_number=1,
                 working_directory="/path/to/repo-a",
                 tool_name="Read",
@@ -256,7 +257,7 @@ def test_list_sessions_by_repository__filters_correctly() -> None:
         db.save_event(
             HookEvent(
                 session_id="session-repo-b",
-                event_type=HookEventType.PRE_TOOL_USE,
+                event_type=EventKind.TOOL_CALL,
                 sequence_number=1,
                 working_directory="/path/to/repo-b",
                 tool_name="Read",
@@ -268,7 +269,7 @@ def test_list_sessions_by_repository__filters_correctly() -> None:
         db.save_event(
             HookEvent(
                 session_id="session-repo-a-2",
-                event_type=HookEventType.PRE_TOOL_USE,
+                event_type=EventKind.TOOL_CALL,
                 sequence_number=1,
                 working_directory="/path/to/repo-a",
                 tool_name="Write",
@@ -293,7 +294,7 @@ def test_list_sessions_by_repository__returns_empty_for_unknown_repo() -> None:
         db.save_event(
             HookEvent(
                 session_id="session-known",
-                event_type=HookEventType.PRE_TOOL_USE,
+                event_type=EventKind.TOOL_CALL,
                 sequence_number=1,
                 working_directory="/path/to/known-repo",
                 tool_name="Read",
@@ -316,7 +317,7 @@ def test_list_sessions_by_repository__respects_limit() -> None:
             db.save_event(
                 HookEvent(
                     session_id=f"session-{i}",
-                    event_type=HookEventType.PRE_TOOL_USE,
+                    event_type=EventKind.TOOL_CALL,
                     sequence_number=1,
                     working_directory="/path/to/repo",
                     tool_name="Read",
@@ -337,7 +338,7 @@ def test_get_session_basic_info__returns_minimal_info() -> None:
         db.save_event(
             HookEvent(
                 session_id="test-session",
-                event_type=HookEventType.PRE_TOOL_USE,
+                event_type=EventKind.TOOL_CALL,
                 sequence_number=1,
                 working_directory="/path/to/repo",
                 tool_name="Read",
@@ -347,7 +348,7 @@ def test_get_session_basic_info__returns_minimal_info() -> None:
         db.save_event(
             HookEvent(
                 session_id="test-session",
-                event_type=HookEventType.POST_TOOL_USE,
+                event_type=EventKind.TOOL_RESULT,
                 sequence_number=2,
                 working_directory="/path/to/repo",
                 tool_name="Write",
@@ -381,7 +382,7 @@ def test_get_session_working_directory__returns_first_event_working_dir() -> Non
         db.save_event(
             HookEvent(
                 session_id="test-wd-session",
-                event_type=HookEventType.PRE_TOOL_USE,
+                event_type=EventKind.TOOL_CALL,
                 sequence_number=1,
                 working_directory="/first/working/dir",
                 tool_name="Read",
@@ -391,7 +392,7 @@ def test_get_session_working_directory__returns_first_event_working_dir() -> Non
         db.save_event(
             HookEvent(
                 session_id="test-wd-session",
-                event_type=HookEventType.POST_TOOL_USE,
+                event_type=EventKind.TOOL_RESULT,
                 sequence_number=2,
                 working_directory="/second/working/dir",
                 tool_name="Write",
@@ -422,7 +423,7 @@ def test_get_sessions_summary__returns_session_display_data() -> None:
         for i in range(3):
             event = HookEvent(
                 session_id="sess-abc",
-                event_type=HookEventType.PRE_TOOL_USE,
+                event_type=EventKind.TOOL_CALL,
                 timestamp=datetime(2025, 1, 1, 10, i),
                 sequence_number=i + 1,
                 working_directory="/repo",
@@ -451,7 +452,7 @@ def test_get_sessions_summary__handles_null_tool_type() -> None:
 
         event = HookEvent(
             session_id="sess-null",
-            event_type=HookEventType.NOTIFICATION,
+            event_type=EventKind.NOTIFICATION,
             timestamp=datetime(2025, 1, 1, 12, 0),
             sequence_number=1,
             working_directory="/repo",
@@ -474,7 +475,7 @@ def test_get_sessions_summary__respects_limit() -> None:
         for i in range(5):
             event = HookEvent(
                 session_id=f"sess-{i:03d}",
-                event_type=HookEventType.PRE_TOOL_USE,
+                event_type=EventKind.TOOL_CALL,
                 timestamp=datetime(2025, 1, 1, 10 + i, 0),
                 sequence_number=1,
                 working_directory="/repo",

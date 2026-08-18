@@ -1,10 +1,12 @@
-"""Hook-related models for Claude Code integration."""
+"""Hook-related models for agent session capture."""
 
 from datetime import datetime
 from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel, Field
+
+from slopometry.core.protocol.kinds import EventKind, KnownSource
 
 
 class AgentTool(str, Enum):
@@ -35,25 +37,55 @@ class Project(BaseModel):
     source: ProjectSource
 
 
-class EventSource(str, Enum):
-    """Source agent tool that generated the event."""
+def get_tool_type(tool_name: str) -> "ToolType":
+    """Map tool name to ToolType enum."""
+    tool_map = {
+        "bash": ToolType.BASH,
+        "read": ToolType.READ,
+        "write": ToolType.WRITE,
+        "edit": ToolType.EDIT,
+        "multiedit": ToolType.MULTI_EDIT,
+        "grep": ToolType.GREP,
+        "glob": ToolType.GLOB,
+        "ls": ToolType.LS,
+        "task": ToolType.TASK,
+        "todoread": ToolType.TODO_READ,
+        "todowrite": ToolType.TODO_WRITE,
+        "taskcreate": ToolType.TASK_CREATE,
+        "taskupdate": ToolType.TASK_UPDATE,
+        "tasklist": ToolType.TASK_LIST,
+        "taskget": ToolType.TASK_GET,
+        "webfetch": ToolType.WEB_FETCH,
+        "websearch": ToolType.WEB_SEARCH,
+        "notebookread": ToolType.NOTEBOOK_READ,
+        "notebookedit": ToolType.NOTEBOOK_EDIT,
+        "exit_plan_mode": ToolType.EXIT_PLAN_MODE,
+        "mcp__ide__getdiagnostics": ToolType.MCP_IDE_GET_DIAGNOSTICS,
+        "mcp__ide__executecode": ToolType.MCP_IDE_EXECUTE_CODE,
+        "mcp__ide__getworkspaceinfo": ToolType.MCP_IDE_GET_WORKSPACE_INFO,
+        "mcp__ide__getfilecontents": ToolType.MCP_IDE_GET_FILE_CONTENTS,
+        "mcp__ide__createfile": ToolType.MCP_IDE_CREATE_FILE,
+        "mcp__ide__deletefile": ToolType.MCP_IDE_DELETE_FILE,
+        "mcp__ide__renamefile": ToolType.MCP_IDE_RENAME_FILE,
+        "mcp__ide__searchfiles": ToolType.MCP_IDE_SEARCH_FILES,
+        "mcp__filesystem__read": ToolType.MCP_FILESYSTEM_READ,
+        "mcp__filesystem__write": ToolType.MCP_FILESYSTEM_WRITE,
+        "mcp__filesystem__list": ToolType.MCP_FILESYSTEM_LIST,
+        "mcp__database__query": ToolType.MCP_DATABASE_QUERY,
+        "mcp__database__schema": ToolType.MCP_DATABASE_SCHEMA,
+        "mcp__web__scrape": ToolType.MCP_WEB_SCRAPE,
+        "mcp__web__search": ToolType.MCP_WEB_SEARCH,
+        "mcp__github__getrepo": ToolType.MCP_GITHUB_GET_REPO,
+        "mcp__github__createissue": ToolType.MCP_GITHUB_CREATE_ISSUE,
+        "mcp__github__listissues": ToolType.MCP_GITHUB_LIST_ISSUES,
+        "mcp__slack__sendmessage": ToolType.MCP_SLACK_SEND_MESSAGE,
+        "mcp__slack__listchannels": ToolType.MCP_SLACK_LIST_CHANNELS,
+    }
 
-    CLAUDE_CODE = "claude_code"
-    OPENCODE = "opencode"
+    if tool_name.lower().startswith("mcp__") and tool_name.lower() not in tool_map:
+        return ToolType.MCP_OTHER
 
-
-class HookEventType(str, Enum):
-    """Types of hook events from Claude Code and OpenCode."""
-
-    PRE_TOOL_USE = "PreToolUse"
-    POST_TOOL_USE = "PostToolUse"
-    NOTIFICATION = "Notification"
-    STOP = "Stop"
-    SUBAGENT_STOP = "SubagentStop"
-    # OpenCode-specific event types
-    TODO_UPDATED = "TodoUpdated"
-    MESSAGE_UPDATED = "MessageUpdated"
-    SUBAGENT_START = "SubagentStart"
+    return tool_map.get(tool_name.lower(), ToolType.OTHER)
 
 
 class ToolType(str, Enum):
@@ -146,7 +178,7 @@ class HookEvent(BaseModel):
 
     id: int | None = None
     session_id: str
-    event_type: HookEventType
+    event_type: EventKind
     timestamp: datetime = Field(default_factory=datetime.now)
     sequence_number: int
     tool_name: str | None = None
@@ -159,8 +191,16 @@ class HookEvent(BaseModel):
     working_directory: str
     project: Project | None = None
     transcript_path: str | None = None
-    source: EventSource = Field(default=EventSource.CLAUDE_CODE, description="Agent tool that generated this event")
+    source: str = Field(
+        default=KnownSource.CLAUDE_CODE,
+        min_length=1,
+        description="Agent tool that generated this event; open string, built-ins in KnownSource",
+    )
     parent_session_id: str | None = Field(default=None, description="Parent session ID for subagent sessions")
+    event_id: str | None = Field(
+        default=None,
+        description="Source-unique event id from envelope ingestion; (source, event_id) is unique for idempotent backfills",
+    )
 
 
 class PreToolUseInput(BaseModel):

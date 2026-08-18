@@ -15,10 +15,11 @@ from slopometry.core.models.baseline import HistoricalMetricStats, QPEScore, Rep
 from slopometry.core.models.complexity import ComplexityDelta, ExtendedComplexityMetrics
 from slopometry.core.models.display import LeaderboardEntry, SessionDisplayData
 from slopometry.core.models.experiment import ExperimentProgress, ExperimentRun, ExperimentStatus, FeatureBoundary
-from slopometry.core.models.hook import GitState, HookEvent, HookEventType, Project, ProjectSource, ToolType
+from slopometry.core.models.hook import GitState, HookEvent, Project, ProjectSource, ToolType
 from slopometry.core.models.session import BehavioralPatterns, ContextCoverage, PlanEvolution, SessionStatistics
 from slopometry.core.models.user_story import NextFeaturePrediction, UserStory, UserStoryEntry
 from slopometry.core.plan_analyzer import PlanAnalyzer
+from slopometry.core.protocol.kinds import EventKind, KnownSource
 from slopometry.core.settings import settings
 
 
@@ -87,7 +88,8 @@ class EventDatabase:
                     project_source TEXT,
                     transcript_path TEXT,
                     source TEXT DEFAULT 'claude_code',
-                    parent_session_id TEXT
+                    parent_session_id TEXT,
+                    event_id TEXT
                 )
             """)
             conn.execute("""
@@ -110,6 +112,10 @@ class EventDatabase:
                 CREATE INDEX IF NOT EXISTS idx_hook_events_session_type_source
                 ON hook_events(session_id, event_type, source)
             """)
+
+            # NOTE: the (source, event_id) unique partial index is created by
+            # Migration019CanonicalEventKinds; it must not be created here since
+            # _create_tables runs before migrations on pre-existing databases.
 
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS experiment_runs (
@@ -320,6 +326,26 @@ class EventDatabase:
 
             conn.commit()
 
+    def has_event(self, source: str, event_id: str) -> bool:
+        """Check whether an event with the given (source, event_id) is already stored.
+
+        Used by envelope ingestion to make backfills idempotent."""
+        with self._get_db_connection() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM hook_events WHERE source = ? AND event_id = ? LIMIT 1",
+                (source, event_id),
+            ).fetchone()
+            return row is not None
+
+    def get_max_sequence_number(self, session_id: str) -> int:
+        """Get the highest stored sequence number for a session (0 when the session has no events)."""
+        with self._get_db_connection() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(MAX(sequence_number), 0) FROM hook_events WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            return row[0]
+
     def save_event(self, event: HookEvent) -> int:
         """Save a hook event to the database."""
         with self._get_db_connection() as conn:
@@ -327,11 +353,11 @@ class EventDatabase:
                 """
                 INSERT INTO hook_events (
                     session_id, event_type, timestamp, sequence_number,
-                    tool_name, tool_type, metadata, duration_ms,
-                    exit_code, error_message, git_state, working_directory,
-                    project_name, project_source, transcript_path,
-                    source, parent_session_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     tool_name, tool_type, metadata, duration_ms,
+                     exit_code, error_message, git_state, working_directory,
+                     project_name, project_source, transcript_path,
+                     source, parent_session_id, event_id
+                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     event.session_id,
@@ -348,10 +374,11 @@ class EventDatabase:
                     event.working_directory,
                     event.project.name if event.project else None,
                     event.project.source.value if event.project else None,
-                    event.transcript_path,
-                    event.source.value,
-                    event.parent_session_id,
-                ),
+                     event.transcript_path,
+                     event.source,
+                     event.parent_session_id,
+                     event.event_id,
+                 ),
             )
             return cursor.lastrowid or 0
 
@@ -384,18 +411,13 @@ class EventDatabase:
                         source=ProjectSource(row["project_source"]),
                     )
 
-                # Handle source column (may be NULL for pre-migration rows)
-                from slopometry.core.models.hook import EventSource
-
-                source_val = row["source"] if "source" in row.keys() else None
-                source = EventSource(source_val) if source_val else EventSource.CLAUDE_CODE
                 parent_session_id = row["parent_session_id"] if "parent_session_id" in row.keys() else None
 
                 events.append(
                     HookEvent(
                         id=row["id"],
                         session_id=row["session_id"],
-                        event_type=HookEventType(row["event_type"]),
+                        event_type=EventKind(row["event_type"]),
                         timestamp=datetime.fromisoformat(row["timestamp"]),
                         sequence_number=row["sequence_number"],
                         tool_name=row["tool_name"],
@@ -407,17 +429,18 @@ class EventDatabase:
                         git_state=git_state,
                         working_directory=working_directory,
                         project=project,
-                        transcript_path=row["transcript_path"],
-                        source=source,
-                        parent_session_id=parent_session_id,
-                    )
+                         transcript_path=row["transcript_path"],
+                         source=row["source"],
+                         parent_session_id=parent_session_id,
+                         event_id=row["event_id"],
+                     )
                 )
             return events
 
     def get_session_source(self, session_id: str) -> str:
-        """Get the source agent tool for a session ('claude_code' or 'opencode').
+        """Get the source agent tool string for a session.
 
-        Returns 'claude_code' for pre-migration sessions or if the column is missing.
+        Returns 'claude_code' for pre-migration sessions stored before the source column existed.
         """
         with self._get_db_connection() as conn:
             conn.row_factory = sqlite3.Row
@@ -427,7 +450,7 @@ class EventDatabase:
             ).fetchone()
             if row and row["source"]:
                 return row["source"]
-            return "claude_code"
+            return str(KnownSource.CLAUDE_CODE)
 
     def get_opencode_transcript(self, session_id: str) -> list[dict] | None:
         """Extract the transcript from an OpenCode session's Stop event metadata.
@@ -440,10 +463,10 @@ class EventDatabase:
             row = conn.execute(
                 """
                 SELECT metadata FROM hook_events
-                WHERE session_id = ? AND event_type = 'Stop' AND source = 'opencode'
+                WHERE session_id = ? AND event_type = ? AND source = ?
                 ORDER BY sequence_number DESC LIMIT 1
                 """,
-                (session_id,),
+                (session_id, EventKind.STOP, KnownSource.OPENCODE),
             ).fetchone()
             if not row:
                 return None
@@ -563,7 +586,7 @@ class EventDatabase:
                 (session_id,),
             ).fetchall()
 
-            events_by_type = {HookEventType(row["event_type"]): row["count"] for row in event_type_rows}
+            events_by_type = {EventKind(row["event_type"]): row["count"] for row in event_type_rows}
 
             tool_usage_rows = conn.execute(
                 """
@@ -834,12 +857,12 @@ class EventDatabase:
                 WHERE session_id = ? AND event_type IN (?, ?)
                 ORDER BY sequence_number
                 """,
-                (session_id, HookEventType.POST_TOOL_USE.value, HookEventType.TODO_UPDATED.value),
+                (session_id, EventKind.TOOL_RESULT.value, EventKind.TODO_UPDATED.value),
             ).fetchall()
 
             # Check if this session has TODO_UPDATED events (OpenCode).
             # If so, skip POST_TOOL_USE todowrite events to avoid duplicate analysis.
-            has_todo_updated = any(row["event_type"] == HookEventType.TODO_UPDATED.value for row in rows)
+            has_todo_updated = any(row["event_type"] == EventKind.TODO_UPDATED.value for row in rows)
 
             for row in rows:
                 timestamp = datetime.fromisoformat(row["timestamp"])
@@ -849,7 +872,7 @@ class EventDatabase:
 
                 metadata = json.loads(row["metadata"]) if row["metadata"] else {}
 
-                if event_type == HookEventType.TODO_UPDATED.value:
+                if event_type == EventKind.TODO_UPDATED.value:
                     # OpenCode todo.updated bus event — canonical source for OpenCode todos
                     todos = metadata.get("todos", [])
                     if todos:

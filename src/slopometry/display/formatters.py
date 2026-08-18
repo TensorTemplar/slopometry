@@ -21,7 +21,7 @@ from slopometry.core.models.display import (
     SessionDisplayData,
 )
 from slopometry.core.models.experiment import ProgressDisplayData
-from slopometry.core.models.hook import HookEventType, ToolType
+from slopometry.core.models.hook import ToolType
 from slopometry.core.models.session import (
     BehavioralPatterns,
     BehavioralPatternTrends,
@@ -30,6 +30,7 @@ from slopometry.core.models.session import (
 )
 from slopometry.core.models.smell import SMELL_REGISTRY, SmellCategory, get_smell_label, get_smells_by_category
 from slopometry.core.models.user_story import UserStoryDisplayData
+from slopometry.core.protocol.kinds import EventKind
 from slopometry.core.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -316,7 +317,7 @@ def _display_behavioral_pattern_trends(trends: BehavioralPatternTrends) -> None:
     console.print(table)
 
 
-def _display_events_by_type_table(events_by_type: dict[HookEventType, int]) -> None:
+def _display_events_by_type_table(events_by_type: dict[EventKind, int]) -> None:
     """Display events by type table."""
     table = Table(title="Events by Type")
     table.add_column("Event Type", style="cyan")

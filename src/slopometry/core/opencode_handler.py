@@ -12,14 +12,8 @@ import select
 import sys
 
 from slopometry.core.database import EventDatabase, SessionManager
-from slopometry.core.git_tracker import GitTracker
+from slopometry.core.event_capture import capture_event
 from slopometry.core.lock import SlopometryLock
-from slopometry.core.models.hook import (
-    EventSource,
-    HookEvent,
-    HookEventType,
-    ToolType,
-)
 from slopometry.core.models.opencode import (
     OpenCodeMessageEvent,
     OpenCodeSessionEvent,
@@ -27,32 +21,11 @@ from slopometry.core.models.opencode import (
     OpenCodeTodoEvent,
     OpenCodeToolEvent,
 )
-from slopometry.core.project_tracker import ProjectTracker
+from slopometry.core.protocol.adapters.opencode import OPENCODE_EVENT_KIND_MAP
+from slopometry.core.protocol.kinds import KnownSource
 from slopometry.core.settings import settings
 
 logger = logging.getLogger(__name__)
-
-# Map OpenCode event type strings to HookEventType
-EVENT_TYPE_MAP: dict[str, HookEventType] = {
-    "pre_tool_use": HookEventType.PRE_TOOL_USE,
-    "post_tool_use": HookEventType.POST_TOOL_USE,
-    "stop": HookEventType.STOP,
-    "subagent_stop": HookEventType.SUBAGENT_STOP,
-    "subagent_start": HookEventType.SUBAGENT_START,
-    "todo_updated": HookEventType.TODO_UPDATED,
-    "message_updated": HookEventType.MESSAGE_UPDATED,
-}
-
-
-def get_tool_type(tool_name: str) -> ToolType:
-    """Map OpenCode tool name to ToolType enum.
-
-    OpenCode uses the same tool names as Claude Code (Bash, Read, Edit, etc.)
-    plus some OpenCode-specific ones.
-    """
-    from slopometry.core.hook_handler import get_tool_type as cc_get_tool_type
-
-    return cc_get_tool_type(tool_name)
 
 
 def parse_opencode_event(
@@ -147,52 +120,32 @@ def _handle_opencode_internal(
         Exit code.
     """
     try:
-        hook_event_type = EVENT_TYPE_MAP.get(event_type)
-        if not hook_event_type:
-            if settings.debug_mode:
-                print(f"Slopometry: Unknown event type '{event_type}'", file=sys.stderr)
-            return 0
+        hook_event_type = OPENCODE_EVENT_KIND_MAP[event_type]
 
         # Extract session_id from the parsed event
         session_id = _get_session_id(parsed_event)
         if not session_id:
             return 0
 
-        session_manager = SessionManager()
-        sequence_number = session_manager.get_next_sequence_number(session_id)
+        tool_name = None
+        duration_ms = None
+        if isinstance(parsed_event, OpenCodeToolEvent):
+            tool_name = parsed_event.tool
+            if event_type == "post_tool_use":
+                duration_ms = parsed_event.duration_ms
 
-        working_directory = os.getcwd()
-        project_tracker = ProjectTracker(working_dir=__import__("pathlib").Path(working_directory))
-        project = project_tracker.get_project()
-
-        # Get git state for first event or stop events
-        git_tracker = GitTracker()
-        git_state = None
-        if sequence_number == 1 or event_type in ("stop", "subagent_stop"):
-            git_state = git_tracker.get_git_state()
-
-        # Build the HookEvent
-        event = HookEvent(
+        event = capture_event(
+            EventDatabase(),
+            SessionManager(),
+            os.getcwd(),
             session_id=session_id,
-            event_type=hook_event_type,
-            sequence_number=sequence_number,
+            kind=hook_event_type,
+            source=KnownSource.OPENCODE,
             metadata=raw_data,
-            git_state=git_state,
-            working_directory=working_directory,
-            project=project,
-            source=EventSource.OPENCODE,
+            tool_name=tool_name,
+            duration_ms=duration_ms,
             parent_session_id=_get_parent_id(parsed_event),
         )
-
-        # Set tool-specific fields for tool events
-        if isinstance(parsed_event, OpenCodeToolEvent):
-            event.tool_name = parsed_event.tool
-            event.tool_type = get_tool_type(parsed_event.tool)
-            if event_type == "post_tool_use":
-                event.duration_ms = parsed_event.duration_ms
-
-        db = EventDatabase()
-        db.save_event(event)
 
         # Handle stop events with feedback
         if event_type in ("stop", "subagent_stop") and settings.enable_complexity_analysis:
@@ -204,7 +157,7 @@ def _handle_opencode_internal(
                     "session_id": session_id,
                     "event_type": event_type,
                     "hook_event_type": hook_event_type.value,
-                    "sequence_number": sequence_number,
+                    "sequence_number": event.sequence_number,
                     "source": "opencode",
                 }
             }

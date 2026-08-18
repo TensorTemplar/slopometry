@@ -27,7 +27,6 @@ from slopometry.core.models.baseline import ImpactAssessment, ImpactCategory, ZS
 from slopometry.core.models.complexity import ComplexityDelta, ExtendedComplexityMetrics
 from slopometry.core.models.hook import (
     FeedbackCacheState,
-    HookEventType,
     NotificationInput,
     PostToolUseInput,
     PreToolUseInput,
@@ -36,6 +35,7 @@ from slopometry.core.models.hook import (
 )
 from slopometry.core.models.session import ContextCoverage, FileCoverageStatus
 from slopometry.core.models.smell import SmellField
+from slopometry.core.protocol.kinds import EventKind
 from slopometry.display.formatters import _interpret_z_score
 
 
@@ -43,7 +43,7 @@ class TestEventTypeDetection:
     """Test the pattern match logic for detecting event types."""
 
     def test_pre_tool_use_input_detection(self):
-        """Test that PreToolUseInput maps to PRE_TOOL_USE event type."""
+        """Test that PreToolUseInput maps to TOOL_CALL event kind."""
         input_data = PreToolUseInput(
             session_id="test-session",
             transcript_path="/tmp/test.jsonl",
@@ -53,10 +53,10 @@ class TestEventTypeDetection:
 
         result = detect_event_type_from_parsed(input_data)
 
-        assert result == HookEventType.PRE_TOOL_USE
+        assert result == EventKind.TOOL_CALL
 
     def test_post_tool_use_input_detection(self):
-        """Test that PostToolUseInput maps to POST_TOOL_USE event type."""
+        """Test that PostToolUseInput maps to TOOL_RESULT event kind."""
         input_data = PostToolUseInput(
             session_id="test-session",
             transcript_path="/tmp/test.jsonl",
@@ -67,7 +67,7 @@ class TestEventTypeDetection:
 
         result = detect_event_type_from_parsed(input_data)
 
-        assert result == HookEventType.POST_TOOL_USE
+        assert result == EventKind.TOOL_RESULT
 
     def test_notification_input_detection(self):
         """Test that NotificationInput maps to NOTIFICATION event type."""
@@ -80,7 +80,7 @@ class TestEventTypeDetection:
 
         result = detect_event_type_from_parsed(input_data)
 
-        assert result == HookEventType.NOTIFICATION
+        assert result == EventKind.NOTIFICATION
 
     def test_stop_input_detection(self):
         """Test that StopInput maps to STOP event type."""
@@ -92,7 +92,7 @@ class TestEventTypeDetection:
 
         result = detect_event_type_from_parsed(input_data)
 
-        assert result == HookEventType.STOP
+        assert result == EventKind.STOP
 
     def test_subagent_stop_input_detection(self):
         """Test that SubagentStopInput maps to SUBAGENT_STOP event type."""
@@ -104,7 +104,7 @@ class TestEventTypeDetection:
 
         result = detect_event_type_from_parsed(input_data)
 
-        assert result == HookEventType.SUBAGENT_STOP
+        assert result == EventKind.SUBAGENT_STOP
 
     def test_all_input_types_are_handled(self):
         """Test that all defined input types have corresponding pattern matches.
@@ -139,11 +139,11 @@ class TestEventTypeDetection:
         ]
 
         expected_types = [
-            HookEventType.PRE_TOOL_USE,
-            HookEventType.POST_TOOL_USE,
-            HookEventType.NOTIFICATION,
-            HookEventType.STOP,
-            HookEventType.SUBAGENT_STOP,
+            EventKind.TOOL_CALL,
+            EventKind.TOOL_RESULT,
+            EventKind.NOTIFICATION,
+            EventKind.STOP,
+            EventKind.SUBAGENT_STOP,
         ]
 
         for input_data, expected_type in zip(input_types, expected_types):
@@ -1034,7 +1034,7 @@ class TestHookHandlerSmokeTests:
         }
 
         with patch("slopometry.core.hook_handler._read_stdin_with_timeout", return_value=json.dumps(input_data)):
-            result = handle_hook(event_type_override=HookEventType.PRE_TOOL_USE)
+            result = handle_hook(event_type_override=EventKind.TOOL_CALL)
 
         assert result == 0
 
@@ -1050,7 +1050,7 @@ class TestHookHandlerSmokeTests:
         }
 
         with patch("slopometry.core.hook_handler._read_stdin_with_timeout", return_value=json.dumps(input_data)):
-            result = handle_hook(event_type_override=HookEventType.POST_TOOL_USE)
+            result = handle_hook(event_type_override=EventKind.TOOL_RESULT)
 
         assert result == 0
 
@@ -1064,7 +1064,7 @@ class TestHookHandlerSmokeTests:
         }
 
         with patch("slopometry.core.hook_handler._read_stdin_with_timeout", return_value=json.dumps(input_data)):
-            result = handle_hook(event_type_override=HookEventType.NOTIFICATION)
+            result = handle_hook(event_type_override=EventKind.NOTIFICATION)
 
         assert result == 0
 
@@ -1088,7 +1088,7 @@ class TestHookHandlerSmokeTests:
                 patch("slopometry.core.hook_handler._read_stdin_with_timeout", return_value=json.dumps(input_data)),
                 patch("os.getcwd", return_value=str(tmppath)),
             ):
-                result = handle_hook(event_type_override=HookEventType.STOP)
+                result = handle_hook(event_type_override=EventKind.STOP)
 
             # Stop hook returns 0 (no feedback) or 2 (with feedback) - both are valid
             assert result in (0, 2)
@@ -1103,7 +1103,7 @@ class TestHookHandlerSmokeTests:
         }
 
         with patch("slopometry.core.hook_handler._read_stdin_with_timeout", return_value=json.dumps(input_data)):
-            result = handle_hook(event_type_override=HookEventType.STOP)
+            result = handle_hook(event_type_override=EventKind.STOP)
 
         # Subagent stops should return 0 (no feedback for subagents)
         assert result == 0

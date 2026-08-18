@@ -5,7 +5,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from slopometry.core.database import EventDatabase
-from slopometry.core.models.hook import HookEvent, HookEventType, Project, ProjectSource
+from slopometry.core.models.hook import HookEvent, Project, ProjectSource
+from slopometry.core.protocol.kinds import EventKind
 
 
 class TestListSessionsPerformance:
@@ -27,7 +28,7 @@ class TestListSessionsPerformance:
 
                 event = HookEvent(
                     session_id=session_id,
-                    event_type=HookEventType.PRE_TOOL_USE,
+                    event_type=EventKind.TOOL_CALL,
                     timestamp=timestamp,
                     sequence_number=1,
                     working_directory="/test",
@@ -59,7 +60,7 @@ class TestListSessionsPerformance:
                 session_id = f"session-{i}"
                 event = HookEvent(
                     session_id=session_id,
-                    event_type=HookEventType.PRE_TOOL_USE,
+                    event_type=EventKind.TOOL_CALL,
                     timestamp=datetime.now() + timedelta(minutes=i),
                     sequence_number=1,
                     working_directory="/test",

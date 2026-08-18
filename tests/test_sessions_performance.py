@@ -5,7 +5,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from slopometry.core.database import EventDatabase
-from slopometry.core.models.hook import HookEvent, HookEventType, Project, ProjectSource, ToolType
+from slopometry.core.models.hook import HookEvent, Project, ProjectSource, ToolType
+from slopometry.core.protocol.kinds import EventKind
 from slopometry.solo.services.session_service import SessionService
 
 
@@ -23,7 +24,7 @@ class TestSessionsPerformance:
             for i in range(5):
                 event = HookEvent(
                     session_id="session-001",
-                    event_type=HookEventType.PRE_TOOL_USE,
+                    event_type=EventKind.TOOL_CALL,
                     timestamp=base_time + timedelta(minutes=i),
                     sequence_number=i + 1,
                     working_directory="/test",
@@ -36,7 +37,7 @@ class TestSessionsPerformance:
             for i in range(3):
                 event = HookEvent(
                     session_id="session-002",
-                    event_type=HookEventType.PRE_TOOL_USE,
+                    event_type=EventKind.TOOL_CALL,
                     timestamp=base_time + timedelta(hours=1, minutes=i),
                     sequence_number=i + 1,
                     working_directory="/test2",
@@ -79,7 +80,7 @@ class TestSessionsPerformance:
             for session_num in range(5):
                 event = HookEvent(
                     session_id=f"session-{session_num:03d}",
-                    event_type=HookEventType.PRE_TOOL_USE,
+                    event_type=EventKind.TOOL_CALL,
                     timestamp=base_time + timedelta(minutes=session_num),
                     sequence_number=1,
                     working_directory="/test",
@@ -119,7 +120,7 @@ class TestSessionsPerformance:
 
             event = HookEvent(
                 session_id="session-001",
-                event_type=HookEventType.NOTIFICATION,
+                event_type=EventKind.NOTIFICATION,
                 timestamp=datetime.now(),
                 sequence_number=1,
                 working_directory="/test",

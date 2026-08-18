@@ -665,6 +665,7 @@ def save_transcript(session_id: str | None, output_dir: str, yes: bool) -> None:
 
     from slopometry.core.database import EventDatabase
     from slopometry.core.models import AgentTool, SessionMetadata
+    from slopometry.core.protocol.kinds import EventKind, KnownSource
 
     output_path_dir = Path(output_dir)
     session_dir = output_path_dir / ".slopometry" / session_id
@@ -739,10 +740,10 @@ def save_transcript(session_id: str | None, output_dir: str, yes: bool) -> None:
             row = conn.execute(
                 """
                 SELECT metadata FROM hook_events
-                WHERE session_id = ? AND event_type = 'MessageUpdated' AND source = 'opencode'
+                WHERE session_id = ? AND event_type = ? AND source = ?
                 ORDER BY sequence_number ASC LIMIT 1
                 """,
-                (session_id,),
+                (session_id, EventKind.MESSAGE_UPDATED, KnownSource.OPENCODE),
             ).fetchone()
             if row:
                 try:
@@ -754,10 +755,10 @@ def save_transcript(session_id: str | None, output_dir: str, yes: bool) -> None:
             stop_row = conn.execute(
                 """
                 SELECT metadata FROM hook_events
-                WHERE session_id = ? AND event_type = 'Stop' AND source = 'opencode'
+                WHERE session_id = ? AND event_type = ? AND source = ?
                 ORDER BY sequence_number DESC LIMIT 1
                 """,
-                (session_id,),
+                (session_id, EventKind.STOP, KnownSource.OPENCODE),
             ).fetchone()
             if stop_row:
                 try:

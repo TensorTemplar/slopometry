@@ -1,7 +1,10 @@
 """Tests for database migrations."""
 
+import sqlite3
 from pathlib import Path
 from tempfile import TemporaryDirectory
+
+import pytest
 
 from slopometry.core.migrations import MigrationRunner
 
@@ -137,3 +140,57 @@ class TestMigrations:
                 columns = [row[1] for row in cursor.fetchall()]
                 transcript_path_count = columns.count("transcript_path")
                 assert transcript_path_count == 1
+
+    def test_migration_019__remaps_harness_and_alt_dialect_event_types_and_enables_idempotent_ingest(self):
+        """Legacy and alt-dialect event types become canonical kinds with an event_id index."""
+        with TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "test.db"
+            runner = MigrationRunner(db_path)
+
+            with runner._get_db_connection() as conn:
+                conn.execute("""
+                    CREATE TABLE hook_events (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        session_id TEXT NOT NULL,
+                        event_type TEXT NOT NULL,
+                        timestamp TEXT NOT NULL,
+                        source TEXT
+                    )
+                """)
+                conn.execute(
+                    "INSERT INTO hook_events (session_id, event_type, timestamp, source) VALUES ('s1', 'PreToolUse', '2026-01-01T00:00:00', NULL)"
+                )
+                conn.execute(
+                    "INSERT INTO hook_events (session_id, event_type, timestamp, source) VALUES ('s1', 'SubagentStop', '2026-01-01T00:01:00', 'opencode')"
+                )
+                conn.execute(
+                    "INSERT INTO hook_events (session_id, event_type, timestamp, source) VALUES ('s1', 'turn_completed', '2026-01-01T00:02:00', 'opencode')"
+                )
+                conn.execute(
+                    "INSERT INTO hook_events (session_id, event_type, timestamp, source) VALUES ('s1', 'tool_call_completed', '2026-01-01T00:03:00', 'opencode')"
+                )
+                conn.commit()
+
+            runner.run_migrations()
+
+            with runner._get_db_connection() as conn:
+                rows = conn.execute("SELECT event_type, source FROM hook_events ORDER BY id").fetchall()
+                assert rows == [
+                    ("tool_call", "claude_code"),
+                    ("subagent_stop", "opencode"),
+                    ("stop", "opencode"),
+                    ("tool_result", "opencode"),
+                ]
+
+                columns = {row[1] for row in conn.execute("PRAGMA table_info(hook_events)").fetchall()}
+                indexes = {row[1] for row in conn.execute("PRAGMA index_list(hook_events)").fetchall()}
+                assert "event_id" in columns
+                assert "idx_hook_events_source_event_id" in indexes
+
+                conn.execute(
+                    "INSERT INTO hook_events (session_id, event_type, timestamp, source, event_id) VALUES ('s2', 'stop', '2026-01-01T02:00:00', 'mmkr', 'evt-1')"
+                )
+                with pytest.raises(sqlite3.IntegrityError):
+                    conn.execute(
+                        "INSERT INTO hook_events (session_id, event_type, timestamp, source, event_id) VALUES ('s2', 'stop', '2026-01-01T02:01:00', 'mmkr', 'evt-1')"
+                    )

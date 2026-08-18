@@ -9,7 +9,7 @@ from unittest.mock import patch
 import pytest
 
 from slopometry.core.database import SessionManager
-from slopometry.core.models.hook import HookEventType, ToolType
+from slopometry.core.models.hook import ToolType, get_tool_type
 from slopometry.core.models.opencode import (
     OpenCodeMessageEvent,
     OpenCodeSessionEvent,
@@ -18,37 +18,37 @@ from slopometry.core.models.opencode import (
     OpenCodeToolEvent,
 )
 from slopometry.core.opencode_handler import (
-    EVENT_TYPE_MAP,
     _get_parent_id,
     _get_session_id,
     _handle_opencode_stop,
-    get_tool_type,
     handle_opencode_hook,
     parse_opencode_event,
 )
+from slopometry.core.protocol.adapters.opencode import OPENCODE_EVENT_KIND_MAP
+from slopometry.core.protocol.kinds import EventKind
 
 
 class TestEventTypeMap:
     def test_event_type_map__pre_tool_use_maps_correctly(self):
-        assert EVENT_TYPE_MAP["pre_tool_use"] == HookEventType.PRE_TOOL_USE
+        assert OPENCODE_EVENT_KIND_MAP["pre_tool_use"] == EventKind.TOOL_CALL
 
     def test_event_type_map__post_tool_use_maps_correctly(self):
-        assert EVENT_TYPE_MAP["post_tool_use"] == HookEventType.POST_TOOL_USE
+        assert OPENCODE_EVENT_KIND_MAP["post_tool_use"] == EventKind.TOOL_RESULT
 
     def test_event_type_map__stop_maps_correctly(self):
-        assert EVENT_TYPE_MAP["stop"] == HookEventType.STOP
+        assert OPENCODE_EVENT_KIND_MAP["stop"] == EventKind.STOP
 
     def test_event_type_map__subagent_stop_maps_correctly(self):
-        assert EVENT_TYPE_MAP["subagent_stop"] == HookEventType.SUBAGENT_STOP
+        assert OPENCODE_EVENT_KIND_MAP["subagent_stop"] == EventKind.SUBAGENT_STOP
 
     def test_event_type_map__subagent_start_maps_correctly(self):
-        assert EVENT_TYPE_MAP["subagent_start"] == HookEventType.SUBAGENT_START
+        assert OPENCODE_EVENT_KIND_MAP["subagent_start"] == EventKind.SUBAGENT_START
 
     def test_event_type_map__todo_updated_maps_correctly(self):
-        assert EVENT_TYPE_MAP["todo_updated"] == HookEventType.TODO_UPDATED
+        assert OPENCODE_EVENT_KIND_MAP["todo_updated"] == EventKind.TODO_UPDATED
 
     def test_event_type_map__message_updated_maps_correctly(self):
-        assert EVENT_TYPE_MAP["message_updated"] == HookEventType.MESSAGE_UPDATED
+        assert OPENCODE_EVENT_KIND_MAP["message_updated"] == EventKind.MESSAGE_UPDATED
 
     def test_event_type_map__covers_all_opencode_event_types(self):
         expected_keys = {
@@ -60,7 +60,7 @@ class TestEventTypeMap:
             "todo_updated",
             "message_updated",
         }
-        assert set(EVENT_TYPE_MAP.keys()) == expected_keys
+        assert set(OPENCODE_EVENT_KIND_MAP.keys()) == expected_keys
 
 
 class TestParseOpenCodeEvent:

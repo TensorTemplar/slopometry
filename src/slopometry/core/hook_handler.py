@@ -9,80 +9,27 @@ import sys
 from pathlib import Path
 
 from slopometry.core.database import EventDatabase, SessionManager
+from slopometry.core.event_capture import capture_event
 from slopometry.core.git_tracker import GitTracker
 from slopometry.core.lock import SlopometryLock
 from slopometry.core.models.complexity import ComplexityDelta, ExtendedComplexityMetrics
 from slopometry.core.models.hook import (
     FeedbackCacheState,
-    HookEvent,
-    HookEventType,
     HookInputUnion,
     NotificationInput,
     PostToolUseInput,
     PreToolUseInput,
     StopInput,
     SubagentStopInput,
-    ToolType,
 )
 from slopometry.core.models.session import ContextCoverage
 from slopometry.core.models.smell import ScopedSmell
-from slopometry.core.project_tracker import ProjectTracker
+from slopometry.core.protocol.kinds import EventKind, KnownSource
 from slopometry.core.settings import settings
 from slopometry.core.working_tree_state import WorkingTreeStateCalculator
 from slopometry.display.formatters import truncate_path
 
 logger = logging.getLogger(__name__)
-
-
-def get_tool_type(tool_name: str) -> ToolType:
-    """Map tool name to ToolType enum."""
-    tool_map = {
-        "bash": ToolType.BASH,
-        "read": ToolType.READ,
-        "write": ToolType.WRITE,
-        "edit": ToolType.EDIT,
-        "multiedit": ToolType.MULTI_EDIT,
-        "grep": ToolType.GREP,
-        "glob": ToolType.GLOB,
-        "ls": ToolType.LS,
-        "task": ToolType.TASK,
-        "todoread": ToolType.TODO_READ,
-        "todowrite": ToolType.TODO_WRITE,
-        "taskcreate": ToolType.TASK_CREATE,
-        "taskupdate": ToolType.TASK_UPDATE,
-        "tasklist": ToolType.TASK_LIST,
-        "taskget": ToolType.TASK_GET,
-        "webfetch": ToolType.WEB_FETCH,
-        "websearch": ToolType.WEB_SEARCH,
-        "notebookread": ToolType.NOTEBOOK_READ,
-        "notebookedit": ToolType.NOTEBOOK_EDIT,
-        "exit_plan_mode": ToolType.EXIT_PLAN_MODE,
-        "mcp__ide__getdiagnostics": ToolType.MCP_IDE_GET_DIAGNOSTICS,
-        "mcp__ide__executecode": ToolType.MCP_IDE_EXECUTE_CODE,
-        "mcp__ide__getworkspaceinfo": ToolType.MCP_IDE_GET_WORKSPACE_INFO,
-        "mcp__ide__getfilecontents": ToolType.MCP_IDE_GET_FILE_CONTENTS,
-        "mcp__ide__createfile": ToolType.MCP_IDE_CREATE_FILE,
-        "mcp__ide__deletefile": ToolType.MCP_IDE_DELETE_FILE,
-        "mcp__ide__renamefile": ToolType.MCP_IDE_RENAME_FILE,
-        "mcp__ide__searchfiles": ToolType.MCP_IDE_SEARCH_FILES,
-        "mcp__filesystem__read": ToolType.MCP_FILESYSTEM_READ,
-        "mcp__filesystem__write": ToolType.MCP_FILESYSTEM_WRITE,
-        "mcp__filesystem__list": ToolType.MCP_FILESYSTEM_LIST,
-        "mcp__database__query": ToolType.MCP_DATABASE_QUERY,
-        "mcp__database__schema": ToolType.MCP_DATABASE_SCHEMA,
-        "mcp__web__scrape": ToolType.MCP_WEB_SCRAPE,
-        "mcp__web__search": ToolType.MCP_WEB_SEARCH,
-        "mcp__github__getrepo": ToolType.MCP_GITHUB_GET_REPO,
-        "mcp__github__createissue": ToolType.MCP_GITHUB_CREATE_ISSUE,
-        "mcp__github__listissues": ToolType.MCP_GITHUB_LIST_ISSUES,
-        "mcp__slack__sendmessage": ToolType.MCP_SLACK_SEND_MESSAGE,
-        "mcp__slack__listchannels": ToolType.MCP_SLACK_LIST_CHANNELS,
-    }
-
-    if tool_name.lower().startswith("mcp__") and tool_name.lower() not in tool_map:
-        return ToolType.MCP_OTHER
-
-    return tool_map.get(tool_name.lower(), ToolType.OTHER)
 
 
 def parse_hook_input(raw_data: dict) -> HookInputUnion:
@@ -133,7 +80,7 @@ def _read_stdin_with_timeout(timeout_seconds: float = 5.0) -> str:
     return sys.stdin.read().strip()
 
 
-def handle_hook(event_type_override: HookEventType | None = None) -> int:
+def handle_hook(event_type_override: EventKind | None = None) -> int:
     """Main hook handler function.
 
     Reads and parses stdin BEFORE acquiring the lock to prevent hung pipes
@@ -167,7 +114,7 @@ def handle_hook(event_type_override: HookEventType | None = None) -> int:
 
 
 def _handle_hook_internal(
-    event_type_override: HookEventType | None,
+    event_type_override: EventKind | None,
     parsed_input: HookInputUnion,
     raw_data: dict,
 ) -> int:
@@ -183,48 +130,31 @@ def _handle_hook_internal(
 
         session_id = parsed_input.session_id
 
-        session_manager = SessionManager()
-        sequence_number = session_manager.get_next_sequence_number(session_id)
+        tool_name = None
+        duration_ms = None
+        exit_code = None
+        error_message = None
+        if isinstance(parsed_input, PreToolUseInput | PostToolUseInput):
+            tool_name = parsed_input.tool_name
+            if isinstance(parsed_input, PostToolUseInput) and isinstance(parsed_input.tool_response, dict):
+                duration_ms = parsed_input.tool_response.get("duration_ms")
+                exit_code = parsed_input.tool_response.get("exit_code")
+                error_message = parsed_input.tool_response.get("error")
 
-        git_tracker = GitTracker()
-        git_state = None
-        match (event_type, sequence_number):
-            case (HookEventType.PRE_TOOL_USE, 1) | (HookEventType.STOP, 1):
-                git_state = git_tracker.get_git_state()
-            case (HookEventType.STOP, _):
-                git_state = git_tracker.get_git_state()
-
-        working_directory = os.getcwd()
-        project_tracker = ProjectTracker(working_dir=Path(working_directory))
-        project = project_tracker.get_project()
-
-        event = HookEvent(
+        event = capture_event(
+            EventDatabase(),
+            SessionManager(),
+            os.getcwd(),
             session_id=session_id,
-            event_type=event_type,
-            sequence_number=sequence_number,
+            kind=event_type,
+            source=KnownSource.CLAUDE_CODE,
             metadata=raw_data,
-            git_state=git_state,
-            working_directory=working_directory,
-            project=project,
+            tool_name=tool_name,
+            duration_ms=duration_ms,
+            exit_code=exit_code,
+            error_message=error_message,
             transcript_path=parsed_input.transcript_path,
         )
-
-        if isinstance(parsed_input, PreToolUseInput | PostToolUseInput):
-            event.tool_name = parsed_input.tool_name
-            event.tool_type = get_tool_type(parsed_input.tool_name)
-
-            if isinstance(parsed_input, PostToolUseInput):
-                if isinstance(parsed_input.tool_response, dict):
-                    event.duration_ms = parsed_input.tool_response.get("duration_ms")
-                    event.exit_code = parsed_input.tool_response.get("exit_code")
-                    event.error_message = parsed_input.tool_response.get("error")
-                else:
-                    event.duration_ms = None
-                    event.exit_code = None
-                    event.error_message = None
-
-        db = EventDatabase()
-        db.save_event(event)
 
         if settings.enable_complexity_analysis and isinstance(parsed_input, StopInput | SubagentStopInput):
             return handle_stop_event(session_id, parsed_input)
@@ -234,7 +164,7 @@ def _handle_hook_internal(
                 "slopometry_event": {
                     "session_id": session_id,
                     "event_type": event_type.value,
-                    "sequence_number": sequence_number,
+                    "sequence_number": event.sequence_number,
                     "tool_name": event.tool_name,
                     "tool_type": event.tool_type.value if event.tool_type else None,
                     "timestamp": event.timestamp.isoformat(),
@@ -904,19 +834,19 @@ def format_code_smell_feedback(
     return "", False, False
 
 
-def detect_event_type_from_parsed(parsed_input: HookInputUnion) -> HookEventType:
-    """Detect event type from parsed input model."""
+def detect_event_type_from_parsed(parsed_input: HookInputUnion) -> EventKind:
+    """Detect canonical event kind from parsed Claude Code input model."""
     match parsed_input:
         case PreToolUseInput():
-            return HookEventType.PRE_TOOL_USE
+            return EventKind.TOOL_CALL
         case PostToolUseInput():
-            return HookEventType.POST_TOOL_USE
+            return EventKind.TOOL_RESULT
         case NotificationInput():
-            return HookEventType.NOTIFICATION
+            return EventKind.NOTIFICATION
         case StopInput():
-            return HookEventType.STOP
+            return EventKind.STOP
         case SubagentStopInput():
-            return HookEventType.SUBAGENT_STOP
+            return EventKind.SUBAGENT_STOP
         case _:
             raise ValueError(f"Unknown input type: {type(parsed_input)}")
 

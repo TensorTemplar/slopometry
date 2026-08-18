@@ -508,6 +508,55 @@ class Migration014AddBehavioralPatternHistory(Migration):
         )
 
 
+
+class Migration019CanonicalEventKinds(Migration):
+    """Adopt the extracted hook protocol on stored hook_events.
+
+    - Remaps every non-canonical event_type value onto canonical EventKind
+      values, covering both the legacy PascalCase wire names (e.g.
+      'PreToolUse' -> 'tool_call') and the started/completed dialect produced
+      by a parallel abstract-protocol implementation.
+    - Backfills NULL source values to 'claude_code'.
+    - Adds the event_id column with a partial unique index on
+      (source, event_id) so envelope backfills are idempotent.
+
+    Numbered 019 because a parallel implementation already claimed 016-018 on
+    live databases.
+    """
+
+    @property
+    def version(self) -> str:
+        return "019"
+
+    @property
+    def description(self) -> str:
+        return "Canonical event kinds, source backfill, and event_id idempotency on hook_events"
+
+    def up(self, conn: sqlite3.Connection) -> None:
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='hook_events'")
+        if not cursor.fetchone():
+            return
+
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(hook_events)").fetchall()}
+        from slopometry.core.protocol.kinds import ALT_DIALECT_EVENT_TYPE_MAP, LEGACY_EVENT_TYPE_MAP
+
+        if "event_type" in columns:
+            for legacy_value, kind in {**LEGACY_EVENT_TYPE_MAP, **ALT_DIALECT_EVENT_TYPE_MAP}.items():
+                conn.execute("UPDATE hook_events SET event_type = ? WHERE event_type = ?", (kind, legacy_value))
+
+        if "source" in columns:
+            conn.execute("UPDATE hook_events SET source = 'claude_code' WHERE source IS NULL")
+
+        if "event_id" not in columns:
+            conn.execute("ALTER TABLE hook_events ADD COLUMN event_id TEXT")
+
+        conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_hook_events_source_event_id
+            ON hook_events(source, event_id)
+            WHERE event_id IS NOT NULL
+        """)
+
+
 class MigrationRunner:
     """Manages database migrations."""
 
@@ -528,6 +577,7 @@ class MigrationRunner:
             Migration012AddNFPObjectiveToExperimentRuns(),
             Migration013AddSourceAndParentSession(),
             Migration014AddBehavioralPatternHistory(),
+            Migration019CanonicalEventKinds(),
         ]
 
     @contextmanager
