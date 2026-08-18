@@ -14,7 +14,7 @@ class DiscoveredTranscript:
     session_id: str
     transcript_path: Path
     project_dir: Path
-    source: AbstractEventSource
+    source: str
 
 
 class TranscriptFinder:

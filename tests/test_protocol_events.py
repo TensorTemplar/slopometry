@@ -245,15 +245,16 @@ class TestAbstractHookEventValidation:
                 legacy_field="ignored",  # pyright: ignore[reportCallIssue]
             )
 
-    def test_hook_event__source_accepts_only_known_enum_values(self):
-        """AbstractEventSource is a closed enum — free-form strings fail validation."""
-        with pytest.raises(ValidationError):
-            AbstractHookEvent(
-                session_id="s1",
-                event_type=AbstractEventType.NOTIFICATION,
-                source="some_other_agent",  # type: ignore[arg-type]
-                working_directory="/repo",
-            )
+    def test_hook_event__source_accepts_open_third_party_strings(self):
+        """Source is an open string — third-party collectors don't need an enum extension."""
+        event = AbstractHookEvent(
+            session_id="s1",
+            event_type=AbstractEventType.NOTIFICATION,
+            source="some_other_agent",
+            working_directory="/repo",
+        )
+
+        assert event.source == "some_other_agent"
 
     def test_hook_event__event_type_accepts_only_known_enum_values(self):
         """AbstractEventType is a closed enum — wire-format drift fails validation."""
