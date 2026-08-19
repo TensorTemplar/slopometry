@@ -15,7 +15,13 @@ from slopometry.core.models.hook import GitState, Project
 
 
 class AbstractEventSource(StrEnum):
-    """Identity of the agent harness or collector that produced the event."""
+    """Vocabulary for the harnesses slopometry ships adapters for.
+
+    This enum is NOT a gate: `AbstractHookEvent.source` is an open string so
+    third-party collectors can ingest events under their own source name
+    (see `slopometry ingest`). Membership here only means "has a wire-format
+    adapter registered in `protocol/adapters`".
+    """
 
     CLAUDE_CODE = "claude_code"
     OPENCODE = "opencode"
@@ -86,13 +92,19 @@ class AbstractHookEvent(BaseModel):
         default=None,
         description="Database autoincrement id; None for in-memory events not yet persisted",
     )
+    event_id: str | None = Field(
+        default=None,
+        description="Source-unique id from envelope ingestion; (source, event_id) is unique so backfills are idempotent. Live harness paths have no source-side event id.",
+    )
     session_id: str
     parent_session_id: str | None = Field(
         default=None,
         description="Parent session ID for subagent/child sessions; None for top-level",
     )
     event_type: AbstractEventType
-    source: AbstractEventSource
+    source: str = Field(
+        description="Source name of the producing agent; built-ins in AbstractEventSource, open for third-party collectors",
+    )
     timestamp: datetime = Field(default_factory=datetime.now)
     tool_call: ToolCallPayload | None = None
     metadata: dict[str, Any] = Field(

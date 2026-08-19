@@ -569,6 +569,56 @@ class Migration016AddRetiredReasonToMemories(Migration):
                 raise
 
 
+class Migration020EnvelopeIdempotency(Migration):
+    """Enable idempotent envelope ingestion on hook_events.
+
+    - Adds the event_id column (if missing) with a partial unique index on
+      (source, event_id) so re-ingesting a trace is a no-op.
+    - Repairs event_type values written by the abandoned 'hook-protocol'
+      branch, which used a divergent taxonomy (tool_call/tool_result/stop/
+      subagent_stop/subagent_start). Every value maps 1:1 back onto this
+      taxonomy; databases that never ran that branch are unaffected.
+
+    Numbered 020: 017-019 were consumed by diverged local trees.
+    """
+
+    _WRONG_DIALECT_RENAMES: dict[str, str] = {
+        "tool_call": "tool_call_started",
+        "tool_result": "tool_call_completed",
+        "stop": "turn_completed",
+        "subagent_stop": "subagent_completed",
+        "subagent_start": "subagent_started",
+    }
+
+    @property
+    def version(self) -> str:
+        return "020"
+
+    @property
+    def description(self) -> str:
+        return "Add event_id with unique partial index for envelope backfills; repair wrong-dialect event_type values"
+
+    def up(self, conn: sqlite3.Connection) -> None:
+        cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='hook_events'")
+        if not cursor.fetchone():
+            return
+
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(hook_events)").fetchall()}
+
+        if "event_type" in columns:
+            for wrong, canonical in self._WRONG_DIALECT_RENAMES.items():
+                conn.execute("UPDATE hook_events SET event_type = ? WHERE event_type = ?", (canonical, wrong))
+
+        if "event_id" not in columns:
+            conn.execute("ALTER TABLE hook_events ADD COLUMN event_id TEXT")
+
+        conn.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_hook_events_source_event_id
+            ON hook_events(source, event_id)
+            WHERE event_id IS NOT NULL
+        """)
+
+
 class MigrationRunner:
     """Manages database migrations."""
 
@@ -591,6 +641,7 @@ class MigrationRunner:
             Migration014AddBehavioralPatternHistory(),
             Migration015AbstractEventTypeValues(),
             Migration016AddRetiredReasonToMemories(),
+            Migration020EnvelopeIdempotency(),
         ]
 
     @contextmanager

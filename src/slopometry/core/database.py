@@ -133,7 +133,8 @@ class EventDatabase:
                     project_source TEXT,
                     transcript_path TEXT,
                     source TEXT DEFAULT 'claude_code',
-                    parent_session_id TEXT
+                    parent_session_id TEXT,
+                    event_id TEXT
                 )
             """)
             conn.execute("""
@@ -156,6 +157,10 @@ class EventDatabase:
                 CREATE INDEX IF NOT EXISTS idx_hook_events_session_type_source
                 ON hook_events(session_id, event_type, source)
             """)
+
+            # NOTE: the (source, event_id) unique partial index is created by
+            # Migration020EnvelopeIdempotency only; _create_tables runs before
+            # migrations on pre-existing databases that lack the event_id column.
 
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS experiment_runs (
@@ -398,6 +403,26 @@ class EventDatabase:
 
             conn.commit()
 
+    def has_event(self, source: str, event_id: str) -> bool:
+        """Check whether an event with the given (source, event_id) is already stored.
+
+        Used by envelope ingestion to make backfills idempotent."""
+        with self._get_db_connection() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM hook_events WHERE source = ? AND event_id = ? LIMIT 1",
+                (source, event_id),
+            ).fetchone()
+            return row is not None
+
+    def get_max_sequence_number(self, session_id: str) -> int:
+        """Get the highest stored sequence number for a session (0 when the session has no events)."""
+        with self._get_db_connection() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(MAX(sequence_number), 0) FROM hook_events WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            return row[0]
+
     def save_event(self, event: AbstractHookEvent) -> int:
         """Save a hook event to the database."""
         tool_name = event.tool_call.tool_name if event.tool_call else None
@@ -414,8 +439,8 @@ class EventDatabase:
                     tool_name, tool_type, metadata, duration_ms,
                     exit_code, error_message, git_state, working_directory,
                     project_name, project_source, transcript_path,
-                    source, parent_session_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    source, parent_session_id, event_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     event.session_id,
@@ -433,8 +458,9 @@ class EventDatabase:
                     event.project.name if event.project else None,
                     event.project.source.value if event.project else None,
                     event.transcript_location,
-                    event.source.value,
+                    event.source,
                     event.parent_session_id,
+                    event.event_id,
                 ),
             )
             return cursor.lastrowid or 0
@@ -469,7 +495,7 @@ class EventDatabase:
                     )
 
                 source_val = row["source"] if "source" in row.keys() else None
-                source = AbstractEventSource(source_val) if source_val else AbstractEventSource.CLAUDE_CODE
+                source = source_val or str(AbstractEventSource.CLAUDE_CODE)
                 parent_session_id = row["parent_session_id"] if "parent_session_id" in row.keys() else None
 
                 tool_name = row["tool_name"]
@@ -477,6 +503,7 @@ class EventDatabase:
                 events.append(
                     AbstractHookEvent(
                         id=row["id"],
+                        event_id=row["event_id"],
                         session_id=row["session_id"],
                         event_type=AbstractEventType(row["event_type"]),
                         timestamp=datetime.fromisoformat(row["timestamp"]),

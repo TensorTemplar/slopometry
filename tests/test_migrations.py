@@ -1,7 +1,10 @@
 """Tests for database migrations."""
 
+import sqlite3
 from pathlib import Path
 from tempfile import TemporaryDirectory
+
+import pytest
 
 from slopometry.core.migrations import MigrationRunner
 
@@ -220,3 +223,46 @@ class TestMigrations:
                 cursor = conn.execute("PRAGMA table_info(memories)")
                 columns = [row[1] for row in cursor.fetchall()]
                 assert columns.count("retired_reason") == 1
+
+    def test_migration_020__adds_event_id_idempotency_and_repairs_wrong_dialect(self):
+        """Envelope backfills get a unique (source, event_id) index; wrong-dialect values return to the canonical taxonomy."""
+        with TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "test.db"
+            runner = MigrationRunner(db_path)
+
+            with runner._get_db_connection() as conn:
+                conn.execute("""
+                    CREATE TABLE hook_events (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        session_id TEXT NOT NULL,
+                        event_type TEXT NOT NULL,
+                        timestamp TEXT NOT NULL,
+                        source TEXT
+                    )
+                """)
+                conn.execute(
+                    "INSERT INTO hook_events (session_id, event_type, timestamp, source) VALUES ('s1', 'tool_call', '2026-01-01T00:00:00', 'claude_code')"
+                )
+                conn.execute(
+                    "INSERT INTO hook_events (session_id, event_type, timestamp, source) VALUES ('s1', 'turn_completed', '2026-01-01T00:01:00', 'opencode')"
+                )
+                conn.commit()
+
+            runner.run_migrations()
+
+            with runner._get_db_connection() as conn:
+                rows = conn.execute("SELECT event_type FROM hook_events ORDER BY id").fetchall()
+                assert rows == [("tool_call_started",), ("turn_completed",)]
+
+                columns = {row[1] for row in conn.execute("PRAGMA table_info(hook_events)").fetchall()}
+                indexes = {row[1] for row in conn.execute("PRAGMA index_list(hook_events)").fetchall()}
+                assert "event_id" in columns
+                assert "idx_hook_events_source_event_id" in indexes
+
+                conn.execute(
+                    "INSERT INTO hook_events (session_id, event_type, timestamp, source, event_id) VALUES ('s2', 'turn_completed', '2026-01-01T02:00:00', 'mmkr', 'evt-1')"
+                )
+                with pytest.raises(sqlite3.IntegrityError):
+                    conn.execute(
+                        "INSERT INTO hook_events (session_id, event_type, timestamp, source, event_id) VALUES ('s2', 'turn_completed', '2026-01-01T02:01:00', 'mmkr', 'evt-1')"
+                    )
